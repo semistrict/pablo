@@ -1,0 +1,4 @@
+interface:
+  display_name: "Pablo"
+  short_description: "Record and inspect macOS interaction traces"
+  default_prompt: "Use $pablo to record a Mac app interaction and inspect its accessibility frames."
