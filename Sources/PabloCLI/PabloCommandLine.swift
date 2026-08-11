@@ -7,7 +7,15 @@ struct PabloCommandLine {
         do {
             switch try CLI.parse(Array(CommandLine.arguments.dropFirst())) {
             case .record(let options):
-                try await RecordingSession(options: options).run()
+                print(CLI.formatControlResult(try CLI.sendControl(method: .startRecording, options: options)))
+            case .status:
+                print(CLI.formatControlResult(try CLI.sendControl(method: .status)))
+            case .pause:
+                print(CLI.formatControlResult(try CLI.sendControl(method: .pauseRecording)))
+            case .resume:
+                print(CLI.formatControlResult(try CLI.sendControl(method: .resumeRecording)))
+            case .stop:
+                print(CLI.formatControlResult(try CLI.sendControl(method: .stopRecording)))
             case .inspect(let url):
                 print(try CLI.inspect(url))
             case .latest:

@@ -51,9 +51,15 @@ The command-line interface remains available for scripting. Build it with `swift
 .build/debug/pablo record --app Notes -o notes-session.pablo
 .build/debug/pablo record --bundle-id com.apple.Notes --duration 30
 .build/debug/pablo record --pid 1234 --fps 60 --snapshot-interval 0.5
+.build/debug/pablo status
+.build/debug/pablo pause
+.build/debug/pablo resume
+.build/debug/pablo stop
 ```
 
-Press Control-C to end a recording without `--duration`. Replay inspection commands default to the latest recording, so common workflows are short:
+Recording commands are sent to the running Pablo app, which launches automatically if necessary. On the first command from a verified calling application each calendar day, Pablo shows an **Allow for Today** or **Deny** dialog. Approval applies only to that signed application identity and expires when the day changes. Callers without a stable verifiable identity receive an **Allow Once** prompt on every access. The socket is local to the Mac, restricted to the current user, and is not a network service.
+
+Replay inspection commands read completed recordings directly and do not contact the app, so common workflows are short:
 
 ```sh
 pablo recordings

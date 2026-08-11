@@ -1,5 +1,6 @@
 import AppKit
 import PabloCore
+import Security
 import SwiftUI
 
 @main
@@ -40,6 +41,20 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate {
 
 @MainActor
 final class RecorderModel: ObservableObject {
+    private struct ControlCaller {
+        let displayName: String
+        let applicationIdentifier: String?
+        let developerName: String?
+        let developerTeamIdentifier: String?
+        let cacheIdentity: String?
+    }
+
+    private struct CodeSigningIdentity {
+        let teamIdentifier: String
+        let identifier: String
+        let developerName: String?
+    }
+
     struct AppChoice: Identifiable, Hashable {
         let pid: pid_t
         let name: String
@@ -64,6 +79,18 @@ final class RecorderModel: ObservableObject {
     @Published var captureText = true
 
     private var session: RecordingSession?
+    private var automaticStopTask: Task<Void, Never>?
+    private let dailyApprovalStore = PabloDailyApprovalStore()
+    private lazy var controlServer = PabloControlServer { [weak self] request, peer in
+        guard let self else {
+            return PabloControlResponse(id: request.id, error: "Pablo is shutting down.")
+        }
+        return await self.handleControlRequest(request, from: peer)
+    }
+
+    init() {
+        Task { @MainActor [weak self] in self?.startControlServer() }
+    }
 
     var statusTitle: String {
         switch status {
@@ -119,12 +146,7 @@ final class RecorderModel: ObservableObject {
             options.pid = selectedPID
             options.outputURL = try nextRecordingURL()
             options.captureText = captureText
-            let session = try RecordingSession(options: options)
-            self.session = session
-            try await session.start()
-            lastRecordingURL = session.packageURL
-            elapsedNanoseconds = 0
-            status = .recording
+            try await beginRecording(options)
         } catch {
             session = nil
             status = .idle
@@ -148,6 +170,8 @@ final class RecorderModel: ObservableObject {
 
     func stopRecording() async {
         guard isActive else { return }
+        automaticStopTask?.cancel()
+        automaticStopTask = nil
         status = .stopping
         do {
             try await session?.stop()
@@ -158,6 +182,249 @@ final class RecorderModel: ObservableObject {
         session = nil
         status = .idle
         refreshApplications()
+    }
+
+    private func beginRecording(_ options: RecordOptions) async throws {
+        guard status == .starting || status == .idle else {
+            throw RecordingError.capture("Pablo is already recording.")
+        }
+        status = .starting
+        let session = try RecordingSession(options: options)
+        self.session = session
+        do {
+            try await session.start()
+        } catch {
+            self.session = nil
+            status = .idle
+            throw error
+        }
+        lastRecordingURL = session.packageURL
+        elapsedNanoseconds = 0
+        status = .recording
+        if let duration = options.duration {
+            automaticStopTask?.cancel()
+            automaticStopTask = Task { @MainActor [weak self, weak session] in
+                try? await Task.sleep(for: .seconds(duration))
+                guard !Task.isCancelled, let self, self.session === session else { return }
+                await self.stopRecording()
+            }
+        }
+    }
+
+    private func startControlServer() {
+        do {
+            try controlServer.start()
+        } catch {
+            errorMessage = "Local control service could not start: \(error.localizedDescription)"
+        }
+    }
+
+    private func handleControlRequest(
+        _ request: PabloControlRequest,
+        from peer: PabloControlPeer
+    ) async -> PabloControlResponse {
+        guard approveControlAccessIfNeeded(request, from: peer) else {
+            return PabloControlResponse(id: request.id, error: "The user denied this Pablo request.")
+        }
+
+        do {
+            switch request.method {
+            case .startRecording:
+                guard status == .idle else {
+                    throw RecordingError.capture("Pablo is already recording or changing state.")
+                }
+                guard let remoteOptions = request.recordOptions else {
+                    throw RecordingError.usage("The start command did not include recording options.")
+                }
+                var options = remoteOptions.recordOptions()
+                if options.outputURL == nil { options.outputURL = try nextRecordingURL() }
+                try await beginRecording(options)
+            case .pauseRecording:
+                guard status == .recording else {
+                    throw RecordingError.capture("There is no active recording to pause.")
+                }
+                togglePause()
+            case .resumeRecording:
+                guard status == .paused else {
+                    throw RecordingError.capture("There is no paused recording to resume.")
+                }
+                togglePause()
+            case .stopRecording:
+                guard isActive else {
+                    throw RecordingError.capture("There is no active recording to stop.")
+                }
+                await stopRecording()
+            case .status:
+                updateElapsedTime()
+            }
+            return PabloControlResponse(id: request.id, result: controlResult())
+        } catch {
+            return PabloControlResponse(id: request.id, error: error.localizedDescription)
+        }
+    }
+
+    private func approveControlAccessIfNeeded(
+        _ request: PabloControlRequest,
+        from peer: PabloControlPeer
+    ) -> Bool {
+        let caller = controlCaller(for: peer)
+        if let cacheIdentity = caller.cacheIdentity,
+           dailyApprovalStore.isApprovedToday(applicationIdentity: cacheIdentity) {
+            return true
+        }
+
+        let alert = NSAlert()
+        alert.alertStyle = .warning
+        alert.messageText = "Allow \(caller.displayName) to access Pablo today?"
+        var identityDetails: [String] = []
+        if let identifier = caller.applicationIdentifier {
+            identityDetails.append("App identifier: \(identifier)")
+        }
+        if let developerName = caller.developerName {
+            identityDetails.append("Developer: \(developerName)")
+        }
+        if let teamIdentifier = caller.developerTeamIdentifier {
+            identityDetails.append("Developer team: \(teamIdentifier)")
+        }
+        if caller.cacheIdentity == nil {
+            identityDetails.append("Developer: Unverified")
+        }
+        let identityDetail = identityDetails.isEmpty ? "" : "\n" + identityDetails.joined(separator: "\n")
+        let persistenceDetail = caller.cacheIdentity == nil
+            ? "Pablo could not verify a stable identity for this caller, so it will ask again next time."
+            : "Pablo will allow this verified app to send control commands until the calendar day changes."
+        alert.informativeText = "\(controlRequestDescription(request))\(identityDetail)\n\n\(persistenceDetail)"
+        alert.addButton(withTitle: caller.cacheIdentity == nil ? "Allow Once" : "Allow for Today")
+        alert.addButton(withTitle: "Deny")
+        NSApplication.shared.activate(ignoringOtherApps: true)
+        guard alert.runModal() == .alertFirstButtonReturn else { return false }
+        if let cacheIdentity = caller.cacheIdentity {
+            dailyApprovalStore.approveForToday(applicationIdentity: cacheIdentity)
+        }
+        return true
+    }
+
+    private func controlCaller(for peer: PabloControlPeer) -> ControlCaller {
+        guard let pid = peer.processIdentifier else {
+            return ControlCaller(
+                displayName: "Another local app",
+                applicationIdentifier: nil,
+                developerName: nil,
+                developerTeamIdentifier: nil,
+                cacheIdentity: nil
+            )
+        }
+        let invokingApplication = invokingApplication(forChildProcess: pid)
+        let identityPID = invokingApplication?.processIdentifier ?? pid
+        let signingIdentity = codeSigningIdentity(for: identityPID)
+        let executablePath = executablePath(for: identityPID)
+        let displayName = invokingApplication?.localizedName
+            ?? executablePath.map { URL(fileURLWithPath: $0).lastPathComponent }
+            ?? "Process \(identityPID)"
+        if let signingIdentity {
+            return ControlCaller(
+                displayName: displayName,
+                applicationIdentifier: invokingApplication?.bundleIdentifier ?? signingIdentity.identifier,
+                developerName: signingIdentity.developerName,
+                developerTeamIdentifier: signingIdentity.teamIdentifier,
+                cacheIdentity: "signed:\(signingIdentity.teamIdentifier):\(signingIdentity.identifier)"
+            )
+        }
+        return ControlCaller(
+            displayName: displayName,
+            applicationIdentifier: invokingApplication?.bundleIdentifier ?? executablePath,
+            developerName: nil,
+            developerTeamIdentifier: nil,
+            cacheIdentity: nil
+        )
+    }
+
+    private func invokingApplication(forChildProcess childPID: pid_t) -> NSRunningApplication? {
+        PabloProcessChain.nearestApplication(
+            invokedBy: childPID,
+            parentProcessIdentifier: parentProcessIdentifier(of:),
+            applicationIdentity: { pid in
+                guard let application = NSRunningApplication(processIdentifier: pid),
+                      application.bundleIdentifier != nil else { return nil }
+                return application
+            }
+        )
+    }
+
+    private func parentProcessIdentifier(of pid: pid_t) -> pid_t? {
+        var information = proc_bsdinfo()
+        let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let actualSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &information, expectedSize)
+        guard actualSize == expectedSize, information.pbi_ppid > 0 else { return nil }
+        return pid_t(information.pbi_ppid)
+    }
+
+    private func codeSigningIdentity(for pid: pid_t) -> CodeSigningIdentity? {
+        let attributes = [kSecGuestAttributePid as String: pid] as CFDictionary
+        var code: SecCode?
+        guard SecCodeCopyGuestWithAttributes(nil, attributes, [], &code) == errSecSuccess,
+              let code,
+              SecCodeCheckValidity(code, [], nil) == errSecSuccess else { return nil }
+        var staticCode: SecStaticCode?
+        guard SecCodeCopyStaticCode(code, [], &staticCode) == errSecSuccess,
+              let staticCode else { return nil }
+        var information: CFDictionary?
+        guard SecCodeCopySigningInformation(
+            staticCode,
+            SecCSFlags(rawValue: kSecCSSigningInformation),
+            &information
+        )
+                == errSecSuccess,
+              let dictionary = information as? [String: Any],
+              let teamIdentifier = dictionary[kSecCodeInfoTeamIdentifier as String] as? String,
+              let identifier = dictionary[kSecCodeInfoIdentifier as String] as? String else {
+            return nil
+        }
+        let certificates = dictionary[kSecCodeInfoCertificates as String] as? [SecCertificate]
+        let developerName = certificates?.first.flatMap {
+            SecCertificateCopySubjectSummary($0) as String?
+        }
+        return CodeSigningIdentity(
+            teamIdentifier: teamIdentifier,
+            identifier: identifier,
+            developerName: developerName
+        )
+    }
+
+    private func executablePath(for pid: pid_t) -> String? {
+        var buffer = [CChar](repeating: 0, count: 4_096)
+        let length = proc_pidpath(pid, &buffer, UInt32(buffer.count))
+        guard length > 0 else { return nil }
+        return String(cString: buffer)
+    }
+
+    private func controlRequestDescription(_ request: PabloControlRequest) -> String {
+        guard request.method == .startRecording, let options = request.recordOptions else {
+            return "This app wants to \(request.method.approvalDescription)."
+        }
+        let target = options.appName
+            ?? options.bundleIdentifier
+            ?? options.pid.map { "PID \($0)" }
+            ?? "an application"
+        let textNotice = options.captureText ? " Typed text will be captured." : " Typed text will not be captured."
+        return "This app wants to start a recording of \(target).\(textNotice)"
+    }
+
+    private func controlResult() -> PabloControlResult {
+        let state: String
+        switch status {
+        case .idle: state = "idle"
+        case .starting: state = "starting"
+        case .recording: state = "recording"
+        case .paused: state = "paused"
+        case .stopping: state = "stopping"
+        }
+        return PabloControlResult(
+            state: state,
+            target: session?.targetName,
+            recordingPath: session?.packageURL.path ?? lastRecordingURL?.path,
+            elapsedNanoseconds: session?.durationNs ?? elapsedNanoseconds
+        )
     }
 
     func updateElapsedTime() {

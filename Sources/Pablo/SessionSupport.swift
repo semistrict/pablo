@@ -69,13 +69,13 @@ final class JSONLWriter<Value: Encodable> {
     }
 }
 
-enum RecordingError: LocalizedError {
+public enum RecordingError: LocalizedError {
     case usage(String)
     case targetNotFound(String)
     case permission(String)
     case capture(String)
 
-    var errorDescription: String? {
+    public var errorDescription: String? {
         switch self {
         case .usage(let message), .targetNotFound(let message), .permission(let message),
              .capture(let message):

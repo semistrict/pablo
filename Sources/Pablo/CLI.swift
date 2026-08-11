@@ -16,6 +16,10 @@ public struct RecordOptions {
 
 public enum Command {
     case record(RecordOptions)
+    case status
+    case pause
+    case resume
+    case stop
     case inspect(URL?)
     case latest
     case recordings(json: Bool)
@@ -79,6 +83,18 @@ public enum CLI {
                 throw RecordingError.usage("Choose exactly one target with --app, --bundle-id, or --pid.")
             }
             return .record(options)
+        case "status":
+            try requireNoArguments(arguments, usage: "pablo status")
+            return .status
+        case "pause":
+            try requireNoArguments(arguments, usage: "pablo pause")
+            return .pause
+        case "resume":
+            try requireNoArguments(arguments, usage: "pablo resume")
+            return .resume
+        case "stop":
+            try requireNoArguments(arguments, usage: "pablo stop")
+            return .stop
         case "inspect":
             let parsed = try parseRecordingArguments(Array(arguments.dropFirst()))
             return .inspect(parsed.url)
@@ -121,6 +137,10 @@ public enum CLI {
     public static let help = """
     Usage:
       pablo record (--app NAME | --bundle-id ID | --pid PID) [options]
+      pablo status
+      pablo pause
+      pablo resume
+      pablo stop
       pablo recordings [--json]
       pablo latest
       pablo inspect [recording.pablo]
@@ -129,8 +149,8 @@ public enum CLI {
       pablo events [recording.pablo] [--limit N] [--json]
 
     Record options:
-      -o, --output PATH          Output package (default: ./Recording-<date>.pablo)
-      --duration SECONDS        Stop automatically; otherwise press Control-C
+      -o, --output PATH          Output package (default: ~/Movies/Pablo Recordings)
+      --duration SECONDS        Stop automatically; otherwise use pablo stop
       --snapshot-interval SEC   Periodic accessibility snapshot interval (default: 1)
       --fps FPS                 Video frame rate from 1 to 60 (default: 30)
       --no-text                 Keep key codes but omit typed Unicode text
@@ -138,9 +158,42 @@ public enum CLI {
     Example:
       pablo record --app Notes --duration 20 -o notes-session.pablo
 
+    Recording controls are sent to the Pablo app and require daily approval per calling application.
     Replay commands default to the latest recording in ~/Movies/Pablo Recordings.
     Use the stable A11Y-### references in the app or CLI to discuss a specific frame.
     """
+
+    public static func sendControl(
+        method: PabloControlMethod,
+        options: RecordOptions? = nil
+    ) throws -> PabloControlResult {
+        let request = PabloControlRequest(
+            method: method,
+            recordOptions: options.map(PabloControlRecordOptions.init)
+        )
+        let response: PabloControlResponse
+        do {
+            response = try PabloControlClient.send(request)
+        } catch {
+            try launchApp()
+            response = try waitForAppAndSend(request)
+        }
+        if let error = response.error {
+            throw RecordingError.capture(error)
+        }
+        guard let result = response.result else {
+            throw RecordingError.capture("The Pablo app returned an empty control response.")
+        }
+        return result
+    }
+
+    public static func formatControlResult(_ result: PabloControlResult) -> String {
+        var parts = [result.state]
+        if let target = result.target { parts.append(target) }
+        parts.append(formatTimeNs(result.elapsedNanoseconds))
+        if let recordingPath = result.recordingPath { parts.append(recordingPath) }
+        return parts.joined(separator: "  ")
+    }
 
     public static func inspect(_ requestedURL: URL?) throws -> String {
         let packageURL = try resolveRecording(requestedURL)
@@ -415,6 +468,36 @@ public enum CLI {
             throw RecordingError.usage("Missing value for \(option).")
         }
         return arguments[index]
+    }
+
+    private static func requireNoArguments(_ arguments: [String], usage: String) throws {
+        guard arguments.count == 1 else { throw RecordingError.usage("Usage: \(usage)") }
+    }
+
+    private static func launchApp() throws {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = ["-gj", "-b", "com.ramon.pablo"]
+        try process.run()
+        process.waitUntilExit()
+        guard process.terminationStatus == 0 else {
+            throw RecordingError.capture(
+                "Could not launch Pablo. Install and open Pablo.app once, then try again."
+            )
+        }
+    }
+
+    private static func waitForAppAndSend(_ request: PabloControlRequest) throws -> PabloControlResponse {
+        var lastError: Error?
+        for _ in 0..<80 {
+            do {
+                return try PabloControlClient.send(request)
+            } catch {
+                lastError = error
+                Thread.sleep(forTimeInterval: 0.1)
+            }
+        }
+        throw lastError ?? RecordingError.capture("Pablo did not start its control service.")
     }
 
     private static func lineCount(_ url: URL) throws -> Int {

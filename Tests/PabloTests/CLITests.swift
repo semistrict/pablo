@@ -34,4 +34,20 @@ final class CLITests: XCTestCase {
             return XCTFail("Expected events command")
         }
     }
+
+    func testParsesAppControlCommandsWithoutArguments() throws {
+        guard case .status = try CLI.parse(["status"]) else {
+            return XCTFail("Expected status command")
+        }
+        guard case .pause = try CLI.parse(["pause"]) else {
+            return XCTFail("Expected pause command")
+        }
+        guard case .resume = try CLI.parse(["resume"]) else {
+            return XCTFail("Expected resume command")
+        }
+        guard case .stop = try CLI.parse(["stop"]) else {
+            return XCTFail("Expected stop command")
+        }
+        XCTAssertThrowsError(try CLI.parse(["status", "extra"]))
+    }
 }
