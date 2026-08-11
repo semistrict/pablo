@@ -345,7 +345,8 @@ final class RecorderModel: ObservableObject {
             parentProcessIdentifier: parentProcessIdentifier(of:),
             applicationIdentity: { pid in
                 guard let application = NSRunningApplication(processIdentifier: pid),
-                      application.bundleIdentifier != nil else { return nil }
+                      application.bundleIdentifier != nil,
+                      application.activationPolicy != .prohibited else { return nil }
                 return application
             }
         )
