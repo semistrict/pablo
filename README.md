@@ -6,7 +6,7 @@ Pablo is a flight recorder for Mac apps. Pick an app, press record, and get a sy
 
 ## [Download Pablo for macOS](https://github.com/semistrict/pablo/releases/latest)
 
-Requires macOS 14 or newer. The download supports both Apple silicon and Intel Macs.
+Requires macOS 14 or newer on an Apple silicon Mac.
 
 1. Download and unzip Pablo.
 2. Move **Pablo.app** to **Applications** and open it.

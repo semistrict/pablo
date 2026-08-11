@@ -148,12 +148,12 @@ Create a distribution build with:
 That script:
 
 1. selects an installed Developer ID Application identity;
-2. builds `arm64` and `x86_64` executables;
+2. builds arm64 executables for Apple silicon Macs;
 3. enables hardened runtime and timestamped signing;
 4. verifies the signature;
 5. submits through the `pablo-notary` keychain profile;
 6. staples and validates the notarization ticket;
-7. writes `dist/Pablo-<version>-<build>-mac.zip`;
+7. writes `dist/Pablo-<version>-<build>-mac-arm64.zip`;
 8. asks Gatekeeper to assess the final app.
 
 Before publishing, extract the exact ZIP into a clean temporary directory and verify the extracted app with `codesign`, `spctl`, and `xcrun stapler validate`. Publish the ZIP on the matching GitHub release so the README's latest-release link remains stable.
