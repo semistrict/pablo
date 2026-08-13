@@ -100,3 +100,91 @@ func controlSocketRoundTrip() throws {
     #expect(directoryMode & 0o777 == 0o700)
     #expect(socketMode & 0o777 == 0o600)
 }
+
+@Test("Live inspection requests and output cross the control socket")
+func liveInspectionControlRoundTrip() throws {
+    let suffix = UUID().uuidString.prefix(8)
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-live-control-\(suffix)", isDirectory: true)
+    let socketPath = root.appendingPathComponent("control.sock").path
+    let output = String(repeating: "accessibility-node\n", count: 5_000)
+    let server = PabloControlServer(socketPath: socketPath) { request, _ in
+        #expect(request.method == .inspectLive)
+        #expect(request.liveInspectionRequest?.kind == .frame)
+        #expect(request.liveInspectionRequest?.target.appName == "Notes")
+        #expect(request.liveInspectionRequest?.reference == "A11Y-001")
+        return PabloControlResponse(
+            id: request.id,
+            result: PabloControlResult(
+                state: "idle",
+                target: "Notes",
+                recordingPath: nil,
+                elapsedNanoseconds: 0,
+                output: output
+            )
+        )
+    }
+    defer {
+        server.stop()
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    try server.start()
+    let response = try PabloControlClient.send(
+        PabloControlRequest(
+            method: .inspectLive,
+            liveInspectionRequest: PabloLiveInspectionRequest(
+                kind: .frame,
+                target: PabloLiveApplicationTarget(appName: "Notes"),
+                reference: "A11Y-001"
+            )
+        ),
+        socketPath: socketPath
+    )
+
+    #expect(response.result?.output == output)
+}
+
+@Test("Live actions cross the control socket without trusting caller-supplied identity")
+func liveActionControlRoundTrip() throws {
+    let suffix = UUID().uuidString.prefix(8)
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-action-control-\(suffix)", isDirectory: true)
+    let socketPath = root.appendingPathComponent("control.sock").path
+    let server = PabloControlServer(socketPath: socketPath) { request, peer in
+        #expect(request.method == .actLive)
+        #expect(request.liveActionRequest?.kind == .typeText)
+        #expect(request.liveActionRequest?.target.bundleIdentifier == "com.example.Editor")
+        #expect(request.liveActionRequest?.nodeID == "ax-editor")
+        #expect(request.liveActionRequest?.text == "Hello")
+        #expect(peer.userIdentifier == getuid())
+        return PabloControlResponse(
+            id: request.id,
+            result: PabloControlResult(
+                state: "idle",
+                target: "Editor",
+                recordingPath: nil,
+                elapsedNanoseconds: 0,
+                output: "typed  Editor  characters=5"
+            )
+        )
+    }
+    defer {
+        server.stop()
+        try? FileManager.default.removeItem(at: root)
+    }
+
+    try server.start()
+    let response = try PabloControlClient.send(
+        PabloControlRequest(
+            method: .actLive,
+            liveActionRequest: PabloLiveActionRequest(
+                kind: .typeText,
+                target: PabloLiveApplicationTarget(bundleIdentifier: "com.example.Editor"),
+                nodeID: "ax-editor",
+                text: "Hello"
+            )
+        ),
+        socketPath: socketPath
+    )
+
+    #expect(response.result?.output == "typed  Editor  characters=5")
+}

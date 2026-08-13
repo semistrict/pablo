@@ -16,18 +16,124 @@ enum AXTreeDiffer {
     }
 }
 
-final class AccessibilityRecorder {
-    private struct Tree {
-        let rootID: String?
-        let nodes: [String: AXNode]
-        let truncated: Bool
-    }
+struct AXTreeSnapshot {
+    let rootID: String?
+    let nodes: [String: AXNode]
+    let truncated: Bool
+}
 
+final class AccessibilityTreeReader {
     private let appElement: AXUIElement
-    private let clock: SessionClock
-    private let writer: JSONLWriter<AXSnapshotRecord>
     private let maxDepth: Int
     private let maxNodes: Int
+    private var elementsByID: [String: AXUIElement] = [:]
+
+    init(pid: pid_t, maxDepth: Int = 30, maxNodes: Int = 10_000) {
+        appElement = AXUIElementCreateApplication(pid)
+        self.maxDepth = maxDepth
+        self.maxNodes = maxNodes
+    }
+
+    func read() -> AXTreeSnapshot {
+        var nodes: [String: AXNode] = [:]
+        var elements: [String: AXUIElement] = [:]
+        var visited = Set<String>()
+        var visitedCount = 0
+        var truncated = false
+
+        func visit(_ element: AXUIElement, parentID: String?, depth: Int) -> String? {
+            guard depth <= maxDepth, visitedCount < maxNodes else {
+                truncated = true
+                return nil
+            }
+            let role = stringAttribute(element, kAXRoleAttribute)
+            let identifier = stringAttribute(element, kAXIdentifierAttribute)
+            let id = "ax-\(CFHash(element))"
+            guard !visited.contains(id) else { return id }
+            visited.insert(id)
+            elements[id] = element
+            visitedCount += 1
+
+            let size = sizeAttribute(element, kAXSizeAttribute)
+            let rawChildren: [AXUIElement]
+            if depth < maxDepth,
+               visitedCount < maxNodes,
+               AccessibilityTraversalPolicy.shouldTraverseChildren(role: role, size: size) {
+                let visibleChildren = attribute(element, kAXVisibleChildrenAttribute) as? [AXUIElement]
+                rawChildren = AccessibilityTraversalPolicy.preferredChildren(
+                    visible: visibleChildren,
+                    all: { attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? [] }
+                )
+            } else {
+                rawChildren = []
+                if depth >= maxDepth { truncated = true }
+            }
+            let childIDs = rawChildren.compactMap {
+                visit($0, parentID: id, depth: depth + 1)
+            }
+
+            let subrole = stringAttribute(element, kAXSubroleAttribute)
+            let isSecure = role == kAXTextFieldRole as String &&
+                subrole == kAXSecureTextFieldSubrole as String
+            nodes[id] = AXNode(
+                id: id,
+                parentID: parentID,
+                childIDs: childIDs,
+                role: role,
+                subrole: subrole,
+                title: stringAttribute(element, kAXTitleAttribute),
+                label: stringAttribute(element, kAXDescriptionAttribute),
+                value: isSecure ? "<redacted>" : printableAttribute(element, kAXValueAttribute),
+                identifier: identifier,
+                help: stringAttribute(element, kAXHelpAttribute),
+                enabled: boolAttribute(element, kAXEnabledAttribute),
+                focused: boolAttribute(element, kAXFocusedAttribute),
+                position: pointAttribute(element, kAXPositionAttribute),
+                size: size
+            )
+            return id
+        }
+
+        let rootID = visit(appElement, parentID: nil, depth: 0)
+        elementsByID = elements
+        return AXTreeSnapshot(rootID: rootID, nodes: nodes, truncated: truncated)
+    }
+
+    func element(id: String) -> AXUIElement? {
+        elementsByID[id]
+    }
+
+    func largestWindowFrame() -> CGRect? {
+        let windows = attribute(appElement, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        return windows.compactMap { window -> CGRect? in
+            guard let position = pointAttribute(window, kAXPositionAttribute),
+                  let size = sizeAttribute(window, kAXSizeAttribute),
+                  size.width > 0,
+                  size.height > 0 else { return nil }
+            return CGRect(x: position.x, y: position.y, width: size.width, height: size.height)
+        }.max(by: { $0.width * $0.height < $1.width * $1.height })
+    }
+}
+
+enum AccessibilityTraversalPolicy {
+    static func shouldTraverseChildren(role: String?, size: AXNode.Size?) -> Bool {
+        guard role == kAXMenuRole as String else { return true }
+        guard let size else { return false }
+        return size.width > 0 && size.height > 0
+    }
+
+    static func preferredChildren<Element>(
+        visible: [Element]?,
+        all: () -> [Element]
+    ) -> [Element] {
+        visible ?? all()
+    }
+}
+
+final class AccessibilityRecorder {
+    private let treeReader: AccessibilityTreeReader
+    private let clock: SessionClock
+    private let writer: ProtobufStreamWriter<AXSnapshotRecord>
     private let interval: TimeInterval
     private let queue = DispatchQueue(label: "pablo.accessibility-recorder", qos: .userInitiated)
     private let stateLock = NSLock()
@@ -40,17 +146,15 @@ final class AccessibilityRecorder {
     init(
         pid: pid_t,
         clock: SessionClock,
-        writer: JSONLWriter<AXSnapshotRecord>,
+        writer: ProtobufStreamWriter<AXSnapshotRecord>,
         interval: TimeInterval,
         maxDepth: Int = 30,
         maxNodes: Int = 10_000
     ) {
-        appElement = AXUIElementCreateApplication(pid)
+        treeReader = AccessibilityTreeReader(pid: pid, maxDepth: maxDepth, maxNodes: maxNodes)
         self.clock = clock
         self.writer = writer
         self.interval = interval
-        self.maxDepth = maxDepth
-        self.maxNodes = maxNodes
     }
 
     func start() {
@@ -107,11 +211,11 @@ final class AccessibilityRecorder {
     private func capture(reason: String) {
         let shouldSkip = stateLock.withLock { paused && reason != "final" }
         guard !shouldSkip else { return }
-        let tree = readTree()
+        let tree = treeReader.read()
         let diff = AXTreeDiffer.diff(previous: previous, current: tree.nodes)
         let isInitial = previous.isEmpty
         let record = AXSnapshotRecord(
-            schemaVersion: 1,
+            schemaVersion: 2,
             timestampNs: clock.nowNanoseconds(),
             reason: reason,
             kind: isInitial ? "full" : "delta",
@@ -128,63 +232,6 @@ final class AccessibilityRecorder {
         }
     }
 
-    private func readTree() -> Tree {
-        var nodes: [String: AXNode] = [:]
-        var visited = Set<String>()
-        var visitedCount = 0
-        var truncated = false
-
-        func visit(_ element: AXUIElement, parentID: String?, depth: Int, siblingIndex: Int) -> String? {
-            guard depth <= maxDepth, visitedCount < maxNodes else {
-                truncated = true
-                return nil
-            }
-            let role = stringAttribute(element, kAXRoleAttribute)
-            let identifier = stringAttribute(element, kAXIdentifierAttribute)
-            let id = "ax-\(CFHash(element))"
-            guard !visited.contains(id) else { return id }
-            visited.insert(id)
-            visitedCount += 1
-
-            let rawChildren: [AXUIElement]
-            if depth < maxDepth, visitedCount < maxNodes {
-                rawChildren = attribute(element, kAXChildrenAttribute) as? [AXUIElement] ?? []
-            } else {
-                rawChildren = []
-                if depth >= maxDepth { truncated = true }
-            }
-            var childIDs: [String] = []
-            for (index, child) in rawChildren.enumerated() {
-                if let childID = visit(child, parentID: id, depth: depth + 1, siblingIndex: index) {
-                    childIDs.append(childID)
-                }
-            }
-
-            let subrole = stringAttribute(element, kAXSubroleAttribute)
-            let isSecure = role == kAXTextFieldRole as String && subrole == kAXSecureTextFieldSubrole as String
-            let node = AXNode(
-                id: id,
-                parentID: parentID,
-                childIDs: childIDs,
-                role: role,
-                subrole: subrole,
-                title: stringAttribute(element, kAXTitleAttribute),
-                label: stringAttribute(element, kAXDescriptionAttribute),
-                value: isSecure ? "<redacted>" : printableAttribute(element, kAXValueAttribute),
-                identifier: identifier,
-                help: stringAttribute(element, kAXHelpAttribute),
-                enabled: boolAttribute(element, kAXEnabledAttribute),
-                focused: boolAttribute(element, kAXFocusedAttribute),
-                position: pointAttribute(element, kAXPositionAttribute),
-                size: sizeAttribute(element, kAXSizeAttribute)
-            )
-            nodes[id] = node
-            return id
-        }
-
-        let rootID = visit(appElement, parentID: nil, depth: 0, siblingIndex: 0)
-        return Tree(rootID: rootID, nodes: nodes, truncated: truncated)
-    }
 }
 
 private func attribute(_ element: AXUIElement, _ name: String) -> CFTypeRef? {

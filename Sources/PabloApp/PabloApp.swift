@@ -7,35 +7,52 @@ import SwiftUI
 struct PabloMenuBarApp: App {
     @NSApplicationDelegateAdaptor(PabloApplicationDelegate.self) private var applicationDelegate
     @StateObject private var model = RecorderModel()
-    @StateObject private var replayModel = ReplayModel()
 
     var body: some Scene {
         MenuBarExtra {
-            RecorderPanel(model: model, replayModel: replayModel, showsOpenWindowButton: true)
+            StatusPanel(model: model, replayModel: applicationDelegate.replayModel)
         } label: {
             Image(systemName: model.menuBarSymbol)
                 .accessibilityLabel(model.statusTitle)
         }
         .menuBarExtraStyle(.window)
-
-        WindowGroup("Pablo", id: "recorder") {
-            RecorderPanel(model: model, replayModel: replayModel, showsOpenWindowButton: false)
-        }
-        .defaultSize(width: 360, height: 440)
-        .windowResizability(.contentSize)
-
-        WindowGroup("Pablo Replay", id: "replay") {
-            ReplayView(model: replayModel)
-        }
-        .defaultSize(width: 1_180, height: 720)
     }
 }
 
 final class PabloApplicationDelegate: NSObject, NSApplicationDelegate {
+    @MainActor let replayModel = ReplayModel()
+    @MainActor private var reviewWindowController: NSWindowController?
+
     func applicationDidFinishLaunching(_ notification: Notification) {
-        DispatchQueue.main.async {
-            NSApplication.shared.activate(ignoringOtherApps: true)
+        showReviewWindow()
+    }
+
+    @MainActor
+    func showReviewWindow(preferredURL: URL? = nil) {
+        _ = replayModel.loadLatest(preferredURL: preferredURL)
+        if reviewWindowController == nil {
+            let content = NSHostingController(rootView: ReplayView(model: replayModel))
+            let window = NSWindow(contentViewController: content)
+            window.title = "Pablo"
+            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+            window.minSize = NSSize(width: 960, height: 620)
+            window.setContentSize(NSSize(width: 1_180, height: 720))
+            window.setFrameAutosaveName("PabloReviewWindow")
+            window.isReleasedWhenClosed = false
+            window.center()
+            reviewWindowController = NSWindowController(window: window)
         }
+        reviewWindowController?.showWindow(nil)
+        reviewWindowController?.window?.makeKeyAndOrderFront(nil)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    func applicationShouldHandleReopen(
+        _ sender: NSApplication,
+        hasVisibleWindows flag: Bool
+    ) -> Bool {
+        showReviewWindow()
+        return true
     }
 }
 
@@ -47,6 +64,16 @@ final class RecorderModel: ObservableObject {
         let developerName: String?
         let developerTeamIdentifier: String?
         let cacheIdentity: String?
+
+        var automationCaller: PabloAutomationCaller {
+            PabloAutomationCaller(
+                displayName: displayName,
+                applicationIdentifier: applicationIdentifier,
+                developerName: developerName,
+                developerTeamIdentifier: developerTeamIdentifier,
+                verified: cacheIdentity != nil
+            )
+        }
     }
 
     private struct CodeSigningIdentity {
@@ -81,6 +108,10 @@ final class RecorderModel: ObservableObject {
     private var session: RecordingSession?
     private var automaticStopTask: Task<Void, Never>?
     private let dailyApprovalStore = PabloDailyApprovalStore()
+    private let liveInspectionManager = PabloLiveInspectionManager()
+    private lazy var liveActionController = PabloLiveActionController(
+        inspectionManager: liveInspectionManager
+    )
     private lazy var controlServer = PabloControlServer { [weak self] request, peer in
         guard let self else {
             return PabloControlResponse(id: request.id, error: "Pablo is shutting down.")
@@ -113,6 +144,7 @@ final class RecorderModel: ObservableObject {
 
     var canStart: Bool { status == .idle && selectedPID != nil }
     var isActive: Bool { status == .recording || status == .paused }
+    var activeTargetName: String? { session?.targetName }
 
     func refreshApplications() {
         let ownPID = ProcessInfo.processInfo.processIdentifier
@@ -223,11 +255,14 @@ final class RecorderModel: ObservableObject {
         _ request: PabloControlRequest,
         from peer: PabloControlPeer
     ) async -> PabloControlResponse {
-        guard approveControlAccessIfNeeded(request, from: peer) else {
+        let caller = controlCaller(for: peer)
+        guard approveControlAccessIfNeeded(request, caller: caller) else {
             return PabloControlResponse(id: request.id, error: "The user denied this Pablo request.")
         }
 
         do {
+            var annotation: RecordingAnnotation?
+            var output: String?
             switch request.method {
             case .startRecording:
                 guard status == .idle else {
@@ -256,18 +291,118 @@ final class RecorderModel: ObservableObject {
                 await stopRecording()
             case .status:
                 updateElapsedTime()
+            case .addAnnotation:
+                guard let annotationRequest = request.annotationRequest,
+                      let draft = annotationRequest.draft else {
+                    throw RecordingError.usage("The annotation command did not include markup.")
+                }
+                annotation = try RecordingAnnotationStore.add(
+                    to: URL(fileURLWithPath: annotationRequest.recordingPath),
+                    draft: draft,
+                    author: annotationAuthor(for: caller)
+                )
+                NotificationCenter.default.post(
+                    name: .pabloAnnotationsDidChange,
+                    object: annotationRequest.recordingPath
+                )
+            case .resolveAnnotation:
+                guard let annotationRequest = request.annotationRequest,
+                      let reference = annotationRequest.reference else {
+                    throw RecordingError.usage("The resolve command did not include an annotation reference.")
+                }
+                annotation = try RecordingAnnotationStore.resolve(
+                    in: URL(fileURLWithPath: annotationRequest.recordingPath),
+                    reference: reference,
+                    author: annotationAuthor(for: caller)
+                )
+                NotificationCenter.default.post(
+                    name: .pabloAnnotationsDidChange,
+                    object: annotationRequest.recordingPath
+                )
+            case .inspectLive:
+                guard let inspection = request.liveInspectionRequest else {
+                    throw RecordingError.usage("The live inspection command did not include a request.")
+                }
+                output = try liveInspectionManager.perform(inspection)
+            case .actLive:
+                guard let action = request.liveActionRequest else {
+                    throw RecordingError.usage("The live action command did not include an action.")
+                }
+                let actionID = UUID()
+                let recordingWasPaused = status == .paused
+                try recordAutomationActionIfApplicable(
+                    action,
+                    actionID: actionID,
+                    phase: .requested,
+                    caller: caller,
+                    recordingWasPaused: recordingWasPaused
+                )
+                do {
+                    output = try await liveActionController.perform(action)
+                    try recordAutomationActionIfApplicable(
+                        action,
+                        actionID: actionID,
+                        phase: .succeeded,
+                        caller: caller,
+                        recordingWasPaused: recordingWasPaused
+                    )
+                } catch {
+                    try? recordAutomationActionIfApplicable(
+                        action,
+                        actionID: actionID,
+                        phase: .failed,
+                        caller: caller,
+                        recordingWasPaused: recordingWasPaused
+                    )
+                    throw error
+                }
             }
-            return PabloControlResponse(id: request.id, result: controlResult())
+            return PabloControlResponse(
+                id: request.id,
+                result: controlResult(annotation: annotation, output: output)
+            )
         } catch {
             return PabloControlResponse(id: request.id, error: error.localizedDescription)
         }
     }
 
+    private func recordAutomationActionIfApplicable(
+        _ action: PabloLiveActionRequest,
+        actionID: UUID,
+        phase: PabloAutomationActionPhase,
+        caller: ControlCaller,
+        recordingWasPaused: Bool
+    ) throws {
+        guard let session else { return }
+        let actionTargetPID = resolvedTargetPID(for: action.target)
+        try session.recordAutomationAction(PabloAutomationActionTrace(
+            actionID: actionID,
+            phase: phase,
+            request: action,
+            caller: caller.automationCaller,
+            transport: "pabloCLI",
+            recordingWasPaused: recordingWasPaused
+        ), actionTargetPID: actionTargetPID)
+    }
+
+    private func resolvedTargetPID(for target: PabloLiveApplicationTarget) -> pid_t? {
+        if let pid = target.pid { return pid }
+        return NSWorkspace.shared.runningApplications.first { application in
+            guard !application.isTerminated else { return false }
+            if let bundleIdentifier = target.bundleIdentifier {
+                return application.bundleIdentifier == bundleIdentifier
+            }
+            if let appName = target.appName {
+                return application.localizedName?.localizedCaseInsensitiveCompare(appName) == .orderedSame
+            }
+            return false
+        }?.processIdentifier
+    }
+
     private func approveControlAccessIfNeeded(
         _ request: PabloControlRequest,
-        from peer: PabloControlPeer
+        caller: ControlCaller
     ) -> Bool {
-        let caller = controlCaller(for: peer)
         if let cacheIdentity = caller.cacheIdentity,
            dailyApprovalStore.isApprovedToday(applicationIdentity: cacheIdentity) {
             return true
@@ -302,6 +437,16 @@ final class RecorderModel: ObservableObject {
             dailyApprovalStore.approveForToday(applicationIdentity: cacheIdentity)
         }
         return true
+    }
+
+    private func annotationAuthor(for caller: ControlCaller) -> RecordingAnnotationAuthor {
+        RecordingAnnotationAuthor(
+            type: .application,
+            displayName: caller.displayName,
+            applicationIdentifier: caller.applicationIdentifier,
+            developerName: caller.developerName,
+            developerTeamIdentifier: caller.developerTeamIdentifier
+        )
     }
 
     private func controlCaller(for peer: PabloControlPeer) -> ControlCaller {
@@ -400,6 +545,48 @@ final class RecorderModel: ObservableObject {
     }
 
     private func controlRequestDescription(_ request: PabloControlRequest) -> String {
+        if request.method == .addAnnotation,
+           let annotationRequest = request.annotationRequest,
+           let draft = annotationRequest.draft {
+            return "This app wants to add \(draft.kind.rawValue) markup to " +
+                "\(URL(fileURLWithPath: annotationRequest.recordingPath).lastPathComponent)."
+        }
+        if request.method == .resolveAnnotation,
+           let annotationRequest = request.annotationRequest {
+            return "This app wants to resolve \(annotationRequest.reference ?? "an annotation") in " +
+                "\(URL(fileURLWithPath: annotationRequest.recordingPath).lastPathComponent)."
+        }
+        if request.method == .inspectLive,
+           let inspection = request.liveInspectionRequest {
+            let target = inspection.target.appName
+                ?? inspection.target.bundleIdentifier
+                ?? inspection.target.pid.map { "PID \($0)" }
+                ?? "a live application"
+            if inspection.kind == .events {
+                return "This app wants to inspect input directed to \(target). " +
+                    "Typed text will be retained in memory while Pablo remains open."
+            }
+            return "This app wants to inspect the current accessibility state of \(target). " +
+                "Live inspection data remains in memory and is not saved as a recording."
+        }
+        if request.method == .actLive,
+           let action = request.liveActionRequest {
+            let target = action.target.appName
+                ?? action.target.bundleIdentifier
+                ?? action.target.pid.map { "PID \($0)" }
+                ?? "a live application"
+            let detail: String
+            switch action.kind {
+            case .click: detail = "click in"
+            case .drag: detail = "drag in"
+            case .scroll: detail = "scroll"
+            case .typeText: detail = "type text into"
+            case .key: detail = "send a key to"
+            case .perform: detail = "perform an accessibility action in"
+            }
+            return "This app wants to \(detail) \(target). " +
+                "The action will control that application through Pablo."
+        }
         guard request.method == .startRecording, let options = request.recordOptions else {
             return "This app wants to \(request.method.approvalDescription)."
         }
@@ -411,7 +598,10 @@ final class RecorderModel: ObservableObject {
         return "This app wants to start a recording of \(target).\(textNotice)"
     }
 
-    private func controlResult() -> PabloControlResult {
+    private func controlResult(
+        annotation: RecordingAnnotation? = nil,
+        output: String? = nil
+    ) -> PabloControlResult {
         let state: String
         switch status {
         case .idle: state = "idle"
@@ -424,7 +614,9 @@ final class RecorderModel: ObservableObject {
             state: state,
             target: session?.targetName,
             recordingPath: session?.packageURL.path ?? lastRecordingURL?.path,
-            elapsedNanoseconds: session?.durationNs ?? elapsedNanoseconds
+            elapsedNanoseconds: session?.durationNs ?? elapsedNanoseconds,
+            annotation: annotation,
+            output: output
         )
     }
 
@@ -482,11 +674,9 @@ enum PrivacyPane: String, CaseIterable, Identifiable {
     }
 }
 
-private struct RecorderPanel: View {
+private struct StatusPanel: View {
     @ObservedObject var model: RecorderModel
     @ObservedObject var replayModel: ReplayModel
-    let showsOpenWindowButton: Bool
-    @Environment(\.openWindow) private var openWindow
     private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -498,7 +688,6 @@ private struct RecorderPanel: View {
             footer
         }
         .frame(width: 340)
-        .onAppear { model.refreshApplications() }
         .onReceive(timer) { _ in model.updateElapsedTime() }
     }
 
@@ -535,7 +724,14 @@ private struct RecorderPanel: View {
             if model.isActive || model.status == .stopping {
                 activeControls
             } else {
-                targetControls
+                VStack(alignment: .leading, spacing: 6) {
+                    Label("Ready for agent commands", systemImage: "terminal")
+                        .font(.subheadline.weight(.medium))
+                    Text("Recording and markup requests appear here for approval. Review evidence in the app window.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
 
             if let error = model.errorMessage {
@@ -545,54 +741,13 @@ private struct RecorderPanel: View {
         .padding(14)
     }
 
-    private var targetControls: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            HStack {
-                Text("Record application")
-                    .font(.subheadline.weight(.medium))
-                Spacer()
-                Button {
-                    model.refreshApplications()
-                } label: {
-                    Image(systemName: "arrow.clockwise")
-                }
-                .buttonStyle(.borderless)
-                .help("Refresh running applications")
-            }
-
-            Picker("Application", selection: $model.selectedPID) {
-                Text("Choose an application…").tag(pid_t?.none)
-                ForEach(model.applications) { application in
-                    Text(application.name).tag(Optional(application.pid))
-                }
-            }
-            .labelsHidden()
-            .pickerStyle(.menu)
-            .frame(maxWidth: .infinity, alignment: .leading)
-
-            Toggle("Capture typed text", isOn: $model.captureText)
-                .font(.caption)
-
-            Button {
-                Task { await model.startRecording() }
-            } label: {
-                Label("Start Recording", systemImage: "record.circle")
-                    .frame(maxWidth: .infinity)
-            }
-            .buttonStyle(.borderedProminent)
-            .tint(.red)
-            .controlSize(.large)
-            .disabled(!model.canStart)
-        }
-    }
-
     private var activeControls: some View {
         VStack(spacing: 12) {
-            if let application = model.applications.first(where: { $0.pid == model.selectedPID }) {
+            if let targetName = model.activeTargetName {
                 HStack {
                     Image(systemName: "macwindow")
                         .foregroundStyle(.secondary)
-                    Text(application.name)
+                    Text(targetName)
                         .font(.subheadline.weight(.medium))
                     Spacer()
                     Text(model.status == .paused ? "PAUSED" : "LIVE")
@@ -631,7 +786,7 @@ private struct RecorderPanel: View {
 
     private func errorCard(_ message: String) -> some View {
         VStack(alignment: .leading, spacing: 9) {
-            Label("Recording couldn’t start", systemImage: "exclamationmark.triangle.fill")
+            Label("Pablo needs attention", systemImage: "exclamationmark.triangle.fill")
                 .font(.caption.weight(.semibold))
                 .foregroundStyle(.orange)
             Text(message)
@@ -651,32 +806,14 @@ private struct RecorderPanel: View {
 
     private var footer: some View {
         HStack {
-            if showsOpenWindowButton {
-                Button("Open Window") {
-                    openWindow(id: "recorder")
-                    NSApplication.shared.activate(ignoringOtherApps: true)
-                }
-                .buttonStyle(.borderless)
-                Divider()
-                    .frame(height: 12)
+            Button("Open Review") {
+                (NSApplication.shared.delegate as? PabloApplicationDelegate)?
+                    .showReviewWindow(preferredURL: model.lastRecordingURL)
             }
+            .buttonStyle(.borderless)
+            Divider().frame(height: 12)
             Button("Show Recordings") { model.revealRecordings() }
                 .buttonStyle(.borderless)
-            Menu("Replay") {
-                Button("Replay Last Recording") {
-                    if replayModel.loadLatest(preferredURL: model.lastRecordingURL) {
-                        openWindow(id: "replay")
-                        NSApplication.shared.activate(ignoringOtherApps: true)
-                    }
-                }
-                Button("Open Recording…") {
-                    if replayModel.chooseAndLoadRecording() {
-                        openWindow(id: "replay")
-                        NSApplication.shared.activate(ignoringOtherApps: true)
-                    }
-                }
-            }
-            .menuStyle(.borderlessButton)
             Spacer()
             Button("Quit") { NSApplication.shared.terminate(nil) }
                 .buttonStyle(.borderless)

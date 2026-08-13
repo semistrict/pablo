@@ -1,0 +1,303 @@
+syntax = "proto3";
+
+package pablo.v2;
+
+option swift_prefix = "PabloV2";
+
+message Point {
+  double x = 1;
+  double y = 2;
+}
+
+message Size {
+  double width = 1;
+  double height = 2;
+}
+
+message LiveApplicationTarget {
+  optional int32 pid = 1;
+  optional string bundle_identifier = 2;
+  optional string app_name = 3;
+}
+
+enum LiveActionKind {
+  LIVE_ACTION_KIND_UNSPECIFIED = 0;
+  LIVE_ACTION_KIND_CLICK = 1;
+  LIVE_ACTION_KIND_DRAG = 2;
+  LIVE_ACTION_KIND_SCROLL = 3;
+  LIVE_ACTION_KIND_TYPE = 4;
+  LIVE_ACTION_KIND_KEY = 5;
+  LIVE_ACTION_KIND_PERFORM = 6;
+}
+
+enum MouseButton {
+  MOUSE_BUTTON_UNSPECIFIED = 0;
+  MOUSE_BUTTON_LEFT = 1;
+  MOUSE_BUTTON_RIGHT = 2;
+  MOUSE_BUTTON_MIDDLE = 3;
+}
+
+enum ScrollDirection {
+  SCROLL_DIRECTION_UNSPECIFIED = 0;
+  SCROLL_DIRECTION_UP = 1;
+  SCROLL_DIRECTION_DOWN = 2;
+  SCROLL_DIRECTION_LEFT = 3;
+  SCROLL_DIRECTION_RIGHT = 4;
+}
+
+enum KeyModifier {
+  KEY_MODIFIER_UNSPECIFIED = 0;
+  KEY_MODIFIER_COMMAND = 1;
+  KEY_MODIFIER_OPTION = 2;
+  KEY_MODIFIER_CONTROL = 3;
+  KEY_MODIFIER_SHIFT = 4;
+  KEY_MODIFIER_FUNCTION = 5;
+}
+
+message LiveActionRequest {
+  LiveActionKind kind = 1;
+  LiveApplicationTarget target = 2;
+  optional string node_id = 3;
+  optional Point point = 4;
+  optional string from_node_id = 5;
+  optional Point from_point = 6;
+  optional string to_node_id = 7;
+  optional Point to_point = 8;
+  MouseButton mouse_button = 9;
+  int64 click_count = 10;
+  double duration = 11;
+  optional ScrollDirection scroll_direction = 12;
+  int64 scroll_amount = 13;
+  optional string text = 14;
+  optional string key = 15;
+  repeated KeyModifier modifiers = 16;
+  optional string accessibility_action = 17;
+}
+
+enum AutomationActionPhase {
+  AUTOMATION_ACTION_PHASE_UNSPECIFIED = 0;
+  AUTOMATION_ACTION_PHASE_REQUESTED = 1;
+  AUTOMATION_ACTION_PHASE_SUCCEEDED = 2;
+  AUTOMATION_ACTION_PHASE_FAILED = 3;
+}
+
+message AutomationCaller {
+  string display_name = 1;
+  optional string application_identifier = 2;
+  optional string developer_name = 3;
+  optional string developer_team_identifier = 4;
+  bool verified = 5;
+}
+
+message AutomationActionTrace {
+  string action_id = 1;
+  AutomationActionPhase phase = 2;
+  LiveActionKind kind = 3;
+  LiveApplicationTarget target = 4;
+  optional string node_id = 5;
+  optional Point point = 6;
+  optional string from_node_id = 7;
+  optional Point from_point = 8;
+  optional string to_node_id = 9;
+  optional Point to_point = 10;
+  MouseButton mouse_button = 11;
+  int64 click_count = 12;
+  double duration = 13;
+  optional ScrollDirection scroll_direction = 14;
+  int64 scroll_amount = 15;
+  optional int64 text_length = 16;
+  optional string key = 17;
+  repeated KeyModifier modifiers = 18;
+  optional string accessibility_action = 19;
+  AutomationCaller caller = 20;
+  string transport = 21;
+  bool recording_was_paused = 22;
+}
+
+message InputEventRecord {
+  uint32 schema_version = 1;
+  uint64 timestamp_ns = 2;
+  string type = 3;
+  optional int64 target_pid = 4;
+  optional double x = 5;
+  optional double y = 6;
+  optional double delta_x = 7;
+  optional double delta_y = 8;
+  optional int64 key_code = 9;
+  optional string text = 10;
+  uint64 flags = 11;
+  optional int64 button = 12;
+  optional int64 click_count = 13;
+  optional AutomationActionTrace automation_action = 14;
+}
+
+message AccessibilityNode {
+  string id = 1;
+  optional string parent_id = 2;
+  repeated string child_ids = 3;
+  optional string role = 4;
+  optional string subrole = 5;
+  optional string title = 6;
+  optional string label = 7;
+  optional string value = 8;
+  optional string identifier = 9;
+  optional string help = 10;
+  optional bool enabled = 11;
+  optional bool focused = 12;
+  optional Point position = 13;
+  optional Size size = 14;
+}
+
+message AccessibilitySnapshotRecord {
+  uint32 schema_version = 1;
+  uint64 timestamp_ns = 2;
+  string reason = 3;
+  string kind = 4;
+  optional string root_id = 5;
+  repeated AccessibilityNode upserts = 6;
+  repeated string removed = 7;
+  bool truncated = 8;
+}
+
+enum AnnotationKind {
+  ANNOTATION_KIND_UNSPECIFIED = 0;
+  ANNOTATION_KIND_ISSUE = 1;
+  ANNOTATION_KIND_OBSERVATION = 2;
+  ANNOTATION_KIND_QUESTION = 3;
+  ANNOTATION_KIND_HIGHLIGHT = 4;
+}
+
+enum AnnotationStatus {
+  ANNOTATION_STATUS_UNSPECIFIED = 0;
+  ANNOTATION_STATUS_OPEN = 1;
+  ANNOTATION_STATUS_RESOLVED = 2;
+}
+
+enum AnnotationAuthorType {
+  ANNOTATION_AUTHOR_TYPE_UNSPECIFIED = 0;
+  ANNOTATION_AUTHOR_TYPE_HUMAN = 1;
+  ANNOTATION_AUTHOR_TYPE_APPLICATION = 2;
+}
+
+message AnnotationAuthor {
+  AnnotationAuthorType type = 1;
+  string display_name = 2;
+  optional string application_identifier = 3;
+  optional string developer_name = 4;
+  optional string developer_team_identifier = 5;
+}
+
+message AnnotationTraceSample {
+  uint64 timestamp_ns = 1;
+  double x = 2;
+  double y = 3;
+}
+
+message AnnotationTrace {
+  repeated AnnotationTraceSample samples = 1;
+  double line_width = 2;
+}
+
+message AnnotationDraft {
+  AnnotationKind kind = 1;
+  string text = 2;
+  optional uint64 start_timestamp_ns = 3;
+  optional uint64 end_timestamp_ns = 4;
+  repeated string accessibility_references = 5;
+  repeated string accessibility_node_ids = 6;
+  optional AnnotationTrace trace = 7;
+}
+
+message RecordingAnnotation {
+  string id = 1;
+  int64 sequence = 2;
+  string created_at = 3;
+  string updated_at = 4;
+  AnnotationAuthor created_by = 5;
+  AnnotationAuthor updated_by = 6;
+  AnnotationKind kind = 7;
+  AnnotationStatus status = 8;
+  string text = 9;
+  optional uint64 start_timestamp_ns = 10;
+  optional uint64 end_timestamp_ns = 11;
+  repeated string accessibility_references = 12;
+  repeated string accessibility_node_ids = 13;
+  optional AnnotationTrace trace = 14;
+}
+
+enum LiveInspectionKind {
+  LIVE_INSPECTION_KIND_UNSPECIFIED = 0;
+  LIVE_INSPECTION_KIND_INSPECT = 1;
+  LIVE_INSPECTION_KIND_FRAMES = 2;
+  LIVE_INSPECTION_KIND_FRAME = 3;
+  LIVE_INSPECTION_KIND_EVENTS = 4;
+  LIVE_INSPECTION_KIND_ANNOTATIONS = 5;
+}
+
+message LiveInspectionRequest {
+  LiveInspectionKind kind = 1;
+  LiveApplicationTarget target = 2;
+  optional string reference = 3;
+  bool changed_only = 4;
+  int64 limit = 5;
+  bool json = 6;
+}
+
+message RecordOptions {
+  optional int32 pid = 1;
+  optional string bundle_identifier = 2;
+  optional string app_name = 3;
+  optional string output_path = 4;
+  optional double duration = 5;
+  double snapshot_interval = 6;
+  bool capture_text = 7;
+  int64 frames_per_second = 8;
+}
+
+message AnnotationRequest {
+  string recording_path = 1;
+  optional AnnotationDraft draft = 2;
+  optional string reference = 3;
+}
+
+enum ControlMethod {
+  CONTROL_METHOD_UNSPECIFIED = 0;
+  CONTROL_METHOD_RECORD_START = 1;
+  CONTROL_METHOD_RECORD_PAUSE = 2;
+  CONTROL_METHOD_RECORD_RESUME = 3;
+  CONTROL_METHOD_RECORD_STOP = 4;
+  CONTROL_METHOD_RECORD_STATUS = 5;
+  CONTROL_METHOD_ANNOTATION_ADD = 6;
+  CONTROL_METHOD_ANNOTATION_RESOLVE = 7;
+  CONTROL_METHOD_INSPECT_LIVE = 8;
+  CONTROL_METHOD_ACTION_LIVE = 9;
+}
+
+message CallRequest {
+  uint32 protocol_version = 1;
+  string id = 2;
+  ControlMethod method = 3;
+  optional RecordOptions record_options = 4;
+  optional AnnotationRequest annotation_request = 5;
+  optional LiveInspectionRequest live_inspection_request = 6;
+  optional LiveActionRequest live_action_request = 7;
+}
+
+message ControlResult {
+  string state = 1;
+  optional string target = 2;
+  optional string recording_path = 3;
+  uint64 elapsed_nanoseconds = 4;
+  optional RecordingAnnotation annotation = 5;
+  optional string output = 6;
+}
+
+message CallResponse {
+  string id = 1;
+  optional ControlResult result = 2;
+  optional string error = 3;
+}
+
+service PabloControlService {
+  rpc Call(CallRequest) returns (CallResponse);
+}

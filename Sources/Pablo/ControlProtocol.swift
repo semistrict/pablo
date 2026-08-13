@@ -7,6 +7,10 @@ public enum PabloControlMethod: String, Codable, Sendable {
     case resumeRecording = "record.resume"
     case stopRecording = "record.stop"
     case status = "record.status"
+    case addAnnotation = "annotation.add"
+    case resolveAnnotation = "annotation.resolve"
+    case inspectLive = "inspect.live"
+    case actLive = "action.live"
 
     public var approvalDescription: String {
         switch self {
@@ -15,7 +19,154 @@ public enum PabloControlMethod: String, Codable, Sendable {
         case .resumeRecording: return "resume the current recording"
         case .stopRecording: return "stop the current recording"
         case .status: return "read the current recording status"
+        case .addAnnotation: return "add markup to a recording"
+        case .resolveAnnotation: return "resolve markup in a recording"
+        case .inspectLive: return "inspect a live application"
+        case .actLive: return "control a live application"
         }
+    }
+}
+
+public struct PabloLiveApplicationTarget: Codable, Equatable, Sendable {
+    public let pid: Int32?
+    public let bundleIdentifier: String?
+    public let appName: String?
+
+    public init(pid: Int32? = nil, bundleIdentifier: String? = nil, appName: String? = nil) {
+        self.pid = pid
+        self.bundleIdentifier = bundleIdentifier
+        self.appName = appName
+    }
+}
+
+public enum PabloLiveInspectionKind: String, Codable, Sendable {
+    case inspect
+    case frames
+    case frame
+    case events
+    case annotations
+}
+
+public struct PabloLiveInspectionRequest: Codable, Sendable {
+    public let kind: PabloLiveInspectionKind
+    public let target: PabloLiveApplicationTarget
+    public let reference: String?
+    public let changedOnly: Bool
+    public let limit: Int
+    public let json: Bool
+
+    public init(
+        kind: PabloLiveInspectionKind,
+        target: PabloLiveApplicationTarget,
+        reference: String? = nil,
+        changedOnly: Bool = false,
+        limit: Int = 100,
+        json: Bool = false
+    ) {
+        self.kind = kind
+        self.target = target
+        self.reference = reference
+        self.changedOnly = changedOnly
+        self.limit = limit
+        self.json = json
+    }
+}
+
+public struct PabloLivePoint: Codable, Equatable, Sendable {
+    public let x: Double
+    public let y: Double
+
+    public init(x: Double, y: Double) {
+        self.x = x
+        self.y = y
+    }
+}
+
+public enum PabloLiveActionKind: String, Codable, Sendable {
+    case click
+    case drag
+    case scroll
+    case typeText = "type"
+    case key
+    case perform
+}
+
+public enum PabloLiveMouseButton: String, Codable, Sendable {
+    case left
+    case right
+    case middle
+}
+
+public enum PabloLiveScrollDirection: String, Codable, Sendable {
+    case up
+    case down
+    case left
+    case right
+}
+
+public enum PabloLiveKeyModifier: String, Codable, CaseIterable, Sendable {
+    case command
+    case option
+    case control
+    case shift
+    case function
+}
+
+public struct PabloLiveActionRequest: Codable, Sendable {
+    public let kind: PabloLiveActionKind
+    public let target: PabloLiveApplicationTarget
+    public let nodeID: String?
+    public let point: PabloLivePoint?
+    public let fromNodeID: String?
+    public let fromPoint: PabloLivePoint?
+    public let toNodeID: String?
+    public let toPoint: PabloLivePoint?
+    public let mouseButton: PabloLiveMouseButton
+    public let clickCount: Int
+    public let duration: TimeInterval
+    public let scrollDirection: PabloLiveScrollDirection?
+    public let scrollAmount: Int
+    public let text: String?
+    public let key: String?
+    public let modifiers: [PabloLiveKeyModifier]
+    public let accessibilityAction: String?
+
+    public init(
+        kind: PabloLiveActionKind,
+        target: PabloLiveApplicationTarget,
+        nodeID: String? = nil,
+        point: PabloLivePoint? = nil,
+        fromNodeID: String? = nil,
+        fromPoint: PabloLivePoint? = nil,
+        toNodeID: String? = nil,
+        toPoint: PabloLivePoint? = nil,
+        mouseButton: PabloLiveMouseButton = .left,
+        clickCount: Int = 1,
+        duration: TimeInterval = 0.5,
+        scrollDirection: PabloLiveScrollDirection? = nil,
+        scrollAmount: Int = 3,
+        text: String? = nil,
+        key: String? = nil,
+        modifiers: [PabloLiveKeyModifier] = [],
+        accessibilityAction: String? = nil
+    ) {
+        self.kind = kind
+        self.target = target
+        self.nodeID = nodeID
+        self.point = point
+        self.fromNodeID = fromNodeID
+        self.fromPoint = fromPoint
+        self.toNodeID = toNodeID
+        self.toPoint = toPoint
+        self.mouseButton = mouseButton
+        self.clickCount = clickCount
+        self.duration = duration
+        self.scrollDirection = scrollDirection
+        self.scrollAmount = scrollAmount
+        self.text = text
+        self.key = key
+        self.modifiers = modifiers
+        self.accessibilityAction = accessibilityAction
     }
 }
 
@@ -40,6 +191,26 @@ public struct PabloControlRecordOptions: Codable, Sendable {
         framesPerSecond = options.framesPerSecond
     }
 
+    init(
+        pid: Int32?,
+        bundleIdentifier: String?,
+        appName: String?,
+        outputPath: String?,
+        duration: TimeInterval?,
+        snapshotInterval: TimeInterval,
+        captureText: Bool,
+        framesPerSecond: Int
+    ) {
+        self.pid = pid
+        self.bundleIdentifier = bundleIdentifier
+        self.appName = appName
+        self.outputPath = outputPath
+        self.duration = duration
+        self.snapshotInterval = snapshotInterval
+        self.captureText = captureText
+        self.framesPerSecond = framesPerSecond
+    }
+
     public func recordOptions() -> RecordOptions {
         var options = RecordOptions()
         options.pid = pid
@@ -54,17 +225,65 @@ public struct PabloControlRecordOptions: Codable, Sendable {
     }
 }
 
+public struct PabloControlAnnotationRequest: Codable, Sendable {
+    public let recordingPath: String
+    public let draft: RecordingAnnotationDraft?
+    public let reference: String?
+
+    public init(recordingPath: String, draft: RecordingAnnotationDraft) {
+        self.recordingPath = recordingPath
+        self.draft = draft
+        reference = nil
+    }
+
+    public init(recordingPath: String, reference: String) {
+        self.recordingPath = recordingPath
+        draft = nil
+        self.reference = reference
+    }
+}
+
 public struct PabloControlRequest: Codable, Sendable {
     public let protocolVersion: Int
     public let id: UUID
     public let method: PabloControlMethod
     public let recordOptions: PabloControlRecordOptions?
+    public let annotationRequest: PabloControlAnnotationRequest?
+    public let liveInspectionRequest: PabloLiveInspectionRequest?
+    public let liveActionRequest: PabloLiveActionRequest?
 
-    public init(method: PabloControlMethod, recordOptions: PabloControlRecordOptions? = nil) {
-        protocolVersion = 1
+    public init(
+        method: PabloControlMethod,
+        recordOptions: PabloControlRecordOptions? = nil,
+        annotationRequest: PabloControlAnnotationRequest? = nil,
+        liveInspectionRequest: PabloLiveInspectionRequest? = nil,
+        liveActionRequest: PabloLiveActionRequest? = nil
+    ) {
+        protocolVersion = 2
         id = UUID()
         self.method = method
         self.recordOptions = recordOptions
+        self.annotationRequest = annotationRequest
+        self.liveInspectionRequest = liveInspectionRequest
+        self.liveActionRequest = liveActionRequest
+    }
+
+    init(
+        protocolVersion: Int,
+        id: UUID,
+        method: PabloControlMethod,
+        recordOptions: PabloControlRecordOptions?,
+        annotationRequest: PabloControlAnnotationRequest?,
+        liveInspectionRequest: PabloLiveInspectionRequest?,
+        liveActionRequest: PabloLiveActionRequest?
+    ) {
+        self.protocolVersion = protocolVersion
+        self.id = id
+        self.method = method
+        self.recordOptions = recordOptions
+        self.annotationRequest = annotationRequest
+        self.liveInspectionRequest = liveInspectionRequest
+        self.liveActionRequest = liveActionRequest
     }
 }
 
@@ -73,12 +292,23 @@ public struct PabloControlResult: Codable, Sendable {
     public let target: String?
     public let recordingPath: String?
     public let elapsedNanoseconds: UInt64
+    public let annotation: RecordingAnnotation?
+    public let output: String?
 
-    public init(state: String, target: String?, recordingPath: String?, elapsedNanoseconds: UInt64) {
+    public init(
+        state: String,
+        target: String?,
+        recordingPath: String?,
+        elapsedNanoseconds: UInt64,
+        annotation: RecordingAnnotation? = nil,
+        output: String? = nil
+    ) {
         self.state = state
         self.target = target
         self.recordingPath = recordingPath
         self.elapsedNanoseconds = elapsedNanoseconds
+        self.annotation = annotation
+        self.output = output
     }
 }
 
@@ -202,16 +432,15 @@ public enum PabloControlClient {
             throw socketError("Could not connect to the Pablo app")
         }
 
-        var requestData = try JSONEncoder().encode(request)
-        requestData.append(0x0A)
+        let requestData = try PabloProtobufCodec.encode(request)
         try writeAll(requestData, to: descriptor)
         Darwin.shutdown(descriptor, SHUT_WR)
 
-        let responseData = try readToEnd(from: descriptor, maximumBytes: 64 * 1_024)
+        let responseData = try readToEnd(from: descriptor, maximumBytes: 16 * 1_024 * 1_024)
         guard !responseData.isEmpty else {
             throw RecordingError.capture("The Pablo app closed the control connection without responding.")
         }
-        return try JSONDecoder().decode(PabloControlResponse.self, from: responseData)
+        return try PabloProtobufCodec.decodeControlResponse(from: responseData)
     }
 }
 
@@ -322,9 +551,9 @@ public final class PabloControlServer: @unchecked Sendable {
 
         let request: PabloControlRequest
         do {
-            let data = try readLine(from: descriptor, maximumBytes: 64 * 1_024)
-            request = try JSONDecoder().decode(PabloControlRequest.self, from: data)
-            guard request.protocolVersion == 1 else {
+            let data = try readToEnd(from: descriptor, maximumBytes: 64 * 1_024)
+            request = try PabloProtobufCodec.decodeControlRequest(from: data)
+            guard request.protocolVersion == 2 else {
                 try writeResponse(
                     PabloControlResponse(id: request.id, error: "Unsupported control protocol version."),
                     to: descriptor
@@ -371,9 +600,7 @@ public final class PabloControlServer: @unchecked Sendable {
     }
 
     private func writeResponse(_ response: PabloControlResponse, to descriptor: Int32) throws {
-        var data = try JSONEncoder().encode(response)
-        data.append(0x0A)
-        try writeAll(data, to: descriptor)
+        try writeAll(try PabloProtobufCodec.encode(response), to: descriptor)
     }
 }
 
@@ -414,20 +641,6 @@ private func writeAll(_ data: Data, to descriptor: Int32) throws {
     }
 }
 
-private func readLine(from descriptor: Int32, maximumBytes: Int) throws -> Data {
-    var data = Data()
-    var buffer = [UInt8](repeating: 0, count: 4_096)
-    while data.count < maximumBytes {
-        let count = Darwin.read(descriptor, &buffer, min(buffer.count, maximumBytes - data.count))
-        guard count > 0 else { throw socketError("Could not read a control request") }
-        data.append(buffer, count: count)
-        if let newline = data.firstIndex(of: 0x0A) {
-            return data.prefix(upTo: newline)
-        }
-    }
-    throw RecordingError.capture("The Pablo control request was too large.")
-}
-
 private func readToEnd(from descriptor: Int32, maximumBytes: Int) throws -> Data {
     var data = Data()
     var buffer = [UInt8](repeating: 0, count: 4_096)
@@ -436,9 +649,6 @@ private func readToEnd(from descriptor: Int32, maximumBytes: Int) throws -> Data
         if count == 0 { return data }
         guard count > 0 else { throw socketError("Could not read Pablo's control response") }
         data.append(buffer, count: count)
-        if let newline = data.firstIndex(of: 0x0A) {
-            return data.prefix(upTo: newline)
-        }
     }
     throw RecordingError.capture("The Pablo control response was too large.")
 }

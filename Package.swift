@@ -10,9 +10,15 @@ let package = Package(
         .executable(name: "pablo", targets: ["PabloCLI"]),
         .executable(name: "PabloApp", targets: ["PabloApp"]),
     ],
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-protobuf.git", exact: "1.38.1"),
+    ],
     targets: [
         .target(
             name: "PabloCore",
+            dependencies: [
+                .product(name: "SwiftProtobuf", package: "swift-protobuf"),
+            ],
             path: "Sources/Pablo",
             linkerSettings: [
                 .linkedFramework("AppKit"),

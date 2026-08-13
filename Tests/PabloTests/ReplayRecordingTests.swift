@@ -9,7 +9,7 @@ import Testing
     defer { try? FileManager.default.removeItem(at: packageURL) }
 
     let manifest = RecordingManifest(
-        schemaVersion: 1,
+        schemaVersion: 2,
         startedAt: "2026-08-11T16:20:09.844Z",
         endedAt: "2026-08-11T16:20:11.844Z",
         durationNs: 2_000_000_000,
@@ -23,8 +23,8 @@ import Testing
         ),
         files: [
             "video": "video.mov",
-            "events": "events.jsonl",
-            "accessibility": "accessibility.jsonl",
+            "events": "events.pb",
+            "accessibility": "accessibility.pb",
         ]
     )
     try JSONEncoder().encode(manifest).write(
@@ -44,12 +44,28 @@ import Testing
         help: nil,
         enabled: true,
         focused: false,
-        position: nil,
-        size: nil
+        position: .init(x: 10, y: 20),
+        size: .init(width: 400, height: 300)
+    )
+    let updatedRoot = AXNode(
+        id: "root",
+        parentID: nil,
+        childIDs: [],
+        role: "AXApplication",
+        subrole: nil,
+        title: "Updated Example",
+        label: nil,
+        value: nil,
+        identifier: nil,
+        help: nil,
+        enabled: true,
+        focused: true,
+        position: .init(x: 12, y: 20),
+        size: .init(width: 400, height: 300)
     )
     let records = [
         AXSnapshotRecord(
-            schemaVersion: 1,
+            schemaVersion: 2,
             timestampNs: 200_000_000,
             reason: "initial",
             kind: "full",
@@ -59,9 +75,19 @@ import Testing
             truncated: false
         ),
         AXSnapshotRecord(
-            schemaVersion: 1,
+            schemaVersion: 2,
             timestampNs: 1_100_000_000,
             reason: "input:mouseUp",
+            kind: "delta",
+            rootID: root.id,
+            upserts: [updatedRoot],
+            removed: [],
+            truncated: false
+        ),
+        AXSnapshotRecord(
+            schemaVersion: 2,
+            timestampNs: 1_500_000_000,
+            reason: "periodic",
             kind: "delta",
             rootID: root.id,
             upserts: [],
@@ -69,13 +95,12 @@ import Testing
             truncated: false
         ),
     ]
-    let encoder = JSONEncoder()
     var accessibilityData = Data()
     for record in records {
-        accessibilityData.append(try encoder.encode(record))
-        accessibilityData.append(0x0A)
+        accessibilityData.append(try PabloProtobufCodec.encode(record))
     }
-    try accessibilityData.write(to: packageURL.appendingPathComponent("accessibility.jsonl"))
+    try accessibilityData.write(to: packageURL.appendingPathComponent("accessibility.pb"))
+    try Data().write(to: packageURL.appendingPathComponent("events.pb"))
     FileManager.default.createFile(
         atPath: packageURL.appendingPathComponent("video.mov").path,
         contents: Data()
@@ -83,16 +108,37 @@ import Testing
 
     let replay = try ReplayRecording.load(from: packageURL)
 
-    #expect(replay.accessibilitySteps.count == 2)
+    #expect(replay.accessibilitySteps.count == 3)
     #expect(replay.accessibilitySteps[0].reference == "A11Y-001")
     #expect(replay.accessibilitySteps[1].reference == "A11Y-002")
     #expect(replay.accessibilitySteps[0].changedNodes.count == 1)
     #expect(replay.accessibilitySteps[0].nodes.count == 1)
     #expect(replay.accessibilitySteps[0].totalNodeCount == 1)
-    #expect(replay.accessibilitySteps[1].removedNodeIDs == ["root"])
-    #expect(replay.accessibilitySteps[1].totalNodeCount == 0)
-    #expect(replay.accessibilitySteps[1].nodes.isEmpty)
+    #expect(replay.accessibilitySteps[0].nodes[0].frame == ReplayAccessibilityFrame(
+        x: 10, y: 20, width: 400, height: 300
+    ))
+    let initialChanges = replay.accessibilitySteps[0].changes(from: nil)
+    #expect(initialChanges.count == 1)
+    #expect(initialChanges[0].kind == .appeared)
+    let updatedChanges = replay.accessibilitySteps[1].changes(from: replay.accessibilitySteps[0])
+    #expect(updatedChanges.count == 1)
+    #expect(updatedChanges[0].kind == .updated)
+    #expect(updatedChanges[0].changedProperties.contains("title"))
+    #expect(updatedChanges[0].changedProperties.contains("focused"))
+    #expect(updatedChanges[0].changedProperties.contains("frame"))
+    let removedChanges = replay.accessibilitySteps[2].changes(from: replay.accessibilitySteps[1])
+    #expect(removedChanges.count == 1)
+    #expect(removedChanges[0].kind == .removed)
+    #expect(replay.accessibilitySteps[2].removedNodeIDs == ["root"])
+    #expect(replay.accessibilitySteps[2].totalNodeCount == 0)
+    #expect(replay.accessibilitySteps[2].nodes.isEmpty)
     #expect(replay.videoTime(for: replay.accessibilitySteps[1]) == 1)
+    #expect(replay.accessibilityStep(atVideoTime: 0)?.reference == "A11Y-001")
+    #expect(replay.accessibilityStep(atVideoTime: 0.99)?.reference == "A11Y-001")
+    #expect(replay.accessibilityStep(atVideoTime: 1)?.reference == "A11Y-002")
+    #expect(replay.accessibilityStep(atVideoTime: 1.4)?.reference == "A11Y-003")
+    let exactSecondFrameTime = replay.videoTime(for: replay.accessibilitySteps[1])
+    #expect(replay.accessibilityStep(atVideoTime: exactSecondFrameTime)?.reference == "A11Y-002")
 
     let frameList = try CLI.frames(packageURL, json: false)
     #expect(frameList.contains("A11Y-001"))
@@ -105,4 +151,34 @@ import Testing
     )
     #expect(frame.contains("Accessibility tree:"))
     #expect(frame.contains("AXApplication"))
+}
+
+@Test("Recordings with unsupported schema versions are rejected")
+func unsupportedRecordingVersionsAreRejected() throws {
+    let packageURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pablo-unsupported-\(UUID().uuidString).pablo", isDirectory: true)
+    try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: packageURL) }
+    let manifest = RecordingManifest(
+        schemaVersion: 1,
+        startedAt: "2026-08-11T16:20:09.844Z",
+        endedAt: nil,
+        durationNs: nil,
+        target: .init(pid: 42, bundleIdentifier: "example.app", name: "Example"),
+        capture: .init(
+            displayScale: 2,
+            width: 100,
+            height: 100,
+            framesPerSecond: 30,
+            firstFrameTimestampNs: nil
+        ),
+        files: ["video": "video.mov", "events": "events.pb", "accessibility": "accessibility.pb"]
+    )
+    try JSONEncoder().encode(manifest).write(
+        to: packageURL.appendingPathComponent("manifest.json")
+    )
+
+    #expect(throws: RecordingError.self) {
+        try ReplayRecording.load(from: packageURL)
+    }
 }

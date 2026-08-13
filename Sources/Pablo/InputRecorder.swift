@@ -116,7 +116,7 @@ final class InputRecorder {
         let isKeyboard = type == .keyDown || type == .keyUp || type == .flagsChanged
         let text = includeText && type == .keyDown ? keyboardText(from: event) : nil
         let record = InputEventRecord(
-            schemaVersion: 1,
+            schemaVersion: 2,
             timestampNs: clock.nowNanoseconds(),
             type: Self.name(for: type),
             targetPID: Int64(event.getIntegerValueField(.eventTargetUnixProcessID)),
@@ -128,7 +128,8 @@ final class InputRecorder {
             text: text,
             flags: event.flags.rawValue,
             button: isPointer ? event.getIntegerValueField(.mouseEventButtonNumber) : nil,
-            clickCount: isPointer ? event.getIntegerValueField(.mouseEventClickState) : nil
+            clickCount: isPointer ? event.getIntegerValueField(.mouseEventClickState) : nil,
+            automationAction: nil
         )
         handler(record)
     }

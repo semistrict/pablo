@@ -13,8 +13,8 @@ public final class RecordingSession {
     private let target: TargetApplication
     public let packageURL: URL
     private let clock = SessionClock()
-    private var inputWriter: JSONLWriter<InputEventRecord>?
-    private var accessibilityWriter: JSONLWriter<AXSnapshotRecord>?
+    private var inputWriter: ProtobufStreamWriter<InputEventRecord>?
+    private var accessibilityWriter: ProtobufStreamWriter<AXSnapshotRecord>?
     private var video: VideoRecorder?
     private var accessibility: AccessibilityRecorder?
     private var input: InputRecorder?
@@ -25,6 +25,8 @@ public final class RecordingSession {
     public var targetName: String { target.name }
     public var durationNs: UInt64 { clock.nowNanoseconds() }
     public var captureEnded: Bool { video?.captureEnded ?? false }
+
+    public var targetPID: pid_t { target.pid }
 
     public init(options: RecordOptions) throws {
         self.options = options
@@ -41,14 +43,20 @@ public final class RecordingSession {
         try checkPermissions()
         try preparePackage()
 
-        let inputURL = packageURL.appendingPathComponent("events.jsonl")
-        let accessibilityURL = packageURL.appendingPathComponent("accessibility.jsonl")
+        let inputURL = packageURL.appendingPathComponent("events.pb")
+        let accessibilityURL = packageURL.appendingPathComponent("accessibility.pb")
         let videoURL = packageURL.appendingPathComponent("video.mov")
         let manifestURL = packageURL.appendingPathComponent("manifest.json")
         self.manifestURL = manifestURL
 
-        let inputWriter = try JSONLWriter<InputEventRecord>(url: inputURL)
-        let accessibilityWriter = try JSONLWriter<AXSnapshotRecord>(url: accessibilityURL)
+        let inputWriter = try ProtobufStreamWriter<InputEventRecord>(
+            url: inputURL,
+            encode: PabloProtobufCodec.encode
+        )
+        let accessibilityWriter = try ProtobufStreamWriter<AXSnapshotRecord>(
+            url: accessibilityURL,
+            encode: PabloProtobufCodec.encode
+        )
         self.inputWriter = inputWriter
         self.accessibilityWriter = accessibilityWriter
         let video = VideoRecorder(
@@ -69,7 +77,7 @@ public final class RecordingSession {
         do {
             let capture = try await video.start()
             let manifest = RecordingManifest(
-                schemaVersion: 1,
+                schemaVersion: RecordingManifest.currentSchemaVersion,
                 startedAt: ISO8601DateFormatter.recordingFormatter.string(from: Date()),
                 endedAt: nil,
                 durationNs: nil,
@@ -87,8 +95,8 @@ public final class RecordingSession {
                 ),
                 files: [
                     "video": "video.mov",
-                    "events": "events.jsonl",
-                    "accessibility": "accessibility.jsonl",
+                    "events": "events.pb",
+                    "accessibility": "accessibility.pb",
                 ]
             )
             self.manifest = manifest
@@ -136,6 +144,23 @@ public final class RecordingSession {
         accessibility?.resume()
         input?.resume()
         state = .recording
+    }
+
+    public func recordAutomationAction(
+        _ trace: PabloAutomationActionTrace,
+        actionTargetPID: pid_t?
+    ) throws {
+        guard state == .recording || state == .paused else {
+            throw RecordingError.capture("There is no active recording for the automation trace.")
+        }
+        guard let inputWriter else {
+            throw RecordingError.capture("The recording event stream is unavailable.")
+        }
+        try inputWriter.append(.automationAction(
+            timestampNs: clock.nowNanoseconds(),
+            targetPID: actionTargetPID,
+            trace: trace
+        ))
     }
 
     public func stop() async throws {

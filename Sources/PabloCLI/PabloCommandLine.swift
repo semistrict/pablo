@@ -16,29 +16,42 @@ struct PabloCommandLine {
                 print(CLI.formatControlResult(try CLI.sendControl(method: .resumeRecording)))
             case .stop:
                 print(CLI.formatControlResult(try CLI.sendControl(method: .stopRecording)))
-            case .inspect(let url):
-                print(try CLI.inspect(url))
+            case .inspect(let source):
+                print(try CLI.inspect(source))
             case .latest:
                 print(try CLI.latestRecordingPath())
             case .recordings(let json):
                 print(try CLI.recordings(json: json))
-            case .frames(let url, let json):
-                print(try CLI.frames(url, json: json))
-            case .frame(let reference, let recording, let changedOnly, let json):
+            case .frames(let source, let json):
+                print(try CLI.frames(source, json: json))
+            case .frame(let reference, let source, let changedOnly, let json):
                 print(try CLI.frame(
                     reference: reference,
-                    requestedURL: recording,
+                    source: source,
                     changedOnly: changedOnly,
                     json: json
                 ))
-            case .events(let url, let limit, let json):
-                print(try CLI.events(url, limit: limit, json: json))
+            case .events(let source, let limit, let json):
+                print(try CLI.events(source, limit: limit, json: json))
+            case .annotations(let source, let json):
+                print(try CLI.annotations(source, json: json))
+            case .liveAction(let action):
+                print(try CLI.performLiveAction(action))
+            case .annotate(let options):
+                print(CLI.formatControlResult(try CLI.addAnnotation(options)))
+            case .resolveAnnotation(let reference, let recording):
+                print(CLI.formatControlResult(try CLI.resolveAnnotation(
+                    reference: reference,
+                    requestedURL: recording
+                )))
             case .help:
                 print(CLI.help)
             }
         } catch {
             FileHandle.standardError.write(Data("Error: \(error.localizedDescription)\n".utf8))
-            FileHandle.standardError.write(Data("\n\(CLI.help)\n".utf8))
+            if case RecordingError.usage = error {
+                FileHandle.standardError.write(Data("\n\(CLI.help)\n".utf8))
+            }
             Foundation.exit(1)
         }
     }

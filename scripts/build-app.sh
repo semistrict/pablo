@@ -48,6 +48,9 @@ fi
 install -m 755 "$binary_path/PabloApp" "$executable_path/$main_executable_name"
 install -m 755 "$binary_path/pablo" "$executable_path/pablo"
 install -m 644 "$project_directory/Resources/Pablo-Info.plist" "$contents_path/Info.plist"
+for resource_bundle in "$binary_path"/*.bundle(N); do
+    ditto "$resource_bundle" "$resources_path/${resource_bundle:t}"
+done
 
 if cmp -s "$executable_path/$main_executable_name" "$executable_path/pablo"; then
     echo "The GUI executable was overwritten by the CLI executable." >&2
