@@ -10,4 +10,9 @@ enum RecordingStreamReader {
         let data = try Data(contentsOf: url, options: .mappedIfSafe)
         return try PabloProtobufCodec.decodeAccessibility(from: data)
     }
+
+    static func workspace(at url: URL) throws -> [WorkspaceSnapshotRecord] {
+        let data = try Data(contentsOf: url, options: .mappedIfSafe)
+        return try PabloProtobufCodec.decodeWorkspace(from: data)
+    }
 }

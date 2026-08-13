@@ -33,6 +33,8 @@ struct PabloCommandLine {
                 ))
             case .events(let source, let limit, let json):
                 print(try CLI.events(source, limit: limit, json: json))
+            case .workspace(let recording, let json):
+                print(try CLI.workspace(recording, json: json))
             case .annotations(let source, let json):
                 print(try CLI.annotations(source, json: json))
             case .liveAction(let action):

@@ -24,12 +24,14 @@ struct AXTreeSnapshot {
 
 final class AccessibilityTreeReader {
     private let appElement: AXUIElement
+    private let applicationID: String
     private let maxDepth: Int
     private let maxNodes: Int
     private var elementsByID: [String: AXUIElement] = [:]
 
-    init(pid: pid_t, maxDepth: Int = 30, maxNodes: Int = 10_000) {
+    init(pid: pid_t, applicationID: String, maxDepth: Int = 30, maxNodes: Int = 10_000) {
         appElement = AXUIElementCreateApplication(pid)
+        self.applicationID = applicationID
         self.maxDepth = maxDepth
         self.maxNodes = maxNodes
     }
@@ -48,7 +50,7 @@ final class AccessibilityTreeReader {
             }
             let role = stringAttribute(element, kAXRoleAttribute)
             let identifier = stringAttribute(element, kAXIdentifierAttribute)
-            let id = "ax-\(CFHash(element))"
+            let id = "\(applicationID):ax-\(CFHash(element))"
             guard !visited.contains(id) else { return id }
             visited.insert(id)
             elements[id] = element
@@ -131,30 +133,47 @@ enum AccessibilityTraversalPolicy {
 }
 
 final class AccessibilityRecorder {
-    private let treeReader: AccessibilityTreeReader
+    private let scope: RecordingScopeKind
+    private let selectedPID: pid_t?
+    private let registry: RecordingApplicationRegistry
+    private let captureFrame: () -> CGRect?
     private let clock: SessionClock
     private let writer: ProtobufStreamWriter<AXSnapshotRecord>
+    private let workspaceWriter: ProtobufStreamWriter<WorkspaceSnapshotRecord>
     private let interval: TimeInterval
+    private let maxDepth: Int
+    private let maxNodes: Int
     private let queue = DispatchQueue(label: "pablo.accessibility-recorder", qos: .userInitiated)
     private let stateLock = NSLock()
-    private var previous: [String: AXNode] = [:]
+    private var readers: [String: AccessibilityTreeReader] = [:]
+    private var previousByApplication: [String: [String: AXNode]] = [:]
     private var timer: DispatchSourceTimer?
     private var pendingWork: DispatchWorkItem?
     private var stopped = false
     private var paused = false
 
     init(
-        pid: pid_t,
+        scope: RecordingScopeKind,
+        selectedPID: pid_t?,
+        registry: RecordingApplicationRegistry,
+        captureFrame: @escaping () -> CGRect?,
         clock: SessionClock,
         writer: ProtobufStreamWriter<AXSnapshotRecord>,
+        workspaceWriter: ProtobufStreamWriter<WorkspaceSnapshotRecord>,
         interval: TimeInterval,
         maxDepth: Int = 30,
         maxNodes: Int = 10_000
     ) {
-        treeReader = AccessibilityTreeReader(pid: pid, maxDepth: maxDepth, maxNodes: maxNodes)
+        self.scope = scope
+        self.selectedPID = selectedPID
+        self.registry = registry
+        self.captureFrame = captureFrame
         self.clock = clock
         self.writer = writer
+        self.workspaceWriter = workspaceWriter
         self.interval = interval
+        self.maxDepth = maxDepth
+        self.maxNodes = maxNodes
     }
 
     func start() {
@@ -167,14 +186,14 @@ final class AccessibilityRecorder {
         timer.resume()
     }
 
-    func requestSnapshot(reason: String) {
+    func requestSnapshot(reason: String, applicationPID: pid_t? = nil) {
         stateLock.lock()
         guard !stopped, !paused else {
             stateLock.unlock()
             return
         }
         pendingWork?.cancel()
-        let work = DispatchWorkItem { [weak self] in self?.capture(reason: reason) }
+        let work = DispatchWorkItem { [weak self] in self?.capture(reason: reason, applicationPID: applicationPID) }
         pendingWork = work
         stateLock.unlock()
         queue.asyncAfter(deadline: .now() + .milliseconds(75), execute: work)
@@ -208,17 +227,51 @@ final class AccessibilityRecorder {
         requestSnapshot(reason: "resume")
     }
 
-    private func capture(reason: String) {
+    private func capture(reason: String, applicationPID: pid_t? = nil) {
         let shouldSkip = stateLock.withLock { paused && reason != "final" }
         guard !shouldSkip else { return }
-        let tree = treeReader.read()
+        let timestampNs = clock.nowNanoseconds()
+        let workspace = registry.snapshot(timestampNs: timestampNs, reason: reason, captureFrame: captureFrame())
+        do {
+            try workspaceWriter.append(workspace)
+        } catch {
+            FileHandle.standardError.write(Data("Workspace write failed: \(error)\n".utf8))
+        }
+
+        let applications: [RecordingApplication]
+        if scope == .application, let selectedPID,
+           let application = registry.application(for: selectedPID, timestampNs: timestampNs) {
+            applications = [application]
+        } else if let applicationPID,
+                  let application = registry.application(for: applicationPID, timestampNs: timestampNs) {
+            applications = [application]
+        } else {
+            applications = workspace.applications
+        }
+
+        for application in applications {
+            capture(application: application, timestampNs: timestampNs, reason: reason)
+        }
+    }
+
+    private func capture(application: RecordingApplication, timestampNs: UInt64, reason: String) {
+        let reader = readers[application.id] ?? AccessibilityTreeReader(
+            pid: pid_t(application.pid),
+            applicationID: application.id,
+            maxDepth: maxDepth,
+            maxNodes: maxNodes
+        )
+        readers[application.id] = reader
+        let tree = reader.read()
+        let previous = previousByApplication[application.id] ?? [:]
         let diff = AXTreeDiffer.diff(previous: previous, current: tree.nodes)
         let isInitial = previous.isEmpty
         let record = AXSnapshotRecord(
-            schemaVersion: 2,
-            timestampNs: clock.nowNanoseconds(),
+            schemaVersion: RecordingManifest.currentSchemaVersion,
+            timestampNs: timestampNs,
             reason: reason,
             kind: isInitial ? "full" : "delta",
+            application: application,
             rootID: tree.rootID,
             upserts: isInitial ? tree.nodes.values.sorted { $0.id < $1.id } : diff.upserts,
             removed: isInitial ? [] : diff.removed,
@@ -226,7 +279,7 @@ final class AccessibilityRecorder {
         )
         do {
             try writer.append(record)
-            previous = tree.nodes
+            previousByApplication[application.id] = tree.nodes
         } catch {
             FileHandle.standardError.write(Data("Accessibility write failed: \(error)\n".utf8))
         }

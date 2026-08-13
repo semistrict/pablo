@@ -26,8 +26,9 @@ func annotationsPreserveEvidence() throws {
             kind: .issue,
             text: "  Submit remains disabled.  ",
             startTimestampNs: 300_000_000,
+            applicationIDs: ["APP-001"],
             accessibilityReferences: ["1", "A11Y-001"],
-            accessibilityNodeIDs: ["button", "button"],
+            accessibilityNodeIDs: ["APP-001:button", "APP-001:button"],
             trace: RecordingAnnotationTrace(
                 samples: [
                     .init(timestampNs: 300_000_000, x: 0.2, y: 0.3),
@@ -50,7 +51,8 @@ func annotationsPreserveEvidence() throws {
     #expect(created.reference == "NOTE-001")
     #expect(created.text == "Submit remains disabled.")
     #expect(created.accessibilityReferences == ["A11Y-001"])
-    #expect(created.accessibilityNodeIDs == ["button"])
+    #expect(created.applicationIDs == ["APP-001"])
+    #expect(created.accessibilityNodeIDs == ["APP-001:button"])
     #expect(created.trace?.samples.count == 3)
     #expect(created.trace?.samples.allSatisfy { $0.timestampNs == 300_000_000 } == true)
     #expect(resolved.id == created.id)
@@ -153,30 +155,12 @@ private func makeAnnotationTestPackage() throws -> URL {
     let packageURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("pablo-annotations-\(UUID().uuidString).pablo", isDirectory: true)
     try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
-    let manifest = RecordingManifest(
-        schemaVersion: 2,
-        startedAt: "2026-08-12T12:00:00Z",
-        endedAt: "2026-08-12T12:00:01Z",
-        durationNs: 1_000_000_000,
-        target: .init(pid: 42, bundleIdentifier: "example.app", name: "Example"),
-        capture: .init(
-            displayScale: 2,
-            width: 100,
-            height: 100,
-            framesPerSecond: 30,
-            firstFrameTimestampNs: 100_000_000
-        ),
-        files: [
-            "video": "video.mov",
-            "events": "events.pb",
-            "accessibility": "accessibility.pb",
-        ]
-    )
+    let manifest = testManifest()
     try JSONEncoder().encode(manifest).write(to: packageURL.appendingPathComponent("manifest.json"))
     let root = AXNode(
-        id: "root",
+        id: "APP-001:root",
         parentID: nil,
-        childIDs: ["button"],
+        childIDs: ["APP-001:button"],
         role: "AXApplication",
         subrole: nil,
         title: "Example",
@@ -190,8 +174,8 @@ private func makeAnnotationTestPackage() throws -> URL {
         size: nil
     )
     let button = AXNode(
-        id: "button",
-        parentID: "root",
+        id: "APP-001:button",
+        parentID: "APP-001:root",
         childIDs: [],
         role: "AXButton",
         subrole: nil,
@@ -206,10 +190,11 @@ private func makeAnnotationTestPackage() throws -> URL {
         size: nil
     )
     let record = AXSnapshotRecord(
-        schemaVersion: 2,
+        schemaVersion: 3,
         timestampNs: 200_000_000,
         reason: "initial",
         kind: "full",
+        application: testApplication,
         rootID: root.id,
         upserts: [root, button],
         removed: [],
@@ -219,6 +204,7 @@ private func makeAnnotationTestPackage() throws -> URL {
         to: packageURL.appendingPathComponent("accessibility.pb")
     )
     try Data().write(to: packageURL.appendingPathComponent("events.pb"))
+    try writeTestWorkspace(to: packageURL)
     try Data().write(to: packageURL.appendingPathComponent("video.mov"))
     return packageURL
 }

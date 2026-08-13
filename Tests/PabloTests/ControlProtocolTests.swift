@@ -67,7 +67,8 @@ func controlSocketRoundTrip() throws {
             id: request.id,
             result: PabloControlResult(
                 state: "idle",
-                target: nil,
+                scopeName: nil,
+                applicationIDs: [],
                 recordingPath: nil,
                 elapsedNanoseconds: 0
             )
@@ -116,7 +117,8 @@ func liveInspectionControlRoundTrip() throws {
             id: request.id,
             result: PabloControlResult(
                 state: "idle",
-                target: "Notes",
+                scopeName: "Notes",
+                applicationIDs: ["APP-001"],
                 recordingPath: nil,
                 elapsedNanoseconds: 0,
                 output: output
@@ -160,7 +162,8 @@ func liveActionControlRoundTrip() throws {
             id: request.id,
             result: PabloControlResult(
                 state: "idle",
-                target: "Editor",
+                scopeName: "Editor",
+                applicationIDs: ["APP-001"],
                 recordingPath: nil,
                 elapsedNanoseconds: 0,
                 output: "typed  Editor  characters=5"

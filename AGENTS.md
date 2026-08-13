@@ -1,6 +1,6 @@
 # Pablo development guide
 
-Pablo is a native macOS menu-bar recorder, live application inspector, and consent-gated automation bridge. It captures a target application's video, global input while that application is active, and accessibility state on one monotonic timeline. Running apps can be inspected and controlled with the bundled CLI; completed recordings remain inspectable offline.
+Pablo is a native macOS menu-bar desktop-session recorder, live application inspector, and consent-gated automation bridge. It records either one application window or an entire display, with attributed input, evolving apps and windows, and independently materialized accessibility roots on one monotonic timeline.
 
 ## Requirements
 
@@ -18,7 +18,7 @@ The project uses Swift Package Manager directly; there is no `.xcodeproj`.
 - `Sources/Pablo/` — recording engine, models, replay reader, CLI parser, and local control protocol
 - `Sources/PabloApp/` — SwiftUI/AppKit menu-bar application, permission flow, approval UI, and replay UI
 - `Sources/PabloCLI/` — executable entry point for the `pablo` command
-- `proto/pablo/v2/` — protobuf source of truth for recording streams and local RPC
+- `proto/pablo/v3/` — protobuf source of truth for recording streams and local RPC
 - `Sources/Pablo/Generated/` — Buf-generated Swift; never edit directly
 - `Tests/PabloTests/` — XCTest and Swift Testing suites
 - `Resources/Pablo-Info.plist` — bundle identity, version, build number, and privacy usage descriptions
@@ -33,24 +33,25 @@ Do not edit compiled app bundles or generated icon outputs. Change their source 
 
 `PabloCore` owns the recorder and file format. `PabloApp` owns user consent, macOS privacy permission handling, recording lifecycle, and replay presentation. `PabloCLI` is intentionally thin.
 
-A session has four synchronized artifacts:
+A session has five synchronized evidence artifacts plus optional markup:
 
 ```text
 Recording.pablo/
 ├── manifest.json
 ├── video.mov
 ├── events.pb
+├── workspace.pb
 ├── accessibility.pb
 └── annotations.pb
 ```
 
-The session clock uses monotonic nanoseconds. Paused time is removed from both the event timeline and video. Accessibility data begins with a full flat tree and then stores deltas containing changed nodes and removals. Each materialized UI state has a stable `A11Y-###` index shared by the replay UI and CLI.
+The session clock uses monotonic nanoseconds. Paused time is removed from every evidence timeline and video. Workspace snapshots record frontmost state plus explicit app/window appearance and removal. Accessibility trees materialize independently per stable `APP-###` identity. Each accessibility record has a global `A11Y-###` index shared by replay and CLI.
 
-The protobuf source of truth is `proto/pablo/v2/pablo.proto`; `buf.gen.yaml` pins Swift generation. Run `buf format --diff --exit-code`, `buf lint`, and `buf generate` after schema changes. Never edit generated `.pb.swift` files. Streams use unsigned varint length-delimited protobuf records. Only recording schema version 2 is supported; reject any other manifest version before reading or mutating journals.
+The protobuf source of truth is `proto/pablo/v3/pablo.proto`; `buf.gen.yaml` pins Swift generation. Run `buf format --diff --exit-code`, `buf lint`, and `buf generate` after schema changes. Never edit generated `.pb.swift` files. Streams use unsigned varint length-delimited protobuf records. Only recording schema and control protocol version 3 are supported; there is no compatibility path.
 
 Captured artifacts and the manifest are evidence and remain untouched by markup. `annotations.pb` is an append-only journal of full annotation states with stable `NOTE-###` references. Visual markup is a full-fidelity spatiotemporal freehand trace: normalized x/y samples carry session timestamps, with equal timestamps denoting a shape on one paused video frame. Resolving an annotation appends a new state. Agent annotation mutations go through the approved app bridge; read-only annotation inspection stays offline.
 
-The video recorder follows the target's largest visible window at recording start. The input recorder observes keyboard, pointer, drag, and scroll events only while the target app is active. Secure accessibility text values are redacted. See `docs/recording-format.md` before changing schemas or timeline behavior.
+Application scope follows the selected app's largest visible window. Display scope records the selected display without app exclusions, observes global input with receiving app/window provenance, and snapshots accessibility for visible applications. Both scopes use the same v3 structures. Secure accessibility text values are redacted.
 
 Every approved live action requested while a recording is active or paused appends explicit `automationAction` requested and outcome records to `events.pb`, including actions aimed at a different app. They share one UUID and preserve the verified calling application/developer, exact sanitized target parameters, resolved action PID when available, and paused state. Never put typed content in the automation record; store only its character count. Synthesized raw input stays as separate evidence when it is in recording scope.
 

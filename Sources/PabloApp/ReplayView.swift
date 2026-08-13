@@ -15,6 +15,8 @@ final class ReplayModel: ObservableObject {
     @Published private(set) var selectedStepID: Int?
     @Published var selectedNodeID: String?
     @Published var selectedAnnotationID: UUID?
+    @Published private(set) var selectedTimelineItemID: String?
+    @Published private(set) var timelineItems: [ReplayTimelineItem] = []
     @Published private(set) var annotations: [RecordingAnnotation] = []
     @Published var currentVideoTime: TimeInterval = 0
     @Published private(set) var playbackRate: Float = 1
@@ -29,13 +31,24 @@ final class ReplayModel: ObservableObject {
     }
 
     var previousStep: ReplayAccessibilityStep? {
-        guard let recording, let selectedStep, selectedStep.id > 0 else { return nil }
-        return recording.accessibilitySteps.first { $0.id == selectedStep.id - 1 }
+        guard let recording, let selectedStep else { return nil }
+        return recording.accessibilitySteps.last {
+            $0.id < selectedStep.id && $0.applicationID == selectedStep.applicationID
+        }
     }
 
     var selectedNode: ReplayAccessibilityNode? {
         guard let selectedStep, let selectedNodeID else { return nil }
         return selectedStep.nodes.first { $0.id == selectedNodeID }
+    }
+
+    var selectedNodeChange: ReplayAccessibilityChange? {
+        guard let selectedStep, let selectedNodeID else { return nil }
+        return selectedStep.changes(from: previousStep).first { $0.node.id == selectedNodeID }
+    }
+
+    var currentWorkspace: WorkspaceSnapshotRecord? {
+        recording?.workspaceStep(atVideoTime: currentVideoTime)
     }
 
     var selectedNodeVideoRegion: CGRect? {
@@ -44,20 +57,28 @@ final class ReplayModel: ObservableObject {
         let nodesByID = Dictionary(uniqueKeysWithValues: selectedStep.nodes.map { ($0.id, $0) })
         var ancestor: ReplayAccessibilityNode? = node
         var visited = Set<String>()
-        var windowFrame: ReplayAccessibilityFrame?
-        while let current = ancestor, visited.insert(current.id).inserted {
-            if current.role == "AXWindow", let candidate = current.frame {
-                windowFrame = candidate
-                break
+        let referenceFrame: ReplayAccessibilityFrame?
+        if recording?.scope == .display, let capture = recording?.captureFrame {
+            referenceFrame = ReplayAccessibilityFrame(
+                x: capture.x, y: capture.y, width: capture.width, height: capture.height
+            )
+        } else {
+            var windowFrame: ReplayAccessibilityFrame?
+            while let current = ancestor, visited.insert(current.id).inserted {
+                if current.role == "AXWindow", let candidate = current.frame {
+                    windowFrame = candidate
+                    break
+                }
+                ancestor = current.parentID.flatMap { nodesByID[$0] }
             }
-            ancestor = current.parentID.flatMap { nodesByID[$0] }
+            referenceFrame = windowFrame
         }
-        guard let windowFrame, windowFrame.width > 0, windowFrame.height > 0 else { return nil }
+        guard let referenceFrame, referenceFrame.width > 0, referenceFrame.height > 0 else { return nil }
         let region = CGRect(
-            x: (frame.x - windowFrame.x) / windowFrame.width,
-            y: (frame.y - windowFrame.y) / windowFrame.height,
-            width: frame.width / windowFrame.width,
-            height: frame.height / windowFrame.height
+            x: (frame.x - referenceFrame.x) / referenceFrame.width,
+            y: (frame.y - referenceFrame.y) / referenceFrame.height,
+            width: frame.width / referenceFrame.width,
+            height: frame.height / referenceFrame.height
         )
         let clipped = region.intersection(CGRect(x: 0, y: 0, width: 1, height: 1))
         return clipped.isNull || clipped.isEmpty ? nil : clipped
@@ -66,6 +87,11 @@ final class ReplayModel: ObservableObject {
     var selectedAnnotation: RecordingAnnotation? {
         guard let selectedAnnotationID else { return nil }
         return annotations.first { $0.id == selectedAnnotationID }
+    }
+
+    var selectedTimelineItem: ReplayTimelineItem? {
+        guard let selectedTimelineItemID else { return nil }
+        return timelineItems.first { $0.id == selectedTimelineItemID }
     }
 
     func loadLatest(preferredURL: URL?) -> Bool {
@@ -89,21 +115,10 @@ final class ReplayModel: ObservableObject {
         }
     }
 
-    func chooseAndLoadRecording() -> Bool {
-        let panel = NSOpenPanel()
-        panel.title = "Open Pablo Recording"
-        panel.prompt = "Review"
-        panel.directoryURL = Self.recordingsDirectory
-        panel.canChooseFiles = false
-        panel.canChooseDirectories = true
-        panel.allowsMultipleSelection = false
-        guard panel.runModal() == .OK, let url = panel.url else { return false }
-        return load(url)
-    }
-
     func selectAccessibilityStep(_ id: Int?, seek: Bool) {
         selectedStepID = id
         guard let step = selectedStep else { return }
+        if seek { selectedTimelineItemID = "accessibility:\(step.id)" }
         if let selectedNodeID,
            !step.nodes.contains(where: { $0.id == selectedNodeID }) {
             self.selectedNodeID = nil
@@ -190,6 +205,7 @@ final class ReplayModel: ObservableObject {
     func selectAnnotation(_ id: UUID?) {
         selectedAnnotationID = id
         guard let recording, let annotation = selectedAnnotation else { return }
+        selectedTimelineItemID = "annotation:\(annotation.id.uuidString)"
         if let timestamp = annotation.startTimestampNs {
             seek(to: recording.videoTime(forTimestampNs: timestamp))
         }
@@ -198,6 +214,40 @@ final class ReplayModel: ObservableObject {
             selectAccessibilityStep(step.id, seek: false)
         }
         selectedNodeID = annotation.accessibilityNodeIDs.first
+    }
+
+    func selectTimelineItem(_ item: ReplayTimelineItem) {
+        selectedTimelineItemID = item.id
+        seek(to: recording?.videoTime(forTimestampNs: item.timestampNs) ?? 0)
+        guard let reference = item.references.first else { return }
+        switch reference {
+        case .accessibility(let id):
+            selectAccessibilityStep(id, seek: false)
+        case .annotation(let id):
+            selectAnnotation(id)
+        case .workspace, .input, .automation:
+            break
+        }
+    }
+
+    func moveToMeaningfulTimelineItem(_ direction: Int) {
+        guard let recording else { return }
+        let currentTimestamp = recording.sessionTimestampNs(forVideoTime: currentVideoTime)
+        let items = recording.meaningfulTimelineItems(annotations: annotations)
+        let item = direction < 0
+            ? items.last(where: { $0.timestampNs + 1_000_000 < currentTimestamp })
+            : items.first(where: { $0.timestampNs > currentTimestamp + 1_000_000 })
+        if let item { selectTimelineItem(item) }
+    }
+
+    func applicationName(for id: String) -> String {
+        guard let recording else { return id }
+        for workspace in recording.workspaceSteps.reversed() {
+            if let application = workspace.applications.first(where: { $0.id == id }) {
+                return application.name
+            }
+        }
+        return id
     }
 
     func addHumanAnnotation(
@@ -215,6 +265,16 @@ final class ReplayModel: ObservableObject {
                 : RecordingAnnotationTrace(samples: draftTraceSamples, lineWidth: lineWidth)
             let startTimestamp = trace?.startTimestampNs ?? currentTimestamp
             let endTimestamp = trace?.endTimestampNs ?? currentTimestamp
+            var applicationIDs = Set(selectedStep.map { [$0.applicationID] } ?? [])
+            for sample in trace?.samples ?? [] {
+                if let applicationID = recording.applicationID(
+                    atNormalizedX: sample.x,
+                    y: sample.y,
+                    timestampNs: sample.timestampNs
+                ) {
+                    applicationIDs.insert(applicationID)
+                }
+            }
             let annotation = try RecordingAnnotationStore.add(
                 to: recording.packageURL,
                 draft: RecordingAnnotationDraft(
@@ -222,6 +282,7 @@ final class ReplayModel: ObservableObject {
                     text: text,
                     startTimestampNs: startTimestamp,
                     endTimestampNs: endTimestamp,
+                    applicationIDs: Array(applicationIDs).sorted(),
                     accessibilityReferences: selectedStep.map { [$0.reference] } ?? [],
                     accessibilityNodeIDs: attachEvidence ? selectedNodeID.map { [$0] } ?? [] : [],
                     trace: trace
@@ -229,7 +290,7 @@ final class ReplayModel: ObservableObject {
                 author: .localHuman
             )
             reloadAnnotations()
-            selectedAnnotationID = annotation.id
+            selectAnnotation(annotation.id)
             draftTraceSamples = []
             errorMessage = nil
             return true
@@ -264,6 +325,7 @@ final class ReplayModel: ObservableObject {
         }
         do {
             annotations = try RecordingAnnotationStore.load(from: recording.packageURL)
+            timelineItems = recording.timelineItems(annotations: annotations)
             if let selectedAnnotationID,
                !annotations.contains(where: { $0.id == selectedAnnotationID }) {
                 self.selectedAnnotationID = nil
@@ -278,9 +340,11 @@ final class ReplayModel: ObservableObject {
             let recording = try ReplayRecording.load(from: url)
             self.recording = recording
             annotations = recording.annotations
+            timelineItems = recording.timelineItems(annotations: annotations)
             selectedStepID = recording.accessibilitySteps.first?.id
             selectedNodeID = nil
             selectedAnnotationID = nil
+            selectedTimelineItemID = nil
             draftTraceSamples = []
             currentVideoTime = 0
             errorMessage = nil
@@ -290,9 +354,11 @@ final class ReplayModel: ObservableObject {
         } catch {
             recording = nil
             annotations = []
+            timelineItems = []
             selectedStepID = nil
             selectedNodeID = nil
             selectedAnnotationID = nil
+            selectedTimelineItemID = nil
             player.replaceCurrentItem(with: nil)
             errorMessage = error.localizedDescription
             return false
@@ -310,25 +376,45 @@ final class ReplayModel: ObservableObject {
         selectAccessibilityStep(step.id, seek: false)
     }
 
-    private static var recordingsDirectory: URL {
+    static var recordingsDirectory: URL {
         FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
             .appendingPathComponent("Pablo Recordings", isDirectory: true)
     }
 }
 
+private enum VideoReviewTool: String, CaseIterable, Identifiable {
+    case review = "Review"
+    case pen = "Pen"
+    case comment = "Comment"
+
+    var id: Self { self }
+
+    var systemImage: String {
+        switch self {
+        case .review: return "cursorarrow"
+        case .pen: return "pencil.tip"
+        case .comment: return "text.bubble"
+        }
+    }
+
+    var guidance: String {
+        switch self {
+        case .review: return "Select existing notes"
+        case .pen: return "Draw directly on the video"
+        case .comment: return "Place a point comment"
+        }
+    }
+}
+
 struct ReplayView: View {
     @ObservedObject var model: ReplayModel
-    @State private var sidebarMode = SidebarMode.markup
+    let openRecordings: @MainActor () -> Void
     @State private var traceLineWidth = 0.008
     @State private var draftKind = RecordingAnnotationKind.observation
     @State private var attachEvidence = true
+    @State private var inspectorVisible = true
+    @State private var videoTool = VideoReviewTool.pen
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
-
-    private enum SidebarMode: String, CaseIterable, Identifiable {
-        case markup = "Markup"
-        case evidence = "Evidence"
-        var id: String { rawValue }
-    }
 
     var body: some View {
         Group {
@@ -340,16 +426,24 @@ struct ReplayView: View {
                 } description: {
                     Text(model.errorMessage ?? "Choose a .pablo recording to review.")
                 } actions: {
-                    Button("Open Recording…") { _ = model.chooseAndLoadRecording() }
+                    Button("Open Recordings…", action: openRecordings)
                 }
             }
         }
-        .navigationTitle(model.recording.map { "Review — \($0.targetName)" } ?? "Pablo Review")
+        .navigationTitle(
+            model.recording?.packageURL.deletingPathExtension().lastPathComponent ?? "Pablo Review"
+        )
         .toolbar {
-            Button("Open Recording…") { _ = model.chooseAndLoadRecording() }
-        }
-        .onAppear {
-            if model.recording == nil { _ = model.loadLatest(preferredURL: nil) }
+            Button("Open Recordings…", action: openRecordings)
+            Button {
+                withAnimation(.snappy) { inspectorVisible.toggle() }
+            } label: {
+                Label(
+                    inspectorVisible ? "Hide Inspector" : "Show Inspector",
+                    systemImage: "sidebar.trailing"
+                )
+            }
+            .help(inspectorVisible ? "Hide Inspector" : "Show Inspector")
         }
         .onReceive(timer) { _ in model.updateCurrentVideoTime() }
         .onReceive(NotificationCenter.default.publisher(for: .pabloAnnotationsDidChange)) { note in
@@ -358,72 +452,128 @@ struct ReplayView: View {
     }
 
     private func review(_ recording: ReplayRecording) -> some View {
-        HSplitView {
-            VStack(alignment: .leading, spacing: 12) {
-                recordingHeader(recording)
-                VideoMarkupCanvas(
-                    recording: recording,
-                    player: model.player,
-                    annotations: model.annotations,
-                    selectedAnnotationID: model.selectedAnnotationID,
-                    currentVideoTime: model.currentVideoTime,
-                    draftSamples: model.draftTraceSamples,
-                    draftLineWidth: traceLineWidth,
-                    selectedNodeRegion: model.selectedNodeVideoRegion,
-                    selectedNodeName: model.selectedNode.map(accessibilityNodeName),
-                    beginTrace: model.beginTrace,
-                    appendPoint: model.appendTracePoint,
-                    annotationKind: $draftKind,
-                    saveComment: { text in
-                        model.addHumanAnnotation(
-                            text: text,
-                            kind: draftKind,
-                            attachEvidence: attachEvidence,
-                            lineWidth: traceLineWidth
+        GeometryReader { geometry in
+            let compact = geometry.size.width < 1_080
+            ZStack(alignment: .trailing) {
+                HStack(spacing: 0) {
+                    reviewMain(recording)
+                        .frame(maxWidth: .infinity)
+                    if inspectorVisible && !compact {
+                        Divider()
+                        ReviewInspector(
+                            model: model,
+                            lineWidth: $traceLineWidth,
+                            kind: $draftKind,
+                            attachEvidence: $attachEvidence,
+                            close: { withAnimation(.snappy) { inspectorVisible = false } }
                         )
-                    },
-                    cancelTrace: model.beginTrace
-                )
-                TransportTimeline(recording: recording, model: model)
-            }
-            .padding(16)
-            .frame(minWidth: 640)
-
-            VStack(spacing: 10) {
-                Picker("Review panel", selection: $sidebarMode) {
-                    ForEach(SidebarMode.allCases) { mode in Text(mode.rawValue).tag(mode) }
+                        .frame(width: 410)
+                    }
                 }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal, 12)
-                .padding(.top, 12)
 
-                switch sidebarMode {
-                case .markup:
-                    MarkupSidebar(
+                if inspectorVisible && compact {
+                    ReviewInspector(
                         model: model,
                         lineWidth: $traceLineWidth,
                         kind: $draftKind,
-                        attachEvidence: $attachEvidence
+                        attachEvidence: $attachEvidence,
+                        close: { withAnimation(.snappy) { inspectorVisible = false } }
                     )
-                case .evidence:
-                    EvidenceSidebar(model: model)
+                    .frame(width: min(430, geometry.size.width * 0.82))
+                    .background(.regularMaterial)
+                    .overlay(alignment: .leading) { Divider() }
+                    .shadow(color: .black.opacity(0.35), radius: 22, x: -8)
+                    .transition(.move(edge: .trailing).combined(with: .opacity))
                 }
             }
-            .frame(minWidth: 360, idealWidth: 410, maxWidth: 480)
+            .onAppear {
+                if compact { inspectorVisible = false }
+            }
+            .onChange(of: compact) { _, isCompact in
+                if isCompact { inspectorVisible = false }
+            }
+        }
+    }
+
+    private func reviewMain(_ recording: ReplayRecording) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            recordingHeader(recording)
+            videoToolPicker
+            VideoMarkupCanvas(
+                recording: recording,
+                player: model.player,
+                annotations: model.annotations,
+                selectedAnnotationID: model.selectedAnnotationID,
+                currentVideoTime: model.currentVideoTime,
+                draftSamples: model.draftTraceSamples,
+                draftLineWidth: traceLineWidth,
+                selectedNodeRegion: model.selectedNodeVideoRegion,
+                selectedNodeName: model.selectedNode.map(accessibilityNodeName),
+                tool: videoTool,
+                beginTrace: model.beginTrace,
+                appendPoint: model.appendTracePoint,
+                annotationKind: $draftKind,
+                saveComment: { text in
+                    model.addHumanAnnotation(
+                        text: text,
+                        kind: draftKind,
+                        attachEvidence: attachEvidence,
+                        lineWidth: traceLineWidth
+                    )
+                },
+                cancelTrace: model.beginTrace,
+                selectAnnotation: model.selectAnnotation
+            )
+            UnifiedTimeline(recording: recording, model: model)
+        }
+        .padding(16)
+        .frame(minWidth: 520, maxWidth: .infinity, alignment: .topLeading)
+    }
+
+    private var videoToolPicker: some View {
+        HStack(spacing: 10) {
+            Picker("Video tool", selection: $videoTool) {
+                ForEach(VideoReviewTool.allCases) { tool in
+                    Label(tool.rawValue, systemImage: tool.systemImage).tag(tool)
+                }
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .frame(width: 310)
+            .accessibilityLabel("Video interaction tool")
+
+            Text(videoTool.guidance)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
         }
     }
 
     private func recordingHeader(_ recording: ReplayRecording) -> some View {
         HStack(alignment: .firstTextBaseline) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(recording.targetName).font(.title3.weight(.semibold))
+                Text(recording.scopeName).font(.title3.weight(.semibold))
                 Text(recording.packageURL.lastPathComponent)
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
             Label("\(recording.accessibilitySteps.count) frames", systemImage: "accessibility")
+            if let workspace = model.currentWorkspace {
+                if let frontmostID = workspace.frontmostApplicationID {
+                    let applicationName = model.applicationName(for: frontmostID)
+                    Label(applicationName, systemImage: "app.fill")
+                    if let windowTitle = workspace.windows
+                        .filter({ $0.applicationID == frontmostID && $0.isOnScreen })
+                        .min(by: { $0.zOrder < $1.zOrder })?.title,
+                       !windowTitle.isEmpty,
+                       windowTitle.caseInsensitiveCompare(applicationName) != .orderedSame {
+                        Text(windowTitle).lineLimit(1)
+                    }
+                }
+                Label("\(workspace.applications.count) apps", systemImage: "square.grid.2x2")
+                Label("\(workspace.windows.count) windows", systemImage: "macwindow.on.rectangle")
+            }
             Label("\(model.annotations.count) notes", systemImage: "text.bubble")
         }
         .font(.caption)
@@ -441,17 +591,23 @@ private struct VideoMarkupCanvas: View {
     let draftLineWidth: Double
     let selectedNodeRegion: CGRect?
     let selectedNodeName: String?
+    let tool: VideoReviewTool
     let beginTrace: () -> Void
     let appendPoint: (Double, Double) -> Void
     @Binding var annotationKind: RecordingAnnotationKind
     let saveComment: (String) -> Bool
     let cancelTrace: () -> Void
-    @State private var isDrawing = false
+    let selectAnnotation: (UUID?) -> Void
+    @State private var isInteracting = false
     @State private var showsCommentBox = false
+    @State private var annotationCandidateID: UUID?
+    @State private var gestureStart: CGPoint?
+    @State private var gestureTool: VideoReviewTool?
 
     var body: some View {
         ZStack {
             VideoPlayer(player: player)
+                .accessibilityHidden(true)
             GeometryReader { geometry in
                 TraceOverlay(
                     recording: recording,
@@ -470,7 +626,7 @@ private struct VideoMarkupCanvas: View {
                 }
                 Color.clear
                     .contentShape(Rectangle())
-                    .gesture(traceGesture(size: geometry.size))
+                    .gesture(videoGesture(size: geometry.size))
                 if showsCommentBox, let endpoint = draftSamples.last {
                     DraftCommentBubble(
                         kind: $annotationKind,
@@ -487,29 +643,103 @@ private struct VideoMarkupCanvas: View {
                 }
             }
         }
+        .aspectRatio(recording.videoAspectRatio, contentMode: .fit)
+        .frame(maxWidth: .infinity, alignment: .center)
         .background(.black)
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .aspectRatio(recording.videoAspectRatio, contentMode: .fit)
+        .help(tool.guidance)
+        .onChange(of: tool) { _, _ in
+            isInteracting = false
+            gestureTool = nil
+            gestureStart = nil
+            annotationCandidateID = nil
+            if showsCommentBox || !draftSamples.isEmpty {
+                showsCommentBox = false
+                cancelTrace()
+            }
+        }
     }
 
-    private func traceGesture(size: CGSize) -> some Gesture {
+    private func videoGesture(size: CGSize) -> some Gesture {
         DragGesture(minimumDistance: 0)
             .onChanged { value in
                 guard size.width > 0, size.height > 0 else { return }
-                if !isDrawing {
+                if !isInteracting {
+                    if showsCommentBox { cancelTrace() }
                     showsCommentBox = false
-                    beginTrace()
-                    isDrawing = true
+                    isInteracting = true
+                    gestureStart = value.location
+                    gestureTool = tool
+                    switch tool {
+                    case .review:
+                        annotationCandidateID = hitTestAnnotation(at: value.location, in: size)
+                    case .pen:
+                        beginTrace()
+                    case .comment:
+                        annotationCandidateID = nil
+                    }
                 }
-                appendPoint(
-                    min(max(value.location.x / size.width, 0), 1),
-                    min(max(value.location.y / size.height, 0), 1)
-                )
+                guard gestureTool == .pen else { return }
+                appendPoint(at: value.location, in: size)
             }
-            .onEnded { _ in
-                isDrawing = false
-                showsCommentBox = true
+            .onEnded { value in
+                let completedTool = gestureTool ?? tool
+                isInteracting = false
+                switch completedTool {
+                case .review:
+                    if let gestureStart,
+                       hypot(value.location.x - gestureStart.x, value.location.y - gestureStart.y) <= 5,
+                       let annotationCandidateID {
+                        selectAnnotation(annotationCandidateID)
+                    }
+                case .pen:
+                    showsCommentBox = true
+                case .comment:
+                    beginTrace()
+                    appendPoint(at: value.location, in: size)
+                    showsCommentBox = true
+                }
+                annotationCandidateID = nil
+                gestureStart = nil
+                gestureTool = nil
             }
+    }
+
+    private func appendPoint(at point: CGPoint, in size: CGSize) {
+        appendPoint(
+            min(max(point.x / size.width, 0), 1),
+            min(max(point.y / size.height, 0), 1)
+        )
+    }
+
+    private func hitTestAnnotation(at point: CGPoint, in size: CGSize) -> UUID? {
+        let timestamp = recording.sessionTimestampNs(forVideoTime: currentVideoTime)
+        let frameTolerance = UInt64(500_000_000 / max(recording.framesPerSecond, 1))
+        let threshold: CGFloat = 12
+        return annotations.reversed().first { annotation in
+            guard let trace = annotation.trace else { return false }
+            let samples = trace.visibleSamples(
+                at: timestamp,
+                pointToleranceNs: frameTolerance,
+                tailDurationNs: frameTolerance
+            )
+            let points = samples.map { CGPoint(x: size.width * $0.x, y: size.height * $0.y) }
+            if points.contains(where: { hypot($0.x - point.x, $0.y - point.y) <= threshold }) {
+                return true
+            }
+            return zip(points, points.dropFirst()).contains { start, end in
+                distance(from: point, toSegmentFrom: start, to: end) <= threshold
+            }
+        }?.id
+    }
+
+    private func distance(from point: CGPoint, toSegmentFrom start: CGPoint, to end: CGPoint) -> CGFloat {
+        let dx = end.x - start.x
+        let dy = end.y - start.y
+        let lengthSquared = dx * dx + dy * dy
+        guard lengthSquared > 0 else { return hypot(point.x - start.x, point.y - start.y) }
+        let progress = min(max(((point.x - start.x) * dx + (point.y - start.y) * dy) / lengthSquared, 0), 1)
+        return hypot(point.x - (start.x + progress * dx), point.y - (start.y + progress * dy))
     }
 
     private func commentPosition(
@@ -693,16 +923,27 @@ private struct TraceOverlay: View {
 
 }
 
-private struct TransportTimeline: View {
+private struct UnifiedTimeline: View {
     let recording: ReplayRecording
     @ObservedObject var model: ReplayModel
+    @State private var zoom = 1.0
+    @State private var viewportCenter: TimeInterval?
+    @State private var followsPlayhead = true
 
     private var duration: TimeInterval {
         max(0.001, TimeInterval(recording.durationNs ?? 0) / 1_000_000_000)
     }
 
+    private var visibleRange: ClosedRange<TimeInterval> {
+        let visibleDuration = duration / max(zoom, 1)
+        let center = followsPlayhead ? model.currentVideoTime : (viewportCenter ?? model.currentVideoTime)
+        let proposedStart = center - visibleDuration / 2
+        let start = min(max(proposedStart, 0), max(duration - visibleDuration, 0))
+        return start...(start + visibleDuration)
+    }
+
     var body: some View {
-        VStack(spacing: 8) {
+        VStack(spacing: 7) {
             HStack(spacing: 10) {
                 Button {
                     model.togglePlayback()
@@ -710,16 +951,61 @@ private struct TransportTimeline: View {
                     Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
                 }
                 .buttonStyle(.borderless)
+                Button { model.moveToMeaningfulTimelineItem(-1) } label: {
+                    Image(systemName: "backward.end.fill")
+                }
+                .buttonStyle(.borderless)
+                .help("Previous meaningful event")
+                .keyboardShortcut(.leftArrow, modifiers: [.command, .option])
+                Button { model.moveToMeaningfulTimelineItem(1) } label: {
+                    Image(systemName: "forward.end.fill")
+                }
+                .buttonStyle(.borderless)
+                .help("Next meaningful event")
+                .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
                 Text(formatTime(model.currentVideoTime))
                     .font(.system(.caption, design: .monospaced, weight: .semibold))
                     .frame(width: 60, alignment: .leading)
-                Slider(
-                    value: Binding(
-                        get: { min(model.currentVideoTime, duration) },
-                        set: { model.seek(to: $0) }
-                    ),
-                    in: 0...duration
-                )
+                Spacer()
+                Button { panViewport(-1) } label: {
+                    Image(systemName: "chevron.left")
+                }
+                .buttonStyle(.borderless)
+                .disabled(zoom == 1)
+                .help("Pan timeline backward without seeking")
+                Button {
+                    followsPlayhead = true
+                    viewportCenter = model.currentVideoTime
+                } label: {
+                    Image(systemName: followsPlayhead ? "scope" : "dot.scope")
+                }
+                .buttonStyle(.borderless)
+                .disabled(zoom == 1 && followsPlayhead)
+                .help("Follow playhead")
+                Button { panViewport(1) } label: {
+                    Image(systemName: "chevron.right")
+                }
+                .buttonStyle(.borderless)
+                .disabled(zoom == 1)
+                .help("Pan timeline forward without seeking")
+                Image(systemName: "minus.magnifyingglass")
+                    .foregroundStyle(.secondary)
+                Slider(value: $zoom, in: 1...12)
+                    .frame(width: 110)
+                    .help("Timeline zoom")
+                Text(zoom == 1 ? "Fit" : String(format: "%.1f×", zoom))
+                    .font(.caption.monospacedDigit())
+                    .frame(width: 38, alignment: .trailing)
+                Button {
+                    zoom = 1
+                    followsPlayhead = true
+                    viewportCenter = model.currentVideoTime
+                } label: {
+                    Image(systemName: "arrow.up.left.and.arrow.down.right")
+                }
+                .buttonStyle(.borderless)
+                .disabled(zoom == 1)
+                .help("Fit entire recording")
                 Text(formatTime(duration))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(.secondary)
@@ -739,121 +1025,440 @@ private struct TransportTimeline: View {
                 .fixedSize()
                 .help("Playback speed")
             }
-            EvidenceTrack(recording: recording, model: model, duration: duration)
+            TimelineRuler(
+                range: visibleRange,
+                currentTime: model.currentVideoTime,
+                seek: {
+                    model.seek(to: $0)
+                    viewportCenter = $0
+                    followsPlayhead = true
+                }
+            )
+            VStack(spacing: 3) {
+                ForEach(ReplayTimelineLane.allCases, id: \.self) { lane in
+                    TimelineLaneRow(
+                        lane: lane,
+                        recording: recording,
+                        model: model,
+                        visibleRange: visibleRange
+                    )
+                }
+            }
         }
+        .padding(10)
+        .background(.quaternary.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Unified recording timeline")
+        .onChange(of: zoom) { _, newValue in
+            viewportCenter = model.currentVideoTime
+            if newValue == 1 { followsPlayhead = true }
+        }
+    }
+
+    private func panViewport(_ direction: Double) {
+        guard zoom > 1 else { return }
+        let span = visibleRange.upperBound - visibleRange.lowerBound
+        let currentCenter = (visibleRange.lowerBound + visibleRange.upperBound) / 2
+        viewportCenter = min(max(currentCenter + direction * span * 0.7, span / 2), duration - span / 2)
+        followsPlayhead = false
     }
 }
 
-private struct EvidenceTrack: View {
-    let recording: ReplayRecording
-    @ObservedObject var model: ReplayModel
-    let duration: TimeInterval
+private struct TimelineRuler: View {
+    let range: ClosedRange<TimeInterval>
+    let currentTime: TimeInterval
+    let seek: (TimeInterval) -> Void
 
     var body: some View {
-        GeometryReader { geometry in
-            ZStack(alignment: .leading) {
-                Capsule().fill(.quaternary).frame(height: 4)
-                ForEach(recording.accessibilitySteps) { step in
-                    Button { model.selectAccessibilityStep(step.id, seek: true) } label: {
-                        Rectangle()
-                            .fill(model.selectedStepID == step.id ? Color.blue : Color.blue.opacity(0.45))
-                            .frame(width: 2, height: model.selectedStepID == step.id ? 18 : 11)
+        HStack(spacing: 8) {
+            Text("TIME")
+                .font(.caption2.weight(.bold))
+                .foregroundStyle(.secondary)
+                .frame(width: 78, alignment: .leading)
+            GeometryReader { geometry in
+                ZStack {
+                    RoundedRectangle(cornerRadius: 4).fill(.quaternary.opacity(0.5))
+                    HStack {
+                        Text(formatTime(range.lowerBound))
+                        Spacer()
+                        Text(formatTime(range.upperBound))
                     }
-                    .buttonStyle(.plain)
-                    .position(x: markerX(recording.videoTime(for: step), width: geometry.size.width), y: 10)
-                    .help("\(step.reference) · \(formatTime(recording.videoTime(for: step)))")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
+                    .padding(.horizontal, 6)
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: 2)
+                        .position(x: x(for: currentTime, width: geometry.size.width), y: 8)
                 }
-                ForEach(model.annotations) { annotation in
-                    if let timestamp = annotation.startTimestampNs {
-                        Button { model.selectAnnotation(annotation.id) } label: {
-                            Circle()
-                                .fill(annotationColor(annotation.kind))
-                                .frame(width: model.selectedAnnotationID == annotation.id ? 11 : 8)
-                        }
-                        .buttonStyle(.plain)
-                        .position(
-                            x: markerX(
-                                recording.videoTime(forTimestampNs: timestamp),
+                .contentShape(Rectangle())
+                .gesture(DragGesture(minimumDistance: 0).onChanged { value in
+                    let fraction = min(max(value.location.x / max(geometry.size.width, 1), 0), 1)
+                    seek(range.lowerBound + fraction * (range.upperBound - range.lowerBound))
+                })
+            }
+        }
+        .frame(height: 16)
+    }
+
+    private func x(for time: TimeInterval, width: CGFloat) -> CGFloat {
+        let duration = max(range.upperBound - range.lowerBound, 0.001)
+        return CGFloat(min(max((time - range.lowerBound) / duration, 0), 1)) * width
+    }
+}
+
+private struct TimelineLaneRow: View {
+    let lane: ReplayTimelineLane
+    let recording: ReplayRecording
+    @ObservedObject var model: ReplayModel
+    let visibleRange: ClosedRange<TimeInterval>
+    @State private var expandedClusterID: String?
+
+    var body: some View {
+        HStack(spacing: 8) {
+            Label(laneTitle, systemImage: laneIcon)
+                .font(.caption2.weight(.semibold))
+                .foregroundStyle(laneColor)
+                .frame(width: 78, alignment: .leading)
+            GeometryReader { geometry in
+                let clusters = timelineClusters(width: geometry.size.width)
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 4)
+                        .fill(laneColor.opacity(0.055))
+                    ForEach(clusters) { cluster in
+                        let markerColor = color(for: cluster)
+                        TimelineMarkerPlacement(
+                            centerX: x(
+                                forTimestamp: cluster.timestampNs,
                                 width: geometry.size.width
-                            ),
-                            y: 10
-                        )
-                        .help("\(annotation.reference) · \(annotation.text)")
+                            )
+                        ) {
+                            Button {
+                                if cluster.items.count == 1, let item = cluster.items.first {
+                                    model.selectTimelineItem(item)
+                                } else {
+                                    expandedClusterID = cluster.id
+                                }
+                            } label: {
+                                TimelineMarker(
+                                    count: cluster.memberCount,
+                                    color: markerColor,
+                                    warning: cluster.importance == .warning,
+                                    muted: clusterIsResolved(cluster),
+                                    selected: cluster.items.contains(where: {
+                                        $0.id == model.selectedTimelineItemID
+                                    })
+                                )
+                            }
+                            .buttonStyle(.plain)
+                            .help(clusterHelp(cluster))
+                            .popover(isPresented: Binding(
+                                get: { expandedClusterID == cluster.id },
+                                set: { if !$0 { expandedClusterID = nil } }
+                            )) {
+                                TimelineClusterPopover(cluster: cluster, model: model)
+                            }
+                        }
                     }
+                    Rectangle()
+                        .fill(Color.accentColor)
+                        .frame(width: 2, height: 20)
+                        .position(x: x(forTime: model.currentVideoTime, width: geometry.size.width), y: 10)
+                        .allowsHitTesting(false)
                 }
             }
         }
         .frame(height: 20)
-        .accessibilityLabel("Evidence timeline")
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("\(laneTitle) timeline lane")
     }
 
-    private func markerX(_ time: TimeInterval, width: CGFloat) -> CGFloat {
-        CGFloat(min(max(time / duration, 0), 1)) * max(width - 2, 1) + 1
+    private func timelineClusters(width: CGFloat) -> [ReplayTimelineCluster] {
+        recording.timelineClusters(
+            from: model.timelineItems,
+            lane: lane,
+            visibleTimestampRange: recording.sessionTimestampNs(forVideoTime: visibleRange.lowerBound)...recording.sessionTimestampNs(forVideoTime: visibleRange.upperBound),
+            trackWidth: width
+        )
+    }
+
+    private func x(forTimestamp timestamp: UInt64, width: CGFloat) -> CGFloat {
+        x(forTime: recording.videoTime(forTimestampNs: timestamp), width: width)
+    }
+
+    private func x(forTime time: TimeInterval, width: CGFloat) -> CGFloat {
+        let duration = max(visibleRange.upperBound - visibleRange.lowerBound, 0.001)
+        return CGFloat(min(max((time - visibleRange.lowerBound) / duration, 0), 1)) * max(width - 8, 1) + 4
+    }
+
+    private func clusterHelp(_ cluster: ReplayTimelineCluster) -> String {
+        if cluster.items.count == 1, let item = cluster.items.first {
+            return "\(item.title) · \(formatTime(recording.videoTime(forTimestampNs: item.timestampNs)))"
+        }
+        return "\(cluster.memberCount) \(laneTitle.lowercased()) events — click to inspect"
+    }
+
+    private func color(for cluster: ReplayTimelineCluster) -> Color {
+        guard lane == .workspace || lane == .accessibility else { return laneColor }
+        let applicationIDs = Set(cluster.items.flatMap(\.applicationIDs))
+        guard applicationIDs.count == 1, let applicationID = applicationIDs.first else {
+            return laneColor
+        }
+        return timelineApplicationColor(applicationID)
+    }
+
+    private func clusterIsResolved(_ cluster: ReplayTimelineCluster) -> Bool {
+        let annotationIDs = cluster.items.flatMap(\.references).compactMap { reference -> UUID? in
+            guard case .annotation(let id) = reference else { return nil }
+            return id
+        }
+        guard !annotationIDs.isEmpty else { return false }
+        return annotationIDs.allSatisfy { id in
+            model.annotations.first(where: { $0.id == id })?.status == .resolved
+        }
+    }
+
+    private var laneTitle: String {
+        switch lane {
+        case .workspace: return "APPS"
+        case .input: return "INPUT"
+        case .automation: return "AGENTS"
+        case .accessibility: return "A11Y"
+        case .annotation: return "NOTES"
+        }
+    }
+
+    private var laneIcon: String {
+        switch lane {
+        case .workspace: return "macwindow.on.rectangle"
+        case .input: return "cursorarrow.click"
+        case .automation: return "cpu"
+        case .accessibility: return "accessibility"
+        case .annotation: return "text.bubble"
+        }
+    }
+
+    private var laneColor: Color {
+        switch lane {
+        case .workspace: return .teal
+        case .input: return .secondary
+        case .automation: return .purple
+        case .accessibility: return .blue
+        case .annotation: return .orange
+        }
     }
 }
 
-private struct MarkupSidebar: View {
+private struct TimelineMarkerPlacement: Layout {
+    let centerX: CGFloat
+
+    func sizeThatFits(
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) -> CGSize {
+        let markerSize = subviews.first?.sizeThatFits(.unspecified) ?? .zero
+        return CGSize(
+            width: proposal.width ?? markerSize.width,
+            height: proposal.height ?? max(markerSize.height, 20)
+        )
+    }
+
+    func placeSubviews(
+        in bounds: CGRect,
+        proposal: ProposedViewSize,
+        subviews: Subviews,
+        cache: inout ()
+    ) {
+        guard let marker = subviews.first else { return }
+        marker.place(
+            at: CGPoint(
+                x: bounds.minX + min(max(centerX, 0), bounds.width),
+                y: bounds.midY
+            ),
+            anchor: .center,
+            proposal: .unspecified
+        )
+    }
+}
+
+private struct TimelineMarker: View {
+    let count: Int
+    let color: Color
+    let warning: Bool
+    let muted: Bool
+    let selected: Bool
+
+    var body: some View {
+        ZStack {
+            Capsule()
+                .fill(color.opacity(muted ? 0.28 : (selected ? 1 : 0.78)))
+                .frame(width: count > 1 ? 22 : 7, height: selected ? 15 : 11)
+                .overlay {
+                    if warning {
+                        Capsule().stroke(Color.red, lineWidth: selected ? 2 : 1.4)
+                    }
+                }
+            if count > 1 {
+                Text("\(count)")
+                    .font(.system(size: 8, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+            }
+        }
+        .contentShape(Rectangle())
+    }
+}
+
+private struct TimelineClusterPopover: View {
+    let cluster: ReplayTimelineCluster
+    @ObservedObject var model: ReplayModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text("\(cluster.memberCount) events")
+                .font(.headline)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 4) {
+                    ForEach(cluster.items) { item in
+                        Button {
+                            model.selectTimelineItem(item)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(item.title).lineLimit(2)
+                                if let subtitle = item.subtitle {
+                                    Text(subtitle)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                        }
+                        .buttonStyle(.plain)
+                        Divider()
+                    }
+                }
+            }
+        }
+        .padding(12)
+        .frame(width: 280, height: min(CGFloat(cluster.items.count * 52 + 50), 360))
+    }
+}
+
+private struct ReviewInspector: View {
     @ObservedObject var model: ReplayModel
     @Binding var lineWidth: Double
     @Binding var kind: RecordingAnnotationKind
     @Binding var attachEvidence: Bool
+    let close: () -> Void
+    @State private var evidenceMode = InspectorEvidenceMode.changes
+    @State private var showsEvidenceDetails = false
+    @State private var quickNoteText = ""
+
+    private enum InspectorEvidenceMode: String, CaseIterable, Identifiable {
+        case changes = "Changes"
+        case tree = "Tree"
+        var id: String { rawValue }
+    }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            GroupBox("Markup") {
-                VStack(alignment: .leading, spacing: 8) {
-                    HStack {
-                        Picker("Kind", selection: $kind) {
-                            ForEach(RecordingAnnotationKind.allCases, id: \.self) { value in
-                                Text(value.rawValue.capitalized).tag(value)
-                            }
-                        }
-                        .labelsHidden()
-                        Label("Draw on the video", systemImage: "scribble.variable")
-                            .font(.caption)
-                            .foregroundStyle(.secondary)
-                        if !model.draftTraceSamples.isEmpty {
-                            Button {
-                                model.beginTrace()
-                            } label: {
-                                Image(systemName: "xmark")
-                            }
-                            .buttonStyle(.borderless)
-                            .help("Clear trace")
-                        }
-                    }
-                    if !model.draftTraceSamples.isEmpty {
-                        Text("\(model.draftTraceSamples.count) sampled points")
-                            .font(.caption.monospacedDigit())
-                            .foregroundStyle(.secondary)
-                    }
-                    HStack {
-                        Text("Stroke")
-                        Slider(value: $lineWidth, in: 0.003...0.03)
-                        Text(String(format: "%.1f%%", lineWidth * 100))
-                            .font(.caption.monospacedDigit())
-                            .frame(width: 42, alignment: .trailing)
-                    }
-                    .font(.caption)
-                    Text("Draw while playing for a timed trace. Paused traces stay on one frame.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                    Toggle(isOn: $attachEvidence) {
-                        if let step = model.selectedStep {
-                            Text("Attach \(step.reference)" +
-                                 (model.selectedNodeID == nil ? "" : " and selected node"))
-                        } else {
-                            Text("Attach selected evidence")
-                        }
-                    }
-                    .font(.caption)
-                    .disabled(model.selectedStep == nil)
-                }
-                .padding(6)
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Inspector").font(.headline)
+                Spacer()
+                Button(action: close) { Image(systemName: "sidebar.trailing") }
+                    .buttonStyle(.borderless)
+                    .help("Hide Inspector")
             }
             .padding(.horizontal, 12)
+            .padding(.vertical, 10)
 
+            Divider()
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 14) {
+                    HStack {
+                        TextField("Note at playhead…", text: $quickNoteText)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit(addQuickNote)
+                        Button("Add", action: addQuickNote)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(quickNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    }
+
+                    if let item = model.selectedTimelineItem {
+                        SelectedTimelineContext(item: item, model: model)
+                    }
+
+                    annotationSection
+
+                    if let recording = model.recording, let step = model.selectedStep {
+                        Divider()
+                        EvidenceFrameHeader(recording: recording, step: step, model: model)
+                            .padding(.horizontal, -12)
+                        DisclosureGroup("Accessibility evidence", isExpanded: $showsEvidenceDetails) {
+                            VStack(alignment: .leading, spacing: 8) {
+                                Picker("Evidence view", selection: $evidenceMode) {
+                                    ForEach(InspectorEvidenceMode.allCases) { value in
+                                        Text(value.rawValue).tag(value)
+                                    }
+                                }
+                                .pickerStyle(.segmented)
+                                .labelsHidden()
+
+                                switch evidenceMode {
+                                case .changes:
+                                    AccessibilityChangesView(
+                                        step: step,
+                                        previousStep: model.previousStep,
+                                        selectedNodeID: $model.selectedNodeID
+                                    )
+                                    .frame(minHeight: 170, maxHeight: 300)
+                                case .tree:
+                                    AccessibilityTreeView(
+                                        step: step,
+                                        selectedNodeID: $model.selectedNodeID
+                                    )
+                                    .frame(minHeight: 220, maxHeight: 360)
+                                }
+                            }
+                            .padding(.top, 8)
+                        }
+                    }
+
+                    if let node = model.selectedNode {
+                        AccessibilityNodeDetail(node: node)
+                            .padding(10)
+                            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                    }
+
+                    if let error = model.errorMessage {
+                        Label(error, systemImage: "exclamationmark.triangle")
+                            .font(.caption)
+                            .foregroundStyle(.orange)
+                    }
+                }
+                .padding(12)
+            }
+        }
+    }
+
+    private func addQuickNote() {
+        let text = quickNoteText.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !text.isEmpty else { return }
+        model.beginTrace()
+        if model.addHumanAnnotation(
+            text: text,
+            kind: kind,
+            attachEvidence: attachEvidence,
+            lineWidth: lineWidth
+        ) {
+            quickNoteText = ""
+        }
+    }
+
+    @ViewBuilder
+    private var annotationSection: some View {
+        VStack(alignment: .leading, spacing: 8) {
             HStack {
                 Text("Annotations").font(.headline)
                 Spacer()
@@ -861,37 +1466,103 @@ private struct MarkupSidebar: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
-            .padding(.horizontal, 12)
-
             if model.annotations.isEmpty {
-                ContentUnavailableView(
-                    "No markup yet",
-                    systemImage: "text.bubble",
-                    description: Text("Human and agent notes appear here.")
-                )
+                Text("Click or draw on the video to add a spatial note.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
             } else {
-                List(model.annotations, selection: $model.selectedAnnotationID) { annotation in
-                    AnnotationRow(annotation: annotation)
-                        .tag(annotation.id)
-                }
-                .onChange(of: model.selectedAnnotationID) {
-                    model.selectAnnotation(model.selectedAnnotationID)
+                ForEach(model.annotations) { annotation in
+                    Button { model.selectAnnotation(annotation.id) } label: {
+                        AnnotationRow(annotation: annotation)
+                            .padding(8)
+                            .background(
+                                model.selectedAnnotationID == annotation.id
+                                    ? Color.accentColor.opacity(0.12)
+                                    : Color.clear,
+                                in: RoundedRectangle(cornerRadius: 8)
+                            )
+                    }
+                    .buttonStyle(.plain)
                 }
             }
-
             if let annotation = model.selectedAnnotation {
                 AnnotationDetail(annotation: annotation, model: model)
-                    .padding(12)
-                    .background(.quaternary.opacity(0.35))
+                    .padding(10)
+                    .background(.quaternary.opacity(0.35), in: RoundedRectangle(cornerRadius: 8))
             }
+        }
+    }
+}
 
-            if let error = model.errorMessage {
-                Label(error, systemImage: "exclamationmark.triangle")
-                    .font(.caption)
-                    .foregroundStyle(.orange)
-                    .padding(.horizontal, 12)
-                    .padding(.bottom, 8)
+private struct SelectedTimelineContext: View {
+    let item: ReplayTimelineItem
+    @ObservedObject var model: ReplayModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            HStack {
+                Label(laneName, systemImage: laneIcon)
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(laneColor)
+                Spacer()
+                if let recording = model.recording {
+                    Text(formatTime(recording.videoTime(forTimestampNs: item.timestampNs)))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
             }
+            Text(item.title).font(.subheadline.weight(.semibold))
+            if let subtitle = item.subtitle {
+                Text(subtitle).font(.caption).foregroundStyle(.secondary)
+            }
+            if item.memberCount > 1 {
+                Text("\(item.memberCount) raw evidence records")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.tertiary)
+            }
+            if !item.applicationIDs.isEmpty {
+                Text(item.applicationIDs.map(model.applicationName).joined(separator: ", "))
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            if item.lane == .accessibility || item.lane == .annotation,
+               let step = model.selectedStep {
+                HStack {
+                    Text(step.reference).font(.caption.monospaced().weight(.bold))
+                    Text(step.applicationName).font(.caption)
+                    if let node = model.selectedNode {
+                        Text("› \(accessibilityNodeName(node))").font(.caption).lineLimit(1)
+                    }
+                }
+                .foregroundStyle(.blue)
+                if let change = model.selectedNodeChange {
+                    Text(accessibilityChangeHeadline(change))
+                        .font(.caption.weight(.medium))
+                        .foregroundStyle(.primary)
+                }
+            }
+        }
+        .padding(10)
+        .background(laneColor.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private var laneName: String { item.lane.rawValue.capitalized }
+    private var laneIcon: String {
+        switch item.lane {
+        case .workspace: return "macwindow.on.rectangle"
+        case .input: return "cursorarrow.click"
+        case .automation: return "cpu"
+        case .accessibility: return "accessibility"
+        case .annotation: return "text.bubble"
+        }
+    }
+    private var laneColor: Color {
+        switch item.lane {
+        case .workspace: return .teal
+        case .input: return .secondary
+        case .automation: return .purple
+        case .accessibility: return .blue
+        case .annotation: return .orange
         }
     }
 }
@@ -955,58 +1626,12 @@ private struct AnnotationDetail: View {
     }
 }
 
-private struct EvidenceSidebar: View {
-    @ObservedObject var model: ReplayModel
-    @State private var mode = EvidenceMode.changes
-
-    private enum EvidenceMode: String, CaseIterable, Identifiable {
-        case changes = "Changes"
-        case tree = "Tree"
-        var id: String { rawValue }
-    }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            if let recording = model.recording, let step = model.selectedStep {
-                EvidenceFrameHeader(recording: recording, step: step, model: model)
-
-                Picker("Evidence view", selection: $mode) {
-                    ForEach(EvidenceMode.allCases) { value in Text(value.rawValue).tag(value) }
-                }
-                .pickerStyle(.segmented)
-                .labelsHidden()
-                .padding(.horizontal, 12)
-
-                switch mode {
-                case .changes:
-                    AccessibilityChangesView(
-                        step: step,
-                        previousStep: model.previousStep,
-                        selectedNodeID: $model.selectedNodeID
-                    )
-                case .tree:
-                    AccessibilityTreeView(
-                        step: step,
-                        selectedNodeID: $model.selectedNodeID
-                    )
-                }
-
-                if let node = model.selectedNode {
-                    AccessibilityNodeDetail(node: node)
-                        .padding(12)
-                        .background(.quaternary.opacity(0.3))
-                }
-            } else {
-                ContentUnavailableView("Select evidence", systemImage: "accessibility")
-            }
-        }
-    }
-}
-
 private struct EvidenceFrameHeader: View {
     let recording: ReplayRecording
     let step: ReplayAccessibilityStep
     @ObservedObject var model: ReplayModel
+    @State private var showsFrameJump = false
+    @State private var frameReference = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
@@ -1014,23 +1639,36 @@ private struct EvidenceFrameHeader: View {
                 Button { move(by: -1) } label: { Image(systemName: "chevron.left") }
                     .disabled(step.id == 0)
                     .buttonStyle(.borderless)
-                Picker(
-                    "Frame",
-                    selection: Binding(
-                        get: { model.selectedStepID },
-                        set: { model.selectAccessibilityStep($0, seek: true) }
-                    )
-                ) {
-                    ForEach(recording.accessibilitySteps) { candidate in
-                        Text("\(candidate.reference) · \(formatTime(recording.videoTime(for: candidate)))")
-                            .tag(Optional(candidate.id))
-                    }
-                }
-                .labelsHidden()
-                .frame(maxWidth: 190)
+                Text(step.reference)
+                    .font(.caption.monospaced().weight(.bold))
+                    .textSelection(.enabled)
+                Text("\(step.id + 1) of \(recording.accessibilitySteps.count)")
+                    .font(.caption2.monospacedDigit())
+                    .foregroundStyle(.secondary)
                 Button { move(by: 1) } label: { Image(systemName: "chevron.right") }
                     .disabled(step.id + 1 >= recording.accessibilitySteps.count)
                     .buttonStyle(.borderless)
+                Button {
+                    frameReference = step.reference
+                    showsFrameJump = true
+                } label: {
+                    Image(systemName: "number")
+                }
+                .buttonStyle(.borderless)
+                .help("Go to accessibility frame")
+                .popover(isPresented: $showsFrameJump) {
+                    VStack(alignment: .leading, spacing: 10) {
+                        Text("Go to accessibility frame").font(.headline)
+                        TextField("A11Y-012", text: $frameReference)
+                            .textFieldStyle(.roundedBorder)
+                            .onSubmit(jumpToFrame)
+                        Button("Go", action: jumpToFrame)
+                            .buttonStyle(.borderedProminent)
+                            .disabled(frameID(from: frameReference) == nil)
+                    }
+                    .padding(12)
+                    .frame(width: 230)
+                }
                 Spacer()
                 Text(model.previousStep == nil
                      ? "Baseline"
@@ -1041,6 +1679,9 @@ private struct EvidenceFrameHeader: View {
             Text(step.reason.replacingOccurrences(of: "input:", with: ""))
                 .font(.subheadline)
                 .lineLimit(2)
+            Label(step.applicationName, systemImage: "app")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.blue)
             HStack(spacing: 10) {
                 Label("\(step.totalNodeCount) nodes", systemImage: "point.3.connected.trianglepath.dotted")
                 if !step.removedNodeIDs.isEmpty {
@@ -1060,6 +1701,19 @@ private struct EvidenceFrameHeader: View {
         guard recording.accessibilitySteps.indices.contains(id) else { return }
         model.selectAccessibilityStep(id, seek: true)
     }
+
+    private func jumpToFrame() {
+        guard let id = frameID(from: frameReference),
+              recording.accessibilitySteps.contains(where: { $0.id == id }) else { return }
+        model.selectAccessibilityStep(id, seek: true)
+        showsFrameJump = false
+    }
+
+    private func frameID(from reference: String) -> Int? {
+        let digits = reference.filter(\.isNumber)
+        guard let oneBased = Int(digits), oneBased > 0 else { return nil }
+        return oneBased - 1
+    }
 }
 
 private struct AccessibilityChangesView: View {
@@ -1075,11 +1729,11 @@ private struct AccessibilityChangesView: View {
     }
 
     private var semanticChanges: [ReplayAccessibilityChange] {
-        changes.filter(accessibilityChangeIsSemantic)
+        changes.filter(replayAccessibilityChangeIsSemantic)
     }
 
     private var technicalChanges: [ReplayAccessibilityChange] {
-        changes.filter { !accessibilityChangeIsSemantic($0) }
+        changes.filter { !replayAccessibilityChangeIsSemantic($0) }
     }
 
     var body: some View {
@@ -1166,38 +1820,36 @@ private struct AccessibilityBaselineSummary: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: 14) {
-                Label("Initial accessibility state", systemImage: "camera.metering.matrix")
-                    .font(.headline)
-                Text("This frame is the baseline for later diffs, not \(step.nodes.count) separate user-facing changes.")
-                    .foregroundStyle(.secondary)
-                if !windows.isEmpty {
-                    GroupBox("Windows") {
-                        VStack(alignment: .leading, spacing: 7) {
-                            ForEach(windows) { window in
-                                Label(accessibilityNodeName(window), systemImage: "macwindow")
-                            }
+        VStack(alignment: .leading, spacing: 14) {
+            Label("Initial accessibility state", systemImage: "camera.metering.matrix")
+                .font(.headline)
+            Text("This frame is the baseline for later diffs, not \(step.nodes.count) separate user-facing changes.")
+                .foregroundStyle(.secondary)
+            if !windows.isEmpty {
+                GroupBox("Windows") {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(windows) { window in
+                            Label(accessibilityNodeName(window), systemImage: "macwindow")
                         }
-                        .frame(maxWidth: .infinity, alignment: .leading)
                     }
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                if !focusedNodes.isEmpty {
-                    GroupBox("Initial focus") {
-                        VStack(alignment: .leading, spacing: 7) {
-                            ForEach(focusedNodes) { node in
-                                Label(accessibilityNodeName(node), systemImage: "scope")
-                            }
-                        }
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    }
-                }
-                Label("Use Tree for the complete hierarchy.", systemImage: "point.3.connected.trianglepath.dotted")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
             }
-            .padding(14)
+            if !focusedNodes.isEmpty {
+                GroupBox("Initial focus") {
+                    VStack(alignment: .leading, spacing: 7) {
+                        ForEach(focusedNodes) { node in
+                            Label(accessibilityNodeName(node), systemImage: "scope")
+                        }
+                    }
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+            Label("Use Tree for the complete hierarchy.", systemImage: "point.3.connected.trianglepath.dotted")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
+        .padding(14)
     }
 }
 
@@ -1244,23 +1896,7 @@ private struct AccessibilityChangeRow: View {
         .padding(.vertical, 4)
     }
 
-    private var headline: String {
-        let name = accessibilityNodeName(change.node)
-        switch change.kind {
-        case .appeared: return "“\(name)” appeared"
-        case .removed: return "“\(name)” was removed"
-        case .updated:
-            if change.changedProperties.contains("focused") {
-                return change.node.focused == true ? "Focus moved to “\(name)”" : "“\(name)” lost focus"
-            }
-            if change.changedProperties.contains("value") { return "“\(name)” changed value" }
-            if change.changedProperties.contains("enabled") {
-                return "“\(name)” became \(change.node.enabled == false ? "disabled" : "enabled")"
-            }
-            if change.changedProperties.contains("frame") { return "“\(name)” moved or resized" }
-            return "“\(name)” changed"
-        }
-    }
+    private var headline: String { accessibilityChangeHeadline(change) }
 
     private var propertyDetails: [String] {
         guard let previous = change.previousNode else { return [] }
@@ -1453,17 +2089,28 @@ private func accessibilityNodeName(_ node: ReplayAccessibilityNode) -> String {
     return accessibilityRoleName(node.role)
 }
 
-private func accessibilityChangeIsSemantic(_ change: ReplayAccessibilityChange) -> Bool {
-    if change.changedProperties.contains(where: {
-        ["focused", "enabled", "value", "title", "label", "help", "identifier", "role", "subrole"]
-            .contains($0)
-    }) {
-        return true
-    }
-    guard change.kind != .updated else { return false }
+private func accessibilityChangeHeadline(_ change: ReplayAccessibilityChange) -> String {
     let name = accessibilityNodeName(change.node)
-    let role = accessibilityRoleName(change.node.role)
-    return name != role || change.node.focused == true || change.node.enabled == false
+    switch change.kind {
+    case .appeared: return "“\(name)” appeared"
+    case .removed: return "“\(name)” was removed"
+    case .updated:
+        if change.changedProperties.contains("focused") {
+            return change.node.focused == true ? "Focus moved to “\(name)”" : "“\(name)” lost focus"
+        }
+        if change.changedProperties.contains("value") { return "“\(name)” changed value" }
+        if change.changedProperties.contains("enabled") {
+            return "“\(name)” became \(change.node.enabled == false ? "disabled" : "enabled")"
+        }
+        if change.changedProperties.contains("frame") { return "“\(name)” moved or resized" }
+        return "“\(name)” changed"
+    }
+}
+
+private func timelineApplicationColor(_ applicationID: String) -> Color {
+    let palette: [Color] = [.cyan, .green, .yellow, .pink, .indigo, .mint]
+    let index = applicationID.unicodeScalars.reduce(0) { ($0 &* 31 &+ Int($1.value)) & 0x7fff_ffff }
+    return palette[index % palette.count]
 }
 
 private func accessibilityRoleName(_ role: String?) -> String {

@@ -1,87 +1,73 @@
-# Recording format v2
+# Recording format v3
 
-`manifest.json` remains UTF-8 JSON. The event, accessibility, and annotation journals are binary protobuf streams defined by `proto/pablo/v2/pablo.proto` and generated with Buf. Each record is encoded as an unsigned protobuf varint byte length followed immediately by one serialized message. A stream is therefore appendable and can be decoded without loading or rewriting preceding records. Frames larger than 64 MiB, truncated prefixes, truncated payloads, and invalid messages fail closed.
+Version 3 is a multi-application desktop-session format. There is no v2 decoder or compatibility representation. Application-scoped and display-scoped recordings use exactly the same manifest, streams, identities, and replay algorithms.
 
-Timeline values are unsigned nanoseconds from a `mach_continuous_time` origin created immediately before the recording components start. Wall-clock strings in the manifest are informational and are not used for synchronization.
+`manifest.json` is UTF-8 JSON. Evidence and annotation journals are length-delimited protobuf streams defined by `proto/pablo/v3/pablo.proto` and generated with Buf. Each record is an unsigned protobuf varint length followed by one serialized message. Oversized, truncated, or invalid records fail closed.
 
-## Manifest
+All evidence uses unsigned monotonic nanoseconds from one session clock. Paused time is removed from video and every observed evidence stream. Wall-clock strings are informational.
 
-`manifest.json` declares `schemaVersion: 2`, the target process metadata, video dimensions and frame rate, and the relative paths of the other artifacts. `capture.firstFrameTimestampNs` gives the session-timeline time at which the first video sample arrived. `durationNs` is written when shutdown completes.
+## Session identity model
+
+Every observed process instance receives a recording-local stable reference such as `APP-004`. A PID is metadata, never identity. Every accessibility node ID is namespaced by its application identity, and every window identity combines an application identity with its observed system window number. Identities are meaningful only inside one recording.
+
+The manifest declares schema version 3, the application or display recording scope, display and application catalogs, global capture geometry, encoded video properties, the first video timestamp, and evidence file paths. The application catalog is finalized at shutdown. Streaming records repeat descriptors needed to interpret evidence before shutdown or after partial recovery.
+
+## Workspace stream
+
+`workspace.pb` contains `pablo.v3.WorkspaceSnapshotRecord` messages. Each record is a complete view of applications and windows intersecting the capture scope at that timestamp. It names the frontmost application and explicitly lists appeared and removed application and window identities.
+
+A consumer selects the last workspace record at or before a playback point. No process lookup is required during replay.
 
 ## Input stream
 
-`events.pb` is an append-only stream of `pablo.v2.InputEventRecord`. Common fields are:
+`events.pb` contains `pablo.v3.InputEventRecord` messages. Alongside event type, coordinates, scrolling, keyboard data, flags, button, and click count, every record can carry stable `applicationID` and application-scoped `windowID` provenance. `targetPID` is diagnostic metadata only.
 
-| Field | Meaning |
-| --- | --- |
-| `timestampNs` | Event time on the session timeline |
-| `type` | Mouse, scroll, keyboard, flags transition, or `automationAction` |
-| `targetPID` | Process target reported by the event system, when available |
-| `flags` | Raw `CGEventFlags` bitset |
-| `x`, `y` | Global pointer position for pointer and scroll events |
-| `deltaX`, `deltaY` | Scroll point deltas |
-| `keyCode` | Hardware-independent virtual key code |
-| `text` | Decoded Unicode for key-down, unless `--no-text` was used |
-| `button`, `clickCount` | Pointer button and click sequence count |
-| `automationAction` | Provenance and sanitized intent for an action requested through the Pablo CLI |
+Display scope observes global input and attributes each event to its receiving or frontmost application. Application scope filters input to the selected application but emits the same multi-app-aware message shape.
 
-Events are observed, not swallowed or modified. They are retained when the target process is frontmost, when the event system reports the target PID, or when a pointer event falls within the captured window's initial frame.
-
-Any approved `click`, `drag`, `scroll`, `type`, `key`, or `perform` request made while a recording is active or paused appends an explicit `type: "automationAction"` record before Pablo attempts it, even if the requested action targets a different application. A second record with the same `automationAction.actionID` records `succeeded` or `failed`. The nested record contains the action kind and targeting parameters, the verified calling application and developer identity, `transport: "pabloCLI"`, and whether the recording was paused. The event's `targetPID` is the resolved action target when available. It does not replace the resulting mouse or keyboard events; those remain separate evidence on the same timeline when they fall within the recording's input scope.
-
-Typed content is never copied into `automationAction`. Type actions retain only `textLength`, while the ordinary key-down event follows the recording's `--no-text` policy. Recording the `requested` phase before input is posted ensures a crash or delivery failure cannot turn an attempted agent action into unattributed input. Automation actions attempted while paused remain in the event trace at the paused session timestamp with `recordingWasPaused: true`, even though ordinary input and video remain paused.
+Approved `click`, `drag`, `scroll`, `type`, `key`, and `perform` requests append `requested` evidence before delivery and `succeeded` or `failed` evidence afterward. The outer event carries the resolved recording application identity. The nested action retains verified calling-application and developer provenance. Typed action text is represented only by length; ordinary key-down text follows the recording's text-capture setting.
 
 ## Accessibility stream
 
-`accessibility.pb` is an append-only stream of `pablo.v2.AccessibilitySnapshotRecord`. The first successful read is a full record. A player materializes it with:
+`accessibility.pb` contains `pablo.v3.AccessibilitySnapshotRecord` messages. Every record embeds its application descriptor. Materialization is independent per application:
 
 ```text
-nodes = map(full.upserts, by: id)
-root = full.rootID
+trees = map<applicationID, map<nodeID, node>>()
+
+for record in timestamp order:
+    tree = trees[record.application.id]
+    if record.kind == "full": tree.removeAll()
+    for id in record.removed: tree.remove(id)
+    for node in record.upserts: tree[node.id] = node
 ```
 
-For each later delta in timestamp order:
+Interleaved deltas for different applications must never share a node map. Global frame indices such as `A11Y-012` identify records in stream order; each indexed frame also identifies its application.
+
+Snapshots occur initially, after relevant input settles, periodically, and at shutdown. A display snapshot normally reads all visible applications. An input-triggered snapshot may update only the receiving application while `workspace.pb` still records desktop state at that timestamp.
+
+Nodes include topology, accessibility semantics, interaction state, and global screen geometry. Secure text is redacted. Visible-child traversal and depth/node limits remain bounded as documented by `truncated`.
+
+## Video and geometry
+
+Application scope records the selected application's largest visible window. Display scope records the selected display with no application exclusions. Both store the global captured rectangle in `manifest.capture.frame`.
+
+To map evidence to movie time:
 
 ```text
-for id in delta.removed: nodes.remove(id)
-for node in delta.upserts: nodes[node.id] = node
-root = delta.rootID
+movieTimeNs = max(0, evidenceTimestampNs - firstFrameTimestampNs)
 ```
 
-Each flat node contains identity and topology (`id`, `parentID`, `childIDs`), accessibility semantics (`role`, `subrole`, `title`, `label`, `value`, `identifier`, `help`), interaction state (`enabled`, `focused`), and global geometry (`position`, `size`). Unavailable optional attributes are absent on the protobuf wire.
-
-When an accessibility container exposes `AXVisibleChildren`, capture follows that bounded visible collection instead of expanding all off-screen rows. Containers that do not expose it fall back to `AXChildren`. Closed zero-sized menus retain their own node but omit their hidden descendants; a visible menu is traversed normally. This keeps the evidence aligned with the recorded screen and avoids treating an entire virtualized data collection as visible UI state.
-
-Snapshots are taken at startup, 75 ms after relevant input settles, periodically, and once during shutdown. Multiple inputs inside the 75 ms window are coalesced. A periodic snapshot captures UI changes caused by animation, timers, networking, or other state not directly initiated by input.
-
-Element IDs are derived from the accessibility object's Core Foundation identity. They are intended to be stable within one recording, not portable across processes or sessions. Apps that destroy and recreate elements will naturally produce removals and upserts.
-
-## Video alignment
-
-The movie starts its media session at the first ScreenCaptureKit sample. To map a session timestamp to movie time:
-
-```text
-movieTimeNs = max(0, sessionTimestampNs - manifest.capture.firstFrameTimestampNs)
-```
-
-Frames before `firstFrameTimestampNs` have no corresponding video image. Consumers should show a blank or poster state for that short startup interval.
+For display scope, accessibility rectangles normalize against `manifest.capture.frame`. For application scope, they normalize against the captured window.
 
 ## Annotation journal
 
-`annotations.pb` is an optional append-only stream of `pablo.v2.RecordingAnnotation`. Its absence means the recording has no annotations. It is not declared in the manifest so adding markup never modifies captured evidence.
+`annotations.pb` is an optional append-only stream of `pablo.v3.RecordingAnnotation`. It is markup, not captured evidence, and remains absent from the manifest evidence file map.
 
-Each record contains a complete annotation state with a UUID identity and stable sequence reference such as `NOTE-007`. Readers materialize the latest record for each UUID, then sort annotations by sequence. Resolving an annotation appends a new state with `status: "resolved"`; it does not rewrite an earlier record.
-
-Annotation anchors may include session-timeline start and end nanoseconds, one or more `A11Y-###` frame references, accessibility node IDs, and an optional freehand trace. A trace is an ordered series of normalized `(x, y)` video coordinates carrying session timestamps plus a normalized line width. It is a spatiotemporal curve: circles, underlines, arrows, and arbitrary shapes use the same representation. Samples preserve the drawing gesture at full fidelity. When every sample has the same timestamp, the shape was drawn while playback was paused and belongs to that video frame. When time advances across samples, replay reveals the curve in timestamp order and interpolates only its live tip between captured samples; it never replaces the stored points. Author fields distinguish local human markup from markup created by a verified calling application and retain that application's identifier, developer, and team when available.
-
-Writers must serialize mutations, validate anchors, and atomically replace the sidecar with the prior journal plus one complete framed record. They must never modify `manifest.json`, `video.mov`, `events.pb`, or `accessibility.pb` while adding or resolving markup.
+Each complete state has stable `NOTE-###` sequence identity. Anchors can name application identities, accessibility frames, namespaced nodes, a time interval, and a normalized spatiotemporal freehand trace. Resolving appends a state; it never rewrites evidence or an earlier state.
 
 ## Local control RPC
 
-The CLI and app share the same protobuf schema. A control connection carries exactly one framed `pablo.v2.CallRequest` and one framed `pablo.v2.CallResponse`, corresponding to `PabloControlService.Call`. Pablo retains its Unix-domain socket, same-user peer checks, 64 KiB request limit, 16 MiB response limit, and one-request-per-connection lifecycle. Caller identity and approval are still derived and enforced by the app; protobuf fields never supply trusted caller identity.
+The app and CLI exchange exactly one framed `pablo.v3.CallRequest` and `pablo.v3.CallResponse` per Unix-domain socket connection. Protocol version 3 is accepted; older messages are rejected. Same-user peer checks, size limits, verified caller resolution, and human approval remain app-owned. Protobuf fields never supply trusted caller identity.
 
-## Forward compatibility
+## Compatibility policy
 
-Protobuf readers retain wire compatibility by ignoring unknown fields and preserving field numbers. Never reuse or renumber a published field; reserve deleted field numbers and names. Run `buf lint` and `buf breaking --against <reference>` before publishing schema changes.
-
-Pablo accepts only recording schema version 2. Other manifest versions fail with an unsupported-format error before any journal is read or changed.
+Pablo accepts only recording schema version 3 and control protocol version 3. There is no migration, fallback decoder, legacy target field, or dual-write path. Do not reuse or renumber v3 protobuf fields. Change the source proto, run Buf, and update all producers, consumers, and behavior tests together.

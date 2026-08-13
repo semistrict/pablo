@@ -2,9 +2,11 @@ import ApplicationServices
 import Foundation
 
 public struct RecordOptions {
+    public var scope: RecordingScopeKind = .application
     public var pid: pid_t?
     public var bundleIdentifier: String?
     public var appName: String?
+    public var displayID: UInt32?
     public var outputURL: URL?
     public var duration: TimeInterval?
     public var snapshotInterval: TimeInterval = 1
@@ -22,6 +24,7 @@ public struct AnnotationOptions {
     public var from: TimeInterval?
     public var to: TimeInterval?
     public var accessibilityReferences: [String] = []
+    public var applicationIDs: [String] = []
     public var accessibilityNodeIDs: [String] = []
     public var point: AnnotationPoint?
     public var tracePoints: [AnnotationTracePoint] = []
@@ -69,6 +72,7 @@ public enum Command {
     case frames(InspectionSource, json: Bool)
     case frame(reference: String, source: InspectionSource, changedOnly: Bool, json: Bool)
     case events(InspectionSource, limit: Int, json: Bool)
+    case workspace(recording: URL?, json: Bool)
     case annotations(InspectionSource, json: Bool)
     case liveAction(PabloLiveActionRequest)
     case annotate(AnnotationOptions)
@@ -86,6 +90,15 @@ public enum CLI {
             while index < arguments.count {
                 let argument = arguments[index]
                 switch argument {
+                case "--screen":
+                    options.scope = .display
+                case "--display-id":
+                    let value = try next(arguments, &index, option: argument)
+                    guard let parsed = UInt32(value) else {
+                        throw RecordingError.usage("--display-id must be an unsigned display ID.")
+                    }
+                    options.scope = .display
+                    options.displayID = parsed
                 case "--pid":
                     let value = try next(arguments, &index, option: argument)
                     guard let parsed = pid_t(value), parsed > 0 else {
@@ -126,8 +139,12 @@ public enum CLI {
                 index += 1
             }
             let selectors = [options.pid != nil, options.bundleIdentifier != nil, options.appName != nil].filter { $0 }.count
-            guard selectors == 1 else {
-                throw RecordingError.usage("Choose exactly one target with --app, --bundle-id, or --pid.")
+            if options.scope == .display {
+                guard selectors == 0 else {
+                    throw RecordingError.usage("--screen cannot be combined with an application selector.")
+                }
+            } else if selectors != 1 {
+                throw RecordingError.usage("Choose --screen or exactly one application with --app, --bundle-id, or --pid.")
             }
             return .record(options)
         case "status":
@@ -174,6 +191,9 @@ public enum CLI {
         case "events":
             let parsed = try parseInspectionArguments(Array(arguments.dropFirst()), allowsLimit: true)
             return .events(parsed.source, limit: parsed.limit ?? 100, json: parsed.json)
+        case "workspace":
+            let parsed = try parseRecordingArguments(Array(arguments.dropFirst()))
+            return .workspace(recording: parsed.url, json: parsed.json)
         case "annotations", "notes":
             let parsed = try parseInspectionArguments(Array(arguments.dropFirst()))
             return .annotations(parsed.source, json: parsed.json)
@@ -206,7 +226,7 @@ public enum CLI {
 
     public static let help = """
     Usage:
-      pablo record (--app NAME | --bundle-id ID | --pid PID) [options]
+      pablo record (--screen [--display-id ID] | --app NAME | --bundle-id ID | --pid PID) [options]
       pablo status
       pablo pause
       pablo resume
@@ -217,6 +237,7 @@ public enum CLI {
       pablo frames [recording.pablo | live target] [--json]
       pablo frame <A11Y-###> [recording.pablo | live target] [--changed] [--json]
       pablo events [recording.pablo | live target] [--limit N] [--json]
+      pablo workspace [recording.pablo] [--json]
       pablo annotations [recording.pablo | live target] [--json]
       pablo click live-target (--node ID | --point X,Y) [--button BUTTON] [--count N]
       pablo drag live-target (--from X,Y | --from-node ID) (--to X,Y | --to-node ID)
@@ -228,6 +249,8 @@ public enum CLI {
       pablo resolve <NOTE-###> [recording.pablo]
 
     Record options:
+      --screen                  Record the entire main display and every interacting app
+      --display-id ID           Record a specific display instead of the main display
       -o, --output PATH          Output package (default: ~/Movies/Pablo Recordings)
       --duration SECONDS        Stop automatically; otherwise use pablo stop
       --snapshot-interval SEC   Periodic accessibility snapshot interval (default: 1)
@@ -259,12 +282,14 @@ public enum CLI {
       --at SECONDS             Pin to a video time
       --from SEC --to SEC      Mark a video time range
       --frame A11Y-###         Attach an accessibility frame; repeatable
+      --application APP-###    Attach an application identity; repeatable
       --node ID                Attach an accessibility node; repeatable
       --point X,Y              Pin one normalized video point to --at or --from/--to
       --trace SEC,X,Y          Add a timed freehand sample; repeat in drawing order
       --line-width FRACTION    Trace width relative to the video (default: 0.008)
 
     Example:
+      pablo record --screen --duration 30 -o desktop-session.pablo
       pablo record --app Notes --duration 20 -o notes-session.pablo
 
     Recording controls are sent to the Pablo app and require daily approval per calling application.
@@ -332,11 +357,27 @@ public enum CLI {
             startTimestampNs = step.timestampNs
             endTimestampNs = step.timestampNs
         }
+        var applicationIDs = Set(options.applicationIDs)
+        for reference in options.accessibilityReferences {
+            if let step = try? accessibilityStep(reference, in: recording) {
+                applicationIDs.insert(step.applicationID)
+            }
+        }
+        for sample in trace?.samples ?? [] {
+            if let applicationID = recording.applicationID(
+                atNormalizedX: sample.x,
+                y: sample.y,
+                timestampNs: sample.timestampNs
+            ) {
+                applicationIDs.insert(applicationID)
+            }
+        }
         let draft = RecordingAnnotationDraft(
             kind: options.kind,
             text: text,
             startTimestampNs: startTimestampNs,
             endTimestampNs: endTimestampNs,
+            applicationIDs: Array(applicationIDs).sorted(),
             accessibilityReferences: options.accessibilityReferences,
             accessibilityNodeIDs: options.accessibilityNodeIDs,
             trace: trace
@@ -388,7 +429,8 @@ public enum CLI {
                 annotation.text
         }
         var parts = [result.state]
-        if let target = result.target { parts.append(target) }
+        if let scopeName = result.scopeName { parts.append(scopeName) }
+        if !result.applicationIDs.isEmpty { parts.append(result.applicationIDs.joined(separator: ",")) }
         parts.append(formatTimeNs(result.elapsedNanoseconds))
         if let recordingPath = result.recordingPath { parts.append(recordingPath) }
         return parts.joined(separator: "  ")
@@ -485,16 +527,18 @@ public enum CLI {
         let packageURL = try resolveRecording(requestedURL)
         let manifest = try RecordingManifest.load(from: packageURL)
         let inputCount = try RecordingStreamReader.events(
-            at: packageURL.appendingPathComponent(manifest.files["events"] ?? "events.pb")
+            at: try manifest.fileURL(for: "events", in: packageURL)
         ).count
         let accessibilityCount = try RecordingStreamReader.accessibility(
-            at: packageURL.appendingPathComponent(
-                manifest.files["accessibility"] ?? "accessibility.pb"
-            )
+            at: try manifest.fileURL(for: "accessibility", in: packageURL)
+        ).count
+        let workspaceCount = try RecordingStreamReader.workspace(
+            at: try manifest.fileURL(for: "workspace", in: packageURL)
         ).count
         let summary = SessionSummary(
             manifest: manifest,
             inputEventCount: inputCount,
+            workspaceRecordCount: workspaceCount,
             accessibilityRecordCount: accessibilityCount,
             annotationCount: try RecordingAnnotationStore.load(from: packageURL).count
         )
@@ -534,7 +578,7 @@ public enum CLI {
         return recording.accessibilitySteps.map { step in
             let time = formatTime(recording.videoTime(for: step))
             let truncated = step.truncated ? " truncated" : ""
-            return "\(step.reference)  \(time)  \(step.kind)  \(step.reason)  " +
+            return "\(step.reference)  \(time)  \(step.applicationID) \(step.applicationName)  \(step.kind)  \(step.reason)  " +
                 "changed=\(step.changedNodes.count) removed=\(step.removedNodeIDs.count) " +
                 "nodes=\(step.totalNodeCount)\(truncated)"
         }.joined(separator: "\n")
@@ -560,7 +604,7 @@ public enum CLI {
         }
         let nodes = changedOnly ? step.changedNodes : step.nodes
         var lines = [
-            "\(step.reference)  \(formatTime(recording.videoTime(for: step)))  \(step.kind)  \(step.reason)",
+            "\(step.reference)  \(formatTime(recording.videoTime(for: step)))  \(step.applicationID) \(step.applicationName)  \(step.kind)  \(step.reason)",
             "nodes=\(step.totalNodeCount) changed=\(step.changedNodes.count) " +
                 "removed=\(step.removedNodeIDs.count) truncated=\(step.truncated)",
             changedOnly ? "Changed accessibility nodes:" : "Accessibility tree:",
@@ -576,7 +620,7 @@ public enum CLI {
     public static func events(_ requestedURL: URL?, limit: Int, json: Bool) throws -> String {
         let packageURL = try resolveRecording(requestedURL)
         let manifest = try RecordingManifest.load(from: packageURL)
-        let url = packageURL.appendingPathComponent(manifest.files["events"] ?? "events.pb")
+        let url = try manifest.fileURL(for: "events", in: packageURL)
         let records = try RecordingStreamReader.events(at: url)
         let limited = Array(records.prefix(limit))
         if json {
@@ -597,6 +641,8 @@ public enum CLI {
                 if let textLength = action.textLength { details.append("characters=\(textLength)") }
             }
             if let text = event.text { details.append("text=\(quoted(text))") }
+            if let applicationID = event.applicationID { details.append("app=\(applicationID)") }
+            if let windowID = event.windowID { details.append("window=\(windowID)") }
             if let keyCode = event.keyCode { details.append("key=\(keyCode)") }
             if let x = event.x, let y = event.y {
                 details.append(String(format: "at=(%.1f,%.1f)", x, y))
@@ -608,6 +654,26 @@ public enum CLI {
             lines.append("… \(records.count - limited.count) more events; use --limit \(records.count) to show all")
         }
         return lines.joined(separator: "\n")
+    }
+
+    public static func workspace(_ requestedURL: URL?, json: Bool) throws -> String {
+        let packageURL = try resolveRecording(requestedURL)
+        let manifest = try RecordingManifest.load(from: packageURL)
+        let records = try RecordingStreamReader.workspace(
+            at: try manifest.fileURL(for: "workspace", in: packageURL)
+        )
+        if json { return try jsonString(records) }
+        guard !records.isEmpty else { return "No workspace snapshots found." }
+        return records.enumerated().map { index, record in
+            let frontmost = record.frontmostApplicationID ?? "none"
+            let appeared = (record.appearedApplicationIDs + record.appearedWindowIDs).joined(separator: ",")
+            let removed = (record.removedApplicationIDs + record.removedWindowIDs).joined(separator: ",")
+            return String(format: "WKS-%04d  %@  frontmost=%@ apps=%d windows=%d%@%@",
+                          index + 1, formatTimeNs(record.timestampNs), frontmost,
+                          record.applications.count, record.windows.count,
+                          appeared.isEmpty ? "" : " appeared=\(appeared)",
+                          removed.isEmpty ? "" : " removed=\(removed)")
+        }.joined(separator: "\n")
     }
 
     public static func annotations(_ requestedURL: URL?, json: Bool) throws -> String {
@@ -977,6 +1043,8 @@ public enum CLI {
                 options.to = try annotationTime(arguments, &index, option: argument)
             case "--frame":
                 options.accessibilityReferences.append(try next(arguments, &index, option: argument))
+            case "--application":
+                options.applicationIDs.append(try next(arguments, &index, option: argument).uppercased())
             case "--node":
                 options.accessibilityNodeIDs.append(try next(arguments, &index, option: argument))
             case "--point":

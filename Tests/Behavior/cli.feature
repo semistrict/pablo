@@ -9,12 +9,22 @@ Feature: Parse and run the Pablo command-line interface predictably
     And typed Unicode capture is disabled
 
   @automated
-  # CLITests.testRequiresExactlyOneTarget
-  Scenario: Recording requires exactly one target selector
-    When record is parsed without `--app`, `--bundle-id`, or `--pid`
+  # CLITests.testRequiresOneRecordingScope
+  Scenario: Recording requires one scope selector
+    When record is parsed without `--screen`, `--app`, `--bundle-id`, or `--pid`
     Then parsing fails
-    When more than one target selector is supplied
+    When more than one application selector is supplied
     Then parsing fails
+    When `--screen` and an application selector are supplied together
+    Then parsing fails
+
+  @automated
+  # CLITests.testParsesDisplayRecordingWithoutAnApplicationSelector
+  Scenario: Parse a display recording without an application target
+    When `record --screen --display-id 7 --fps 24` is parsed
+    Then the recording scope is display 7
+    And no application selector is present
+    And the frame rate is 24 frames per second
 
   @automated
   # CLITests.testParsesReplayCommands
@@ -27,6 +37,8 @@ Feature: Parse and run the Pablo command-line interface predictably
     Then the event limit is 25
     When `annotations --json` is parsed
     Then JSON annotation output is selected
+    When `workspace --json` is parsed
+    Then JSON workspace output is selected
 
   @automated
   # CLITests.testParsesEveryLiveInspectionCommand

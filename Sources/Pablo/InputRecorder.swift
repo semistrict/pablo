@@ -5,7 +5,9 @@ import Foundation
 final class InputRecorder {
     typealias EventHandler = (InputEventRecord) -> Void
 
-    private let targetPID: pid_t
+    private let scope: RecordingScopeKind
+    private let selectedPID: pid_t?
+    private let registry: RecordingApplicationRegistry
     private let clock: SessionClock
     private let includeText: Bool
     private let targetFrame: () -> CGRect?
@@ -17,13 +19,17 @@ final class InputRecorder {
     private var paused = false
 
     init(
-        targetPID: pid_t,
+        scope: RecordingScopeKind,
+        selectedPID: pid_t?,
+        registry: RecordingApplicationRegistry,
         clock: SessionClock,
         includeText: Bool,
         targetFrame: @escaping () -> CGRect?,
         handler: @escaping EventHandler
     ) {
-        self.targetPID = targetPID
+        self.scope = scope
+        self.selectedPID = selectedPID
+        self.registry = registry
         self.clock = clock
         self.includeText = includeText
         self.targetFrame = targetFrame
@@ -115,11 +121,33 @@ final class InputRecorder {
         let isScroll = type == .scrollWheel
         let isKeyboard = type == .keyDown || type == .keyUp || type == .flagsChanged
         let text = includeText && type == .keyDown ? keyboardText(from: event) : nil
+        let timestampNs = clock.nowNanoseconds()
+        let rawPID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+        let attributedPID = rawPID > 0 ? rawPID : NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let application = attributedPID.flatMap { registry.application(for: $0, timestampNs: timestampNs) }
+        let windowID: String?
+        if isPointer || isScroll {
+            let workspace = registry.snapshot(
+                timestampNs: timestampNs,
+                reason: "input-attribution",
+                captureFrame: targetFrame(),
+                tracksLifecycle: false
+            )
+            windowID = workspace.windows.first(where: {
+                $0.applicationID == application?.id && CGRect(
+                    x: $0.frame.x, y: $0.frame.y, width: $0.frame.width, height: $0.frame.height
+                ).contains(location)
+            })?.id
+        } else {
+            windowID = nil
+        }
         let record = InputEventRecord(
-            schemaVersion: 2,
-            timestampNs: clock.nowNanoseconds(),
+            schemaVersion: RecordingManifest.currentSchemaVersion,
+            timestampNs: timestampNs,
             type: Self.name(for: type),
-            targetPID: Int64(event.getIntegerValueField(.eventTargetUnixProcessID)),
+            targetPID: attributedPID.map(Int64.init),
+            applicationID: application?.id,
+            windowID: windowID,
             x: isPointer || isScroll ? location.x : nil,
             y: isPointer || isScroll ? location.y : nil,
             deltaX: isScroll ? event.getDoubleValueField(.scrollWheelEventPointDeltaAxis2) : nil,
@@ -136,9 +164,11 @@ final class InputRecorder {
 
     private func shouldRecord(type: CGEventType, event: CGEvent) -> Bool {
         guard !stateLock.withLock({ paused }) else { return false }
+        if scope == .display { return true }
+        guard let selectedPID else { return false }
         let eventPID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
-        if eventPID == targetPID { return true }
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == targetPID { return true }
+        if eventPID == selectedPID { return true }
+        if NSWorkspace.shared.frontmostApplication?.processIdentifier == selectedPID { return true }
         if Self.pointerTypes.contains(type) || type == .scrollWheel,
            let frame = targetFrame(), frame.contains(event.location) {
             return true

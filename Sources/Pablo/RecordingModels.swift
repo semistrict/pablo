@@ -1,13 +1,19 @@
 import Foundation
 
+public enum RecordingScopeKind: String, Codable, Equatable, Sendable {
+    case application
+    case display
+}
+
 struct RecordingManifest: Codable {
-    struct Target: Codable {
-        let pid: Int32
-        let bundleIdentifier: String?
-        let name: String
+    struct Scope: Codable, Equatable {
+        let kind: RecordingScopeKind
+        let selectedApplicationID: String?
+        let selectedDisplayID: UInt32?
     }
 
     struct Capture: Codable {
+        let frame: RecordingRect
         let displayScale: Double
         let width: Int
         let height: Int
@@ -19,13 +25,15 @@ struct RecordingManifest: Codable {
     let startedAt: String
     var endedAt: String?
     var durationNs: UInt64?
-    let target: Target
+    let scope: Scope
+    var displays: [RecordingDisplay]
+    var applications: [RecordingApplication]
     var capture: Capture
     let files: [String: String]
 }
 
 extension RecordingManifest {
-    static let currentSchemaVersion = 2
+    static let currentSchemaVersion = 3
 
     static func load(from packageURL: URL) throws -> RecordingManifest {
         let url = packageURL.appendingPathComponent("manifest.json")
@@ -35,8 +43,80 @@ extension RecordingManifest {
                 "Unsupported recording format version \(manifest.schemaVersion); Pablo requires version \(currentSchemaVersion)."
             )
         }
+        for key in ["video", "events", "workspace", "accessibility"] {
+            _ = try manifest.fileURL(for: key, in: packageURL)
+        }
         return manifest
     }
+
+    func fileURL(for key: String, in packageURL: URL) throws -> URL {
+        guard let relativePath = files[key], !relativePath.isEmpty else {
+            throw RecordingError.capture("Recording manifest is missing its \(key) evidence path.")
+        }
+        let components = NSString(string: relativePath).pathComponents
+        guard !relativePath.hasPrefix("/"), !components.contains("..") else {
+            throw RecordingError.capture("Recording manifest has an unsafe \(key) evidence path.")
+        }
+        return packageURL.appendingPathComponent(relativePath)
+    }
+}
+
+struct RecordingPoint: Codable, Equatable, Sendable {
+    let x: Double
+    let y: Double
+}
+
+struct RecordingSize: Codable, Equatable, Sendable {
+    let width: Double
+    let height: Double
+}
+
+public struct RecordingRect: Codable, Equatable, Sendable {
+    public let x: Double
+    public let y: Double
+    public let width: Double
+    public let height: Double
+}
+
+struct RecordingDisplay: Codable, Equatable, Sendable {
+    let id: UInt32
+    let name: String
+    let frame: RecordingRect
+    let scale: Double
+    let isPrimary: Bool
+}
+
+public struct RecordingApplication: Codable, Equatable, Sendable {
+    public let id: String
+    public let pid: Int32
+    public let bundleIdentifier: String?
+    public let name: String
+    public let firstSeenTimestampNs: UInt64
+    public var lastSeenTimestampNs: UInt64?
+}
+
+public struct RecordingWindow: Codable, Equatable, Sendable {
+    public let id: String
+    public let applicationID: String
+    public let systemWindowID: UInt32
+    public let title: String?
+    public let frame: RecordingRect
+    public let layer: Int
+    public let isOnScreen: Bool
+    public let zOrder: UInt32
+}
+
+public struct WorkspaceSnapshotRecord: Codable, Equatable, Sendable {
+    public let schemaVersion: Int
+    public let timestampNs: UInt64
+    public let reason: String
+    public let frontmostApplicationID: String?
+    public let applications: [RecordingApplication]
+    public let windows: [RecordingWindow]
+    public let appearedApplicationIDs: [String]
+    public let removedApplicationIDs: [String]
+    public let appearedWindowIDs: [String]
+    public let removedWindowIDs: [String]
 }
 
 public enum PabloAutomationActionPhase: String, Codable, Sendable {
@@ -90,6 +170,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
     public let caller: PabloAutomationCaller
     public let transport: String
     public let recordingWasPaused: Bool
+    public let resolvedApplicationID: String?
 
     public init(
         actionID: UUID,
@@ -97,7 +178,8 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         request: PabloLiveActionRequest,
         caller: PabloAutomationCaller,
         transport: String,
-        recordingWasPaused: Bool
+        recordingWasPaused: Bool,
+        resolvedApplicationID: String? = nil
     ) {
         self.actionID = actionID
         self.phase = phase
@@ -121,6 +203,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         self.caller = caller
         self.transport = transport
         self.recordingWasPaused = recordingWasPaused
+        self.resolvedApplicationID = resolvedApplicationID
     }
 
     init(
@@ -145,7 +228,8 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         accessibilityAction: String?,
         caller: PabloAutomationCaller,
         transport: String,
-        recordingWasPaused: Bool
+        recordingWasPaused: Bool,
+        resolvedApplicationID: String?
     ) {
         self.actionID = actionID
         self.phase = phase
@@ -169,35 +253,71 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         self.caller = caller
         self.transport = transport
         self.recordingWasPaused = recordingWasPaused
+        self.resolvedApplicationID = resolvedApplicationID
     }
 }
 
-struct InputEventRecord: Codable {
-    let schemaVersion: Int
-    let timestampNs: UInt64
-    let type: String
-    let targetPID: Int64?
-    let x: Double?
-    let y: Double?
-    let deltaX: Double?
-    let deltaY: Double?
-    let keyCode: Int64?
-    let text: String?
-    let flags: UInt64
-    let button: Int64?
-    let clickCount: Int64?
-    let automationAction: PabloAutomationActionTrace?
+extension PabloAutomationActionTrace {
+    func resolvingApplicationID(_ applicationID: String?) -> Self {
+        Self(
+            actionID: actionID,
+            phase: phase,
+            kind: kind,
+            target: target,
+            nodeID: nodeID,
+            point: point,
+            fromNodeID: fromNodeID,
+            fromPoint: fromPoint,
+            toNodeID: toNodeID,
+            toPoint: toPoint,
+            mouseButton: mouseButton,
+            clickCount: clickCount,
+            duration: duration,
+            scrollDirection: scrollDirection,
+            scrollAmount: scrollAmount,
+            textLength: textLength,
+            key: key,
+            modifiers: modifiers,
+            accessibilityAction: accessibilityAction,
+            caller: caller,
+            transport: transport,
+            recordingWasPaused: recordingWasPaused,
+            resolvedApplicationID: applicationID
+        )
+    }
+}
+
+public struct InputEventRecord: Codable, Sendable {
+    public let schemaVersion: Int
+    public let timestampNs: UInt64
+    public let type: String
+    public let targetPID: Int64?
+    public let applicationID: String?
+    public let windowID: String?
+    public let x: Double?
+    public let y: Double?
+    public let deltaX: Double?
+    public let deltaY: Double?
+    public let keyCode: Int64?
+    public let text: String?
+    public let flags: UInt64
+    public let button: Int64?
+    public let clickCount: Int64?
+    public let automationAction: PabloAutomationActionTrace?
 
     static func automationAction(
         timestampNs: UInt64,
         targetPID: pid_t?,
+        applicationID: String?,
         trace: PabloAutomationActionTrace
     ) -> Self {
         InputEventRecord(
-            schemaVersion: 2,
+            schemaVersion: RecordingManifest.currentSchemaVersion,
             timestampNs: timestampNs,
             type: "automationAction",
             targetPID: targetPID.map(Int64.init),
+            applicationID: applicationID,
+            windowID: nil,
             x: nil,
             y: nil,
             deltaX: nil,
@@ -207,7 +327,7 @@ struct InputEventRecord: Codable {
             flags: 0,
             button: nil,
             clickCount: nil,
-            automationAction: trace
+            automationAction: trace.resolvingApplicationID(applicationID)
         )
     }
 }
@@ -244,6 +364,7 @@ struct AXSnapshotRecord: Codable {
     let timestampNs: UInt64
     let reason: String
     let kind: String
+    let application: RecordingApplication
     let rootID: String?
     let upserts: [AXNode]
     let removed: [String]
@@ -253,6 +374,7 @@ struct AXSnapshotRecord: Codable {
 struct SessionSummary: Codable {
     let manifest: RecordingManifest
     let inputEventCount: Int
+    let workspaceRecordCount: Int
     let accessibilityRecordCount: Int
     let annotationCount: Int
 }

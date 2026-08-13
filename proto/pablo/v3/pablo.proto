@@ -1,17 +1,69 @@
 syntax = "proto3";
 
-package pablo.v2;
+package pablo.v3;
 
-option swift_prefix = "PabloV2";
+option swift_prefix = "PabloV3";
 
 message Point {
   double x = 1;
   double y = 2;
 }
-
 message Size {
   double width = 1;
   double height = 2;
+}
+message Rect {
+  double x = 1;
+  double y = 2;
+  double width = 3;
+  double height = 4;
+}
+
+enum RecordingScopeKind {
+  RECORDING_SCOPE_KIND_UNSPECIFIED = 0;
+  RECORDING_SCOPE_KIND_APPLICATION = 1;
+  RECORDING_SCOPE_KIND_DISPLAY = 2;
+}
+
+message ApplicationDescriptor {
+  string id = 1;
+  int32 pid = 2;
+  optional string bundle_identifier = 3;
+  string name = 4;
+  uint64 first_seen_timestamp_ns = 5;
+  optional uint64 last_seen_timestamp_ns = 6;
+}
+
+message DisplayDescriptor {
+  uint32 id = 1;
+  string name = 2;
+  Rect frame = 3;
+  double scale = 4;
+  bool is_primary = 5;
+}
+
+message WindowDescriptor {
+  string id = 1;
+  string application_id = 2;
+  uint32 system_window_id = 3;
+  optional string title = 4;
+  Rect frame = 5;
+  int64 layer = 6;
+  bool is_on_screen = 7;
+  uint32 z_order = 8;
+}
+
+message WorkspaceSnapshotRecord {
+  uint32 schema_version = 1;
+  uint64 timestamp_ns = 2;
+  string reason = 3;
+  optional string frontmost_application_id = 4;
+  repeated ApplicationDescriptor applications = 5;
+  repeated WindowDescriptor windows = 6;
+  repeated string appeared_application_ids = 7;
+  repeated string removed_application_ids = 8;
+  repeated string appeared_window_ids = 9;
+  repeated string removed_window_ids = 10;
 }
 
 message LiveApplicationTarget {
@@ -112,6 +164,7 @@ message AutomationActionTrace {
   AutomationCaller caller = 20;
   string transport = 21;
   bool recording_was_paused = 22;
+  optional string resolved_application_id = 23;
 }
 
 message InputEventRecord {
@@ -119,16 +172,18 @@ message InputEventRecord {
   uint64 timestamp_ns = 2;
   string type = 3;
   optional int64 target_pid = 4;
-  optional double x = 5;
-  optional double y = 6;
-  optional double delta_x = 7;
-  optional double delta_y = 8;
-  optional int64 key_code = 9;
-  optional string text = 10;
-  uint64 flags = 11;
-  optional int64 button = 12;
-  optional int64 click_count = 13;
-  optional AutomationActionTrace automation_action = 14;
+  optional string application_id = 5;
+  optional string window_id = 6;
+  optional double x = 7;
+  optional double y = 8;
+  optional double delta_x = 9;
+  optional double delta_y = 10;
+  optional int64 key_code = 11;
+  optional string text = 12;
+  uint64 flags = 13;
+  optional int64 button = 14;
+  optional int64 click_count = 15;
+  optional AutomationActionTrace automation_action = 16;
 }
 
 message AccessibilityNode {
@@ -153,10 +208,11 @@ message AccessibilitySnapshotRecord {
   uint64 timestamp_ns = 2;
   string reason = 3;
   string kind = 4;
-  optional string root_id = 5;
-  repeated AccessibilityNode upserts = 6;
-  repeated string removed = 7;
-  bool truncated = 8;
+  ApplicationDescriptor application = 5;
+  optional string root_id = 6;
+  repeated AccessibilityNode upserts = 7;
+  repeated string removed = 8;
+  bool truncated = 9;
 }
 
 enum AnnotationKind {
@@ -192,7 +248,6 @@ message AnnotationTraceSample {
   double x = 2;
   double y = 3;
 }
-
 message AnnotationTrace {
   repeated AnnotationTraceSample samples = 1;
   double line_width = 2;
@@ -203,9 +258,10 @@ message AnnotationDraft {
   string text = 2;
   optional uint64 start_timestamp_ns = 3;
   optional uint64 end_timestamp_ns = 4;
-  repeated string accessibility_references = 5;
-  repeated string accessibility_node_ids = 6;
-  optional AnnotationTrace trace = 7;
+  repeated string application_ids = 5;
+  repeated string accessibility_references = 6;
+  repeated string accessibility_node_ids = 7;
+  optional AnnotationTrace trace = 8;
 }
 
 message RecordingAnnotation {
@@ -220,9 +276,10 @@ message RecordingAnnotation {
   string text = 9;
   optional uint64 start_timestamp_ns = 10;
   optional uint64 end_timestamp_ns = 11;
-  repeated string accessibility_references = 12;
-  repeated string accessibility_node_ids = 13;
-  optional AnnotationTrace trace = 14;
+  repeated string application_ids = 12;
+  repeated string accessibility_references = 13;
+  repeated string accessibility_node_ids = 14;
+  optional AnnotationTrace trace = 15;
 }
 
 enum LiveInspectionKind {
@@ -244,14 +301,16 @@ message LiveInspectionRequest {
 }
 
 message RecordOptions {
-  optional int32 pid = 1;
-  optional string bundle_identifier = 2;
-  optional string app_name = 3;
-  optional string output_path = 4;
-  optional double duration = 5;
-  double snapshot_interval = 6;
-  bool capture_text = 7;
-  int64 frames_per_second = 8;
+  RecordingScopeKind scope = 1;
+  optional int32 pid = 2;
+  optional string bundle_identifier = 3;
+  optional string app_name = 4;
+  optional uint32 display_id = 5;
+  optional string output_path = 6;
+  optional double duration = 7;
+  double snapshot_interval = 8;
+  bool capture_text = 9;
+  int64 frames_per_second = 10;
 }
 
 message AnnotationRequest {
@@ -285,11 +344,12 @@ message CallRequest {
 
 message ControlResult {
   string state = 1;
-  optional string target = 2;
+  optional string scope_name = 2;
   optional string recording_path = 3;
   uint64 elapsed_nanoseconds = 4;
   optional RecordingAnnotation annotation = 5;
   optional string output = 6;
+  repeated string application_ids = 7;
 }
 
 message CallResponse {

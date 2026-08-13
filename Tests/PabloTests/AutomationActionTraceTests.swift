@@ -46,8 +46,18 @@ func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
         recordingWasPaused: false
     )
 
-    try writer.append(.automationAction(timestampNs: 100, targetPID: 42, trace: requested))
-    try writer.append(.automationAction(timestampNs: 200, targetPID: 42, trace: succeeded))
+    try writer.append(.automationAction(
+        timestampNs: 100,
+        targetPID: 42,
+        applicationID: "APP-001",
+        trace: requested
+    ))
+    try writer.append(.automationAction(
+        timestampNs: 200,
+        targetPID: 42,
+        applicationID: "APP-001",
+        trace: succeeded
+    ))
     try writer.close()
 
     let data = try Data(contentsOf: eventsURL)
@@ -58,6 +68,8 @@ func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
     #expect(records.compactMap { $0.automationAction?.phase } == [.requested, .succeeded])
     #expect(Set(records.compactMap { $0.automationAction?.actionID }) == Set([actionID]))
     #expect(records.allSatisfy { $0.targetPID == 42 })
+    #expect(records.allSatisfy { $0.applicationID == "APP-001" })
+    #expect(records.allSatisfy { $0.automationAction?.resolvedApplicationID == "APP-001" })
     #expect(records.allSatisfy { $0.text == nil })
     #expect(records.allSatisfy { $0.automationAction?.textLength == secretText.count })
     #expect(records.allSatisfy { $0.automationAction?.caller.verified == true })

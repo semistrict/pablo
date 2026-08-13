@@ -12,6 +12,7 @@ func liveAccessibilityHistoryIsStableAndBounded() throws {
         title: "Before"
     )
     let secondRoot = liveNode(id: "root", role: "AXApplication", title: "After")
+    let application = testApplication
 
     let first = history.append(
         AXTreeSnapshot(
@@ -20,17 +21,20 @@ func liveAccessibilityHistoryIsStableAndBounded() throws {
             truncated: false
         ),
         timestampNs: 10,
-        reason: "live:frames"
+        reason: "live:frames",
+        application: application
     )
     let second = history.append(
         AXTreeSnapshot(rootID: "root", nodes: ["root": secondRoot], truncated: false),
         timestampNs: 20,
-        reason: "live:frames"
+        reason: "live:frames",
+        application: application
     )
     let third = history.append(
         AXTreeSnapshot(rootID: "root", nodes: ["root": secondRoot], truncated: false),
         timestampNs: 30,
-        reason: "live:frames"
+        reason: "live:frames",
+        application: application
     )
 
     #expect(first.reference == "A11Y-001")

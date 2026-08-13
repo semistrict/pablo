@@ -59,7 +59,7 @@ Feature: Record one Mac application on a single monotonic timeline
     And the user stops recording in Pablo
     Then Pablo returns to Ready without disappearing
     And one `.pablo` package is finalized in the selected output directory
-    And the package contains `manifest.json`, `video.mov`, `events.pb`, and `accessibility.pb`
+    And the package contains `manifest.json`, `video.mov`, `events.pb`, `workspace.pb`, and `accessibility.pb`
     And the video is playable
     And all artifact timestamps share the recording timeline
 
@@ -82,3 +82,68 @@ Feature: Record one Mac application on a single monotonic timeline
     Then paused interactions are absent from the captured timeline
     And video duration excludes paused wall time
     And input and accessibility timestamps remain aligned with video
+
+  @signed-app @manual
+  Scenario: A human starts recording from the menu bar
+    Given Pablo is idle in the menu bar
+    When the user opens Pablo's menu-bar panel
+    Then `Record Entire Screen` is available
+    And `Record an Application` lists the currently running regular applications
+    And typed-text capture can be disclosed and toggled before recording
+    When the user chooses either recording action
+    Then Pablo starts the selected recording without requiring the CLI
+    And the same panel replaces the start actions with pause and stop controls
+
+  @signed-app @manual
+  Scenario: Show Recordings opens the recording directory
+    Given Pablo is idle or recording
+    When the user chooses `Show Recordings` in the menu-bar panel
+    Then Pablo creates `~/Movies/Pablo Recordings` if necessary
+    And Finder opens that directory
+    And any failure is shown in Pablo instead of being discarded
+
+  @signed-app @manual
+  Scenario: Open Review raises the review window
+    Given Pablo's review window is closed or behind another application
+    When the user chooses `Open Review` in the menu-bar panel
+    Then Pablo directly asks its review-window controller to show the latest recording
+    And the review window becomes key and moves to the front
+
+  @automated
+  # AppBundlePackagingTests.appOwnsPabloRecordingPackages
+  Scenario: Finder recognizes Pablo recordings as packages owned by Pablo
+    Given Pablo exports `com.ramon.pablo.recording` as a package type
+    Then its filename extension is `.pablo`
+    And Pablo is registered as the owning viewer
+
+  @signed-app @manual
+  Scenario: Double-clicking a recording opens that exact package
+    Given a `.pablo` recording exists in Finder
+    When the user double-clicks the recording while Pablo is closed or already running
+    Then Finder sends the package to Pablo
+    And Pablo loads that exact package in the review window
+    And the review window becomes key and moves to the front
+
+  @signed-app @manual
+  Scenario: Each opened recording has an independent review window
+    Given two different `.pablo` recordings exist in Finder
+    And Pablo is already running
+    When the user opens both recordings
+    Then both packages open in the existing Pablo application instance
+    And each package has its own review window and playback state
+    And closing one review window leaves the other review window open
+
+  @signed-app @manual
+  Scenario: The review picker opens multiple recordings without replacing a window
+    Given a Pablo review window is already open
+    When the user chooses `Open Recordings…` and selects two `.pablo` packages
+    Then Pablo opens two additional review windows
+    And the original review window keeps its current recording and playback state
+
+  @signed-app @manual
+  Scenario: Double-clicking a review window header toggles its zoomed size
+    Given a Pablo review window is open at its normal size
+    When the user double-clicks a non-interactive part of the window header
+    Then the review window zooms to its standard maximum frame
+    When the user double-clicks the same header area again
+    Then the review window returns to its previous frame

@@ -9,21 +9,30 @@ enum PabloProtobufCodec {
         try ProtobufStream.frame(value.protobuf)
     }
 
+    static func encode(_ value: WorkspaceSnapshotRecord) throws -> Data {
+        try ProtobufStream.frame(value.protobuf)
+    }
+
     static func encode(_ value: RecordingAnnotation) throws -> Data {
         try ProtobufStream.frame(value.protobuf)
     }
 
     static func decodeEvents(from data: Data) throws -> [InputEventRecord] {
-        try ProtobufStream.decode(PabloV2InputEventRecord.self, from: data).map(InputEventRecord.init)
+        try ProtobufStream.decode(PabloV3InputEventRecord.self, from: data).map(InputEventRecord.init)
     }
 
     static func decodeAccessibility(from data: Data) throws -> [AXSnapshotRecord] {
-        try ProtobufStream.decode(PabloV2AccessibilitySnapshotRecord.self, from: data)
+        try ProtobufStream.decode(PabloV3AccessibilitySnapshotRecord.self, from: data)
             .map(AXSnapshotRecord.init)
     }
 
+    static func decodeWorkspace(from data: Data) throws -> [WorkspaceSnapshotRecord] {
+        try ProtobufStream.decode(PabloV3WorkspaceSnapshotRecord.self, from: data)
+            .map(WorkspaceSnapshotRecord.init)
+    }
+
     static func decodeAnnotations(from data: Data) throws -> [RecordingAnnotation] {
-        try ProtobufStream.decode(PabloV2RecordingAnnotation.self, from: data)
+        try ProtobufStream.decode(PabloV3RecordingAnnotation.self, from: data)
             .map(RecordingAnnotation.init)
     }
 
@@ -32,7 +41,7 @@ enum PabloProtobufCodec {
     }
 
     static func decodeControlRequest(from data: Data) throws -> PabloControlRequest {
-        let messages = try ProtobufStream.decode(PabloV2CallRequest.self, from: data)
+        let messages = try ProtobufStream.decode(PabloV3CallRequest.self, from: data)
         guard messages.count == 1 else {
             throw RecordingError.capture("A control connection must contain exactly one request.")
         }
@@ -44,7 +53,7 @@ enum PabloProtobufCodec {
     }
 
     static func decodeControlResponse(from data: Data) throws -> PabloControlResponse {
-        let messages = try ProtobufStream.decode(PabloV2CallResponse.self, from: data)
+        let messages = try ProtobufStream.decode(PabloV3CallResponse.self, from: data)
         guard messages.count == 1 else {
             throw RecordingError.capture("A control connection must contain exactly one response.")
         }
@@ -67,12 +76,12 @@ private func requiredDate(_ value: String, field: String) throws -> Date {
 }
 
 private extension PabloLivePoint {
-    var protobuf: PabloV2Point { .with { $0.x = x; $0.y = y } }
-    init(_ value: PabloV2Point) { self.init(x: value.x, y: value.y) }
+    var protobuf: PabloV3Point { .with { $0.x = x; $0.y = y } }
+    init(_ value: PabloV3Point) { self.init(x: value.x, y: value.y) }
 }
 
 private extension PabloLiveApplicationTarget {
-    var protobuf: PabloV2LiveApplicationTarget {
+    var protobuf: PabloV3LiveApplicationTarget {
         .with {
             if let pid { $0.pid = pid }
             if let bundleIdentifier { $0.bundleIdentifier = bundleIdentifier }
@@ -80,7 +89,7 @@ private extension PabloLiveApplicationTarget {
         }
     }
 
-    init(_ value: PabloV2LiveApplicationTarget) {
+    init(_ value: PabloV3LiveApplicationTarget) {
         self.init(
             pid: value.hasPid ? value.pid : nil,
             bundleIdentifier: value.hasBundleIdentifier ? value.bundleIdentifier : nil,
@@ -90,7 +99,7 @@ private extension PabloLiveApplicationTarget {
 }
 
 private extension PabloLiveActionKind {
-    var protobuf: PabloV2LiveActionKind {
+    var protobuf: PabloV3LiveActionKind {
         switch self {
         case .click: .click
         case .drag: .drag
@@ -101,7 +110,7 @@ private extension PabloLiveActionKind {
         }
     }
 
-    init(_ value: PabloV2LiveActionKind) throws {
+    init(_ value: PabloV3LiveActionKind) throws {
         switch value {
         case .click: self = .click
         case .drag: self = .drag
@@ -116,11 +125,11 @@ private extension PabloLiveActionKind {
 }
 
 private extension PabloLiveMouseButton {
-    var protobuf: PabloV2MouseButton {
+    var protobuf: PabloV3MouseButton {
         switch self { case .left: .left; case .right: .right; case .middle: .middle }
     }
 
-    init(_ value: PabloV2MouseButton) throws {
+    init(_ value: PabloV3MouseButton) throws {
         switch value {
         case .left: self = .left
         case .right: self = .right
@@ -132,11 +141,11 @@ private extension PabloLiveMouseButton {
 }
 
 private extension PabloLiveScrollDirection {
-    var protobuf: PabloV2ScrollDirection {
+    var protobuf: PabloV3ScrollDirection {
         switch self { case .up: .up; case .down: .down; case .left: .left; case .right: .right }
     }
 
-    init(_ value: PabloV2ScrollDirection) throws {
+    init(_ value: PabloV3ScrollDirection) throws {
         switch value {
         case .up: self = .up
         case .down: self = .down
@@ -149,7 +158,7 @@ private extension PabloLiveScrollDirection {
 }
 
 private extension PabloLiveKeyModifier {
-    var protobuf: PabloV2KeyModifier {
+    var protobuf: PabloV3KeyModifier {
         switch self {
         case .command: .command
         case .option: .option
@@ -159,7 +168,7 @@ private extension PabloLiveKeyModifier {
         }
     }
 
-    init(_ value: PabloV2KeyModifier) throws {
+    init(_ value: PabloV3KeyModifier) throws {
         switch value {
         case .command: self = .command
         case .option: self = .option
@@ -173,7 +182,7 @@ private extension PabloLiveKeyModifier {
 }
 
 private extension PabloLiveActionRequest {
-    var protobuf: PabloV2LiveActionRequest {
+    var protobuf: PabloV3LiveActionRequest {
         .with {
             $0.kind = kind.protobuf
             $0.target = target.protobuf
@@ -195,7 +204,7 @@ private extension PabloLiveActionRequest {
         }
     }
 
-    init(_ value: PabloV2LiveActionRequest) throws {
+    init(_ value: PabloV3LiveActionRequest) throws {
         self.init(
             kind: try PabloLiveActionKind(value.kind),
             target: PabloLiveApplicationTarget(value.target),
@@ -219,11 +228,11 @@ private extension PabloLiveActionRequest {
 }
 
 private extension PabloAutomationActionPhase {
-    var protobuf: PabloV2AutomationActionPhase {
+    var protobuf: PabloV3AutomationActionPhase {
         switch self { case .requested: .requested; case .succeeded: .succeeded; case .failed: .failed }
     }
 
-    init(_ value: PabloV2AutomationActionPhase) throws {
+    init(_ value: PabloV3AutomationActionPhase) throws {
         switch value {
         case .requested: self = .requested
         case .succeeded: self = .succeeded
@@ -235,7 +244,7 @@ private extension PabloAutomationActionPhase {
 }
 
 private extension PabloAutomationCaller {
-    var protobuf: PabloV2AutomationCaller {
+    var protobuf: PabloV3AutomationCaller {
         .with {
             $0.displayName = displayName
             if let applicationIdentifier { $0.applicationIdentifier = applicationIdentifier }
@@ -245,7 +254,7 @@ private extension PabloAutomationCaller {
         }
     }
 
-    init(_ value: PabloV2AutomationCaller) {
+    init(_ value: PabloV3AutomationCaller) {
         self.init(
             displayName: value.displayName,
             applicationIdentifier: value.hasApplicationIdentifier ? value.applicationIdentifier : nil,
@@ -257,7 +266,7 @@ private extension PabloAutomationCaller {
 }
 
 private extension PabloAutomationActionTrace {
-    var protobuf: PabloV2AutomationActionTrace {
+    var protobuf: PabloV3AutomationActionTrace {
         .with {
             $0.actionID = actionID.uuidString
             $0.phase = phase.protobuf
@@ -281,10 +290,11 @@ private extension PabloAutomationActionTrace {
             $0.caller = caller.protobuf
             $0.transport = transport
             $0.recordingWasPaused = recordingWasPaused
+            if let resolvedApplicationID { $0.resolvedApplicationID = resolvedApplicationID }
         }
     }
 
-    init(_ value: PabloV2AutomationActionTrace) throws {
+    init(_ value: PabloV3AutomationActionTrace) throws {
         self.init(
             actionID: try requiredUUID(value.actionID, field: "automation action ID"),
             phase: try PabloAutomationActionPhase(value.phase),
@@ -307,18 +317,21 @@ private extension PabloAutomationActionTrace {
             accessibilityAction: value.hasAccessibilityAction ? value.accessibilityAction : nil,
             caller: PabloAutomationCaller(value.caller),
             transport: value.transport,
-            recordingWasPaused: value.recordingWasPaused
+            recordingWasPaused: value.recordingWasPaused,
+            resolvedApplicationID: value.hasResolvedApplicationID ? value.resolvedApplicationID : nil
         )
     }
 }
 
 extension InputEventRecord {
-    var protobuf: PabloV2InputEventRecord {
+    var protobuf: PabloV3InputEventRecord {
         .with {
             $0.schemaVersion = UInt32(schemaVersion)
             $0.timestampNs = timestampNs
             $0.type = type
             if let targetPID { $0.targetPid = targetPID }
+            if let applicationID { $0.applicationID = applicationID }
+            if let windowID { $0.windowID = windowID }
             if let x { $0.x = x }
             if let y { $0.y = y }
             if let deltaX { $0.deltaX = deltaX }
@@ -332,12 +345,14 @@ extension InputEventRecord {
         }
     }
 
-    init(_ value: PabloV2InputEventRecord) throws {
+    init(_ value: PabloV3InputEventRecord) throws {
         self.init(
             schemaVersion: Int(value.schemaVersion),
             timestampNs: value.timestampNs,
             type: value.type,
             targetPID: value.hasTargetPid ? value.targetPid : nil,
+            applicationID: value.hasApplicationID ? value.applicationID : nil,
+            windowID: value.hasWindowID ? value.windowID : nil,
             x: value.hasX ? value.x : nil,
             y: value.hasY ? value.y : nil,
             deltaX: value.hasDeltaX ? value.deltaX : nil,
@@ -353,17 +368,111 @@ extension InputEventRecord {
 }
 
 private extension AXNode.Point {
-    var protobuf: PabloV2Point { .with { $0.x = x; $0.y = y } }
-    init(_ value: PabloV2Point) { self.init(x: value.x, y: value.y) }
+    var protobuf: PabloV3Point { .with { $0.x = x; $0.y = y } }
+    init(_ value: PabloV3Point) { self.init(x: value.x, y: value.y) }
 }
 
 private extension AXNode.Size {
-    var protobuf: PabloV2Size { .with { $0.width = width; $0.height = height } }
-    init(_ value: PabloV2Size) { self.init(width: value.width, height: value.height) }
+    var protobuf: PabloV3Size { .with { $0.width = width; $0.height = height } }
+    init(_ value: PabloV3Size) { self.init(width: value.width, height: value.height) }
+}
+
+private extension RecordingRect {
+    var protobuf: PabloV3Rect {
+        .with { $0.x = x; $0.y = y; $0.width = width; $0.height = height }
+    }
+
+    init(_ value: PabloV3Rect) {
+        self.init(x: value.x, y: value.y, width: value.width, height: value.height)
+    }
+}
+
+private extension RecordingApplication {
+    var protobuf: PabloV3ApplicationDescriptor {
+        .with {
+            $0.id = id
+            $0.pid = pid
+            if let bundleIdentifier { $0.bundleIdentifier = bundleIdentifier }
+            $0.name = name
+            $0.firstSeenTimestampNs = firstSeenTimestampNs
+            if let lastSeenTimestampNs { $0.lastSeenTimestampNs = lastSeenTimestampNs }
+        }
+    }
+
+    init(_ value: PabloV3ApplicationDescriptor) {
+        self.init(
+            id: value.id,
+            pid: value.pid,
+            bundleIdentifier: value.hasBundleIdentifier ? value.bundleIdentifier : nil,
+            name: value.name,
+            firstSeenTimestampNs: value.firstSeenTimestampNs,
+            lastSeenTimestampNs: value.hasLastSeenTimestampNs ? value.lastSeenTimestampNs : nil
+        )
+    }
+}
+
+private extension RecordingWindow {
+    var protobuf: PabloV3WindowDescriptor {
+        .with {
+            $0.id = id
+            $0.applicationID = applicationID
+            $0.systemWindowID = systemWindowID
+            if let title { $0.title = title }
+            $0.frame = frame.protobuf
+            $0.layer = Int64(layer)
+            $0.isOnScreen = isOnScreen
+            $0.zOrder = zOrder
+        }
+    }
+
+    init(_ value: PabloV3WindowDescriptor) {
+        self.init(
+            id: value.id,
+            applicationID: value.applicationID,
+            systemWindowID: value.systemWindowID,
+            title: value.hasTitle ? value.title : nil,
+            frame: RecordingRect(value.frame),
+            layer: Int(value.layer),
+            isOnScreen: value.isOnScreen,
+            zOrder: value.zOrder
+        )
+    }
+}
+
+extension WorkspaceSnapshotRecord {
+    var protobuf: PabloV3WorkspaceSnapshotRecord {
+        .with {
+            $0.schemaVersion = UInt32(schemaVersion)
+            $0.timestampNs = timestampNs
+            $0.reason = reason
+            if let frontmostApplicationID { $0.frontmostApplicationID = frontmostApplicationID }
+            $0.applications = applications.map(\.protobuf)
+            $0.windows = windows.map(\.protobuf)
+            $0.appearedApplicationIds = appearedApplicationIDs
+            $0.removedApplicationIds = removedApplicationIDs
+            $0.appearedWindowIds = appearedWindowIDs
+            $0.removedWindowIds = removedWindowIDs
+        }
+    }
+
+    init(_ value: PabloV3WorkspaceSnapshotRecord) {
+        self.init(
+            schemaVersion: Int(value.schemaVersion),
+            timestampNs: value.timestampNs,
+            reason: value.reason,
+            frontmostApplicationID: value.hasFrontmostApplicationID ? value.frontmostApplicationID : nil,
+            applications: value.applications.map(RecordingApplication.init),
+            windows: value.windows.map(RecordingWindow.init),
+            appearedApplicationIDs: value.appearedApplicationIds,
+            removedApplicationIDs: value.removedApplicationIds,
+            appearedWindowIDs: value.appearedWindowIds,
+            removedWindowIDs: value.removedWindowIds
+        )
+    }
 }
 
 private extension AXNode {
-    var protobuf: PabloV2AccessibilityNode {
+    var protobuf: PabloV3AccessibilityNode {
         .with {
             $0.id = id
             if let parentID { $0.parentID = parentID }
@@ -382,7 +491,7 @@ private extension AXNode {
         }
     }
 
-    init(_ value: PabloV2AccessibilityNode) {
+    init(_ value: PabloV3AccessibilityNode) {
         self.init(
             id: value.id,
             parentID: value.hasParentID ? value.parentID : nil,
@@ -403,12 +512,13 @@ private extension AXNode {
 }
 
 extension AXSnapshotRecord {
-    var protobuf: PabloV2AccessibilitySnapshotRecord {
+    var protobuf: PabloV3AccessibilitySnapshotRecord {
         .with {
             $0.schemaVersion = UInt32(schemaVersion)
             $0.timestampNs = timestampNs
             $0.reason = reason
             $0.kind = kind
+            $0.application = application.protobuf
             if let rootID { $0.rootID = rootID }
             $0.upserts = upserts.map(\.protobuf)
             $0.removed = removed
@@ -416,12 +526,13 @@ extension AXSnapshotRecord {
         }
     }
 
-    init(_ value: PabloV2AccessibilitySnapshotRecord) {
+    init(_ value: PabloV3AccessibilitySnapshotRecord) {
         self.init(
             schemaVersion: Int(value.schemaVersion),
             timestampNs: value.timestampNs,
             reason: value.reason,
             kind: value.kind,
+            application: RecordingApplication(value.application),
             rootID: value.hasRootID ? value.rootID : nil,
             upserts: value.upserts.map(AXNode.init),
             removed: value.removed,
@@ -431,7 +542,7 @@ extension AXSnapshotRecord {
 }
 
 private extension RecordingAnnotationKind {
-    var protobuf: PabloV2AnnotationKind {
+    var protobuf: PabloV3AnnotationKind {
         switch self {
         case .issue: .issue
         case .observation: .observation
@@ -440,7 +551,7 @@ private extension RecordingAnnotationKind {
         }
     }
 
-    init(_ value: PabloV2AnnotationKind) throws {
+    init(_ value: PabloV3AnnotationKind) throws {
         switch value {
         case .issue: self = .issue
         case .observation: self = .observation
@@ -453,11 +564,11 @@ private extension RecordingAnnotationKind {
 }
 
 private extension RecordingAnnotationStatus {
-    var protobuf: PabloV2AnnotationStatus {
+    var protobuf: PabloV3AnnotationStatus {
         switch self { case .open: .open; case .resolved: .resolved }
     }
 
-    init(_ value: PabloV2AnnotationStatus) throws {
+    init(_ value: PabloV3AnnotationStatus) throws {
         switch value {
         case .open: self = .open
         case .resolved: self = .resolved
@@ -468,11 +579,11 @@ private extension RecordingAnnotationStatus {
 }
 
 private extension RecordingAnnotationAuthorType {
-    var protobuf: PabloV2AnnotationAuthorType {
+    var protobuf: PabloV3AnnotationAuthorType {
         switch self { case .human: .human; case .application: .application }
     }
 
-    init(_ value: PabloV2AnnotationAuthorType) throws {
+    init(_ value: PabloV3AnnotationAuthorType) throws {
         switch value {
         case .human: self = .human
         case .application: self = .application
@@ -483,7 +594,7 @@ private extension RecordingAnnotationAuthorType {
 }
 
 private extension RecordingAnnotationAuthor {
-    var protobuf: PabloV2AnnotationAuthor {
+    var protobuf: PabloV3AnnotationAuthor {
         .with {
             $0.type = type.protobuf
             $0.displayName = displayName
@@ -493,7 +604,7 @@ private extension RecordingAnnotationAuthor {
         }
     }
 
-    init(_ value: PabloV2AnnotationAuthor) throws {
+    init(_ value: PabloV3AnnotationAuthor) throws {
         self.init(
             type: try RecordingAnnotationAuthorType(value.type),
             displayName: value.displayName,
@@ -505,44 +616,46 @@ private extension RecordingAnnotationAuthor {
 }
 
 private extension RecordingAnnotationTraceSample {
-    var protobuf: PabloV2AnnotationTraceSample {
+    var protobuf: PabloV3AnnotationTraceSample {
         .with { $0.timestampNs = timestampNs; $0.x = x; $0.y = y }
     }
 
-    init(_ value: PabloV2AnnotationTraceSample) {
+    init(_ value: PabloV3AnnotationTraceSample) {
         self.init(timestampNs: value.timestampNs, x: value.x, y: value.y)
     }
 }
 
 private extension RecordingAnnotationTrace {
-    var protobuf: PabloV2AnnotationTrace {
+    var protobuf: PabloV3AnnotationTrace {
         .with { $0.samples = samples.map(\.protobuf); $0.lineWidth = lineWidth }
     }
 
-    init(_ value: PabloV2AnnotationTrace) {
+    init(_ value: PabloV3AnnotationTrace) {
         self.init(samples: value.samples.map(RecordingAnnotationTraceSample.init), lineWidth: value.lineWidth)
     }
 }
 
 private extension RecordingAnnotationDraft {
-    var protobuf: PabloV2AnnotationDraft {
+    var protobuf: PabloV3AnnotationDraft {
         .with {
             $0.kind = kind.protobuf
             $0.text = text
             if let startTimestampNs { $0.startTimestampNs = startTimestampNs }
             if let endTimestampNs { $0.endTimestampNs = endTimestampNs }
+            $0.applicationIds = applicationIDs
             $0.accessibilityReferences = accessibilityReferences
             $0.accessibilityNodeIds = accessibilityNodeIDs
             if let trace { $0.trace = trace.protobuf }
         }
     }
 
-    init(_ value: PabloV2AnnotationDraft) throws {
+    init(_ value: PabloV3AnnotationDraft) throws {
         self.init(
             kind: try RecordingAnnotationKind(value.kind),
             text: value.text,
             startTimestampNs: value.hasStartTimestampNs ? value.startTimestampNs : nil,
             endTimestampNs: value.hasEndTimestampNs ? value.endTimestampNs : nil,
+            applicationIDs: value.applicationIds,
             accessibilityReferences: value.accessibilityReferences,
             accessibilityNodeIDs: value.accessibilityNodeIds,
             trace: value.hasTrace ? RecordingAnnotationTrace(value.trace) : nil
@@ -551,7 +664,7 @@ private extension RecordingAnnotationDraft {
 }
 
 extension RecordingAnnotation {
-    var protobuf: PabloV2RecordingAnnotation {
+    var protobuf: PabloV3RecordingAnnotation {
         .with {
             $0.id = id.uuidString
             $0.sequence = Int64(sequence)
@@ -564,13 +677,14 @@ extension RecordingAnnotation {
             $0.text = text
             if let startTimestampNs { $0.startTimestampNs = startTimestampNs }
             if let endTimestampNs { $0.endTimestampNs = endTimestampNs }
+            $0.applicationIds = applicationIDs
             $0.accessibilityReferences = accessibilityReferences
             $0.accessibilityNodeIds = accessibilityNodeIDs
             if let trace { $0.trace = trace.protobuf }
         }
     }
 
-    init(_ value: PabloV2RecordingAnnotation) throws {
+    init(_ value: PabloV3RecordingAnnotation) throws {
         self.init(
             id: try requiredUUID(value.id, field: "annotation ID"),
             sequence: Int(value.sequence),
@@ -583,6 +697,7 @@ extension RecordingAnnotation {
             text: value.text,
             startTimestampNs: value.hasStartTimestampNs ? value.startTimestampNs : nil,
             endTimestampNs: value.hasEndTimestampNs ? value.endTimestampNs : nil,
+            applicationIDs: value.applicationIds,
             accessibilityReferences: value.accessibilityReferences,
             accessibilityNodeIDs: value.accessibilityNodeIds,
             trace: value.hasTrace ? RecordingAnnotationTrace(value.trace) : nil
@@ -591,7 +706,7 @@ extension RecordingAnnotation {
 }
 
 private extension PabloLiveInspectionKind {
-    var protobuf: PabloV2LiveInspectionKind {
+    var protobuf: PabloV3LiveInspectionKind {
         switch self {
         case .inspect: .inspect
         case .frames: .frames
@@ -601,7 +716,7 @@ private extension PabloLiveInspectionKind {
         }
     }
 
-    init(_ value: PabloV2LiveInspectionKind) throws {
+    init(_ value: PabloV3LiveInspectionKind) throws {
         switch value {
         case .inspect: self = .inspect
         case .frames: self = .frames
@@ -615,7 +730,7 @@ private extension PabloLiveInspectionKind {
 }
 
 private extension PabloLiveInspectionRequest {
-    var protobuf: PabloV2LiveInspectionRequest {
+    var protobuf: PabloV3LiveInspectionRequest {
         .with {
             $0.kind = kind.protobuf
             $0.target = target.protobuf
@@ -626,7 +741,7 @@ private extension PabloLiveInspectionRequest {
         }
     }
 
-    init(_ value: PabloV2LiveInspectionRequest) throws {
+    init(_ value: PabloV3LiveInspectionRequest) throws {
         self.init(
             kind: try PabloLiveInspectionKind(value.kind),
             target: PabloLiveApplicationTarget(value.target),
@@ -639,11 +754,13 @@ private extension PabloLiveInspectionRequest {
 }
 
 private extension PabloControlRecordOptions {
-    var protobuf: PabloV2RecordOptions {
+    var protobuf: PabloV3RecordOptions {
         .with {
+            $0.scope = scope == .display ? .display : .application
             if let pid { $0.pid = pid }
             if let bundleIdentifier { $0.bundleIdentifier = bundleIdentifier }
             if let appName { $0.appName = appName }
+            if let displayID { $0.displayID = displayID }
             if let outputPath { $0.outputPath = outputPath }
             if let duration { $0.duration = duration }
             $0.snapshotInterval = snapshotInterval
@@ -652,11 +769,13 @@ private extension PabloControlRecordOptions {
         }
     }
 
-    init(_ value: PabloV2RecordOptions) {
+    init(_ value: PabloV3RecordOptions) {
         self.init(
+            scope: value.scope == .display ? .display : .application,
             pid: value.hasPid ? value.pid : nil,
             bundleIdentifier: value.hasBundleIdentifier ? value.bundleIdentifier : nil,
             appName: value.hasAppName ? value.appName : nil,
+            displayID: value.hasDisplayID ? value.displayID : nil,
             outputPath: value.hasOutputPath ? value.outputPath : nil,
             duration: value.hasDuration ? value.duration : nil,
             snapshotInterval: value.snapshotInterval,
@@ -667,7 +786,7 @@ private extension PabloControlRecordOptions {
 }
 
 private extension PabloControlAnnotationRequest {
-    var protobuf: PabloV2AnnotationRequest {
+    var protobuf: PabloV3AnnotationRequest {
         .with {
             $0.recordingPath = recordingPath
             if let draft { $0.draft = draft.protobuf }
@@ -675,7 +794,7 @@ private extension PabloControlAnnotationRequest {
         }
     }
 
-    init(_ value: PabloV2AnnotationRequest) throws {
+    init(_ value: PabloV3AnnotationRequest) throws {
         if value.hasDraft {
             self.init(recordingPath: value.recordingPath, draft: try RecordingAnnotationDraft(value.draft))
         } else if value.hasReference {
@@ -687,7 +806,7 @@ private extension PabloControlAnnotationRequest {
 }
 
 private extension PabloControlMethod {
-    var protobuf: PabloV2ControlMethod {
+    var protobuf: PabloV3ControlMethod {
         switch self {
         case .startRecording: .recordStart
         case .pauseRecording: .recordPause
@@ -701,7 +820,7 @@ private extension PabloControlMethod {
         }
     }
 
-    init(_ value: PabloV2ControlMethod) throws {
+    init(_ value: PabloV3ControlMethod) throws {
         switch value {
         case .recordStart: self = .startRecording
         case .recordPause: self = .pauseRecording
@@ -719,7 +838,7 @@ private extension PabloControlMethod {
 }
 
 private extension PabloControlRequest {
-    var protobuf: PabloV2CallRequest {
+    var protobuf: PabloV3CallRequest {
         .with {
             $0.protocolVersion = UInt32(protocolVersion)
             $0.id = id.uuidString
@@ -731,7 +850,7 @@ private extension PabloControlRequest {
         }
     }
 
-    init(_ value: PabloV2CallRequest) throws {
+    init(_ value: PabloV3CallRequest) throws {
         self.init(
             protocolVersion: Int(value.protocolVersion),
             id: try requiredUUID(value.id, field: "control request ID"),
@@ -745,10 +864,11 @@ private extension PabloControlRequest {
 }
 
 private extension PabloControlResult {
-    var protobuf: PabloV2ControlResult {
+    var protobuf: PabloV3ControlResult {
         .with {
             $0.state = state
-            if let target { $0.target = target }
+            if let scopeName { $0.scopeName = scopeName }
+            $0.applicationIds = applicationIDs
             if let recordingPath { $0.recordingPath = recordingPath }
             $0.elapsedNanoseconds = elapsedNanoseconds
             if let annotation { $0.annotation = annotation.protobuf }
@@ -756,10 +876,11 @@ private extension PabloControlResult {
         }
     }
 
-    init(_ value: PabloV2ControlResult) throws {
+    init(_ value: PabloV3ControlResult) throws {
         self.init(
             state: value.state,
-            target: value.hasTarget ? value.target : nil,
+            scopeName: value.hasScopeName ? value.scopeName : nil,
+            applicationIDs: value.applicationIds,
             recordingPath: value.hasRecordingPath ? value.recordingPath : nil,
             elapsedNanoseconds: value.elapsedNanoseconds,
             annotation: value.hasAnnotation ? try RecordingAnnotation(value.annotation) : nil,
@@ -769,7 +890,7 @@ private extension PabloControlResult {
 }
 
 private extension PabloControlResponse {
-    var protobuf: PabloV2CallResponse {
+    var protobuf: PabloV3CallResponse {
         .with {
             $0.id = id.uuidString
             if let result { $0.result = result.protobuf }
@@ -777,7 +898,7 @@ private extension PabloControlResponse {
         }
     }
 
-    init(_ value: PabloV2CallResponse) throws {
+    init(_ value: PabloV3CallResponse) throws {
         let id = try requiredUUID(value.id, field: "control response ID")
         if value.hasResult {
             self.init(id: id, result: try PabloControlResult(value.result))

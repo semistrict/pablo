@@ -10,11 +10,13 @@ public final class RecordingSession {
     }
 
     private let options: RecordOptions
-    private let target: TargetApplication
+    private let selectedApplication: TargetApplication?
+    private let applicationRegistry = RecordingApplicationRegistry()
     public let packageURL: URL
     private let clock = SessionClock()
     private var inputWriter: ProtobufStreamWriter<InputEventRecord>?
     private var accessibilityWriter: ProtobufStreamWriter<AXSnapshotRecord>?
+    private var workspaceWriter: ProtobufStreamWriter<WorkspaceSnapshotRecord>?
     private var video: VideoRecorder?
     private var accessibility: AccessibilityRecorder?
     private var input: InputRecorder?
@@ -22,19 +24,20 @@ public final class RecordingSession {
     private var manifestURL: URL?
     public private(set) var state: State = .idle
 
-    public var targetName: String { target.name }
+    public var scopeName: String {
+        selectedApplication?.name ?? options.displayID.map { "Display \($0)" } ?? "Entire Screen"
+    }
     public var durationNs: UInt64 { clock.nowNanoseconds() }
     public var captureEnded: Bool { video?.captureEnded ?? false }
-
-    public var targetPID: pid_t { target.pid }
+    public var applicationIDs: [String] { applicationRegistry.allApplications().map(\.id) }
 
     public init(options: RecordOptions) throws {
         self.options = options
-        target = try TargetApplication.resolve(
+        selectedApplication = options.scope == .application ? try TargetApplication.resolve(
             pid: options.pid,
             bundleIdentifier: options.bundleIdentifier,
             appName: options.appName
-        )
+        ) : nil
         packageURL = options.outputURL ?? Self.defaultOutputURL()
     }
 
@@ -45,6 +48,7 @@ public final class RecordingSession {
 
         let inputURL = packageURL.appendingPathComponent("events.pb")
         let accessibilityURL = packageURL.appendingPathComponent("accessibility.pb")
+        let workspaceURL = packageURL.appendingPathComponent("workspace.pb")
         let videoURL = packageURL.appendingPathComponent("video.mov")
         let manifestURL = packageURL.appendingPathComponent("manifest.json")
         self.manifestURL = manifestURL
@@ -57,36 +61,61 @@ public final class RecordingSession {
             url: accessibilityURL,
             encode: PabloProtobufCodec.encode
         )
+        let workspaceWriter = try ProtobufStreamWriter<WorkspaceSnapshotRecord>(
+            url: workspaceURL,
+            encode: PabloProtobufCodec.encode
+        )
         self.inputWriter = inputWriter
         self.accessibilityWriter = accessibilityWriter
+        self.workspaceWriter = workspaceWriter
+        let captureScope: VideoCaptureScope = if let selectedApplication {
+            .application(selectedApplication.pid)
+        } else {
+            .display(options.displayID)
+        }
         let video = VideoRecorder(
-            targetPID: target.pid,
+            captureScope: captureScope,
             outputURL: videoURL,
             clock: clock,
             framesPerSecond: options.framesPerSecond
         )
         self.video = video
         let accessibility = AccessibilityRecorder(
-            pid: target.pid,
+            scope: options.scope,
+            selectedPID: selectedApplication?.pid,
+            registry: applicationRegistry,
+            captureFrame: { [weak video] in video?.captureFrame },
             clock: clock,
             writer: accessibilityWriter,
+            workspaceWriter: workspaceWriter,
             interval: options.snapshotInterval
         )
         self.accessibility = accessibility
 
         do {
             let capture = try await video.start()
+            let selectedDescriptor = selectedApplication.flatMap {
+                applicationRegistry.application(for: $0.pid, timestampNs: 0)
+            }
             let manifest = RecordingManifest(
                 schemaVersion: RecordingManifest.currentSchemaVersion,
                 startedAt: ISO8601DateFormatter.recordingFormatter.string(from: Date()),
                 endedAt: nil,
                 durationNs: nil,
-                target: .init(
-                    pid: target.pid,
-                    bundleIdentifier: target.bundleIdentifier,
-                    name: target.name
+                scope: .init(
+                    kind: options.scope,
+                    selectedApplicationID: selectedDescriptor?.id,
+                    selectedDisplayID: capture.displayID
                 ),
+                displays: RecordingDisplays.current(),
+                applications: applicationRegistry.allApplications(),
                 capture: .init(
+                    frame: RecordingRect(
+                        x: capture.frame.origin.x,
+                        y: capture.frame.origin.y,
+                        width: capture.frame.width,
+                        height: capture.frame.height
+                    ),
                     displayScale: capture.displayScale,
                     width: capture.width,
                     height: capture.height,
@@ -97,6 +126,7 @@ public final class RecordingSession {
                     "video": "video.mov",
                     "events": "events.pb",
                     "accessibility": "accessibility.pb",
+                    "workspace": "workspace.pb",
                 ]
             )
             self.manifest = manifest
@@ -104,10 +134,12 @@ public final class RecordingSession {
             accessibility.start()
 
             let input = InputRecorder(
-                targetPID: target.pid,
+                scope: options.scope,
+                selectedPID: selectedApplication?.pid,
+                registry: applicationRegistry,
                 clock: clock,
                 includeText: options.captureText,
-                targetFrame: { [weak video] in video?.windowFrame }
+                targetFrame: { [weak video] in video?.captureFrame }
             ) { record in
                 do {
                     try inputWriter.append(record)
@@ -115,7 +147,10 @@ public final class RecordingSession {
                     Self.writeError("Input write failed: \(error)")
                 }
                 if record.type != "mouseMove" && record.type != "mouseDrag" {
-                    accessibility.requestSnapshot(reason: "input:\(record.type)")
+                    accessibility.requestSnapshot(
+                        reason: "input:\(record.type)",
+                        applicationPID: record.targetPID.map(pid_t.init)
+                    )
                 }
             }
             self.input = input
@@ -156,10 +191,15 @@ public final class RecordingSession {
         guard let inputWriter else {
             throw RecordingError.capture("The recording event stream is unavailable.")
         }
+        let timestampNs = clock.nowNanoseconds()
+        let applicationID = actionTargetPID.flatMap {
+            applicationRegistry.application(for: $0, timestampNs: timestampNs)?.id
+        }
         try inputWriter.append(.automationAction(
-            timestampNs: clock.nowNanoseconds(),
+            timestampNs: timestampNs,
             targetPID: actionTargetPID,
-            trace: trace
+            applicationID: applicationID,
+            trace: trace.resolvingApplicationID(applicationID)
         ))
     }
 
@@ -172,10 +212,13 @@ public final class RecordingSession {
         do { try await video?.stop() } catch { firstError = error }
         do { try inputWriter?.close() } catch { firstError = firstError ?? error }
         do { try accessibilityWriter?.close() } catch { firstError = firstError ?? error }
+        do { try workspaceWriter?.close() } catch { firstError = firstError ?? error }
 
         manifest?.endedAt = ISO8601DateFormatter.recordingFormatter.string(from: Date())
         manifest?.durationNs = clock.nowNanoseconds()
         manifest?.capture.firstFrameTimestampNs = video?.firstFrameTimestampNs
+        manifest?.applications = applicationRegistry.allApplications()
+        manifest?.displays = RecordingDisplays.current()
         if let manifest, let manifestURL {
             do { try writeManifest(manifest, to: manifestURL) } catch { firstError = firstError ?? error }
         }
@@ -185,7 +228,7 @@ public final class RecordingSession {
 
     public func run() async throws {
         try await start()
-        print("Recording \(target.name) (PID \(target.pid))")
+        print("Recording \(scopeName)")
         print("Writing \(packageURL.path)")
         print(options.duration == nil ? "Press Control-C to stop." : "Recording for \(options.duration!) seconds.")
         await waitUntilStopped(after: options.duration)
@@ -198,6 +241,7 @@ public final class RecordingSession {
         await video?.cancel()
         try? inputWriter?.close()
         try? accessibilityWriter?.close()
+        try? workspaceWriter?.close()
     }
 
     private func checkPermissions() throws {

@@ -171,9 +171,11 @@ public struct PabloLiveActionRequest: Codable, Sendable {
 }
 
 public struct PabloControlRecordOptions: Codable, Sendable {
+    public let scope: RecordingScopeKind
     public let pid: Int32?
     public let bundleIdentifier: String?
     public let appName: String?
+    public let displayID: UInt32?
     public let outputPath: String?
     public let duration: TimeInterval?
     public let snapshotInterval: TimeInterval
@@ -181,9 +183,11 @@ public struct PabloControlRecordOptions: Codable, Sendable {
     public let framesPerSecond: Int
 
     public init(options: RecordOptions) {
+        scope = options.scope
         pid = options.pid
         bundleIdentifier = options.bundleIdentifier
         appName = options.appName
+        displayID = options.displayID
         outputPath = options.outputURL?.path
         duration = options.duration
         snapshotInterval = options.snapshotInterval
@@ -192,18 +196,22 @@ public struct PabloControlRecordOptions: Codable, Sendable {
     }
 
     init(
+        scope: RecordingScopeKind,
         pid: Int32?,
         bundleIdentifier: String?,
         appName: String?,
+        displayID: UInt32?,
         outputPath: String?,
         duration: TimeInterval?,
         snapshotInterval: TimeInterval,
         captureText: Bool,
         framesPerSecond: Int
     ) {
+        self.scope = scope
         self.pid = pid
         self.bundleIdentifier = bundleIdentifier
         self.appName = appName
+        self.displayID = displayID
         self.outputPath = outputPath
         self.duration = duration
         self.snapshotInterval = snapshotInterval
@@ -213,9 +221,11 @@ public struct PabloControlRecordOptions: Codable, Sendable {
 
     public func recordOptions() -> RecordOptions {
         var options = RecordOptions()
+        options.scope = scope
         options.pid = pid
         options.bundleIdentifier = bundleIdentifier
         options.appName = appName
+        options.displayID = displayID
         options.outputURL = outputPath.map { URL(fileURLWithPath: $0) }
         options.duration = duration
         options.snapshotInterval = snapshotInterval
@@ -259,7 +269,7 @@ public struct PabloControlRequest: Codable, Sendable {
         liveInspectionRequest: PabloLiveInspectionRequest? = nil,
         liveActionRequest: PabloLiveActionRequest? = nil
     ) {
-        protocolVersion = 2
+        protocolVersion = 3
         id = UUID()
         self.method = method
         self.recordOptions = recordOptions
@@ -289,7 +299,8 @@ public struct PabloControlRequest: Codable, Sendable {
 
 public struct PabloControlResult: Codable, Sendable {
     public let state: String
-    public let target: String?
+    public let scopeName: String?
+    public let applicationIDs: [String]
     public let recordingPath: String?
     public let elapsedNanoseconds: UInt64
     public let annotation: RecordingAnnotation?
@@ -297,14 +308,16 @@ public struct PabloControlResult: Codable, Sendable {
 
     public init(
         state: String,
-        target: String?,
+        scopeName: String?,
+        applicationIDs: [String],
         recordingPath: String?,
         elapsedNanoseconds: UInt64,
         annotation: RecordingAnnotation? = nil,
         output: String? = nil
     ) {
         self.state = state
-        self.target = target
+        self.scopeName = scopeName
+        self.applicationIDs = applicationIDs
         self.recordingPath = recordingPath
         self.elapsedNanoseconds = elapsedNanoseconds
         self.annotation = annotation
@@ -553,7 +566,7 @@ public final class PabloControlServer: @unchecked Sendable {
         do {
             let data = try readToEnd(from: descriptor, maximumBytes: 64 * 1_024)
             request = try PabloProtobufCodec.decodeControlRequest(from: data)
-            guard request.protocolVersion == 2 else {
+            guard request.protocolVersion == 3 else {
                 try writeResponse(
                     PabloControlResponse(id: request.id, error: "Unsupported control protocol version."),
                     to: descriptor

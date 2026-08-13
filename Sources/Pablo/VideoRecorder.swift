@@ -5,10 +5,17 @@ import Foundation
 import ScreenCaptureKit
 
 struct VideoCaptureInfo {
+    let frame: CGRect
+    let displayID: UInt32?
     let width: Int
     let height: Int
     let displayScale: Double
     let framesPerSecond: Int
+}
+
+enum VideoCaptureScope {
+    case application(pid_t)
+    case display(UInt32?)
 }
 
 struct PreparedVideoWriter {
@@ -117,7 +124,7 @@ enum VideoWriterPipeline {
 }
 
 final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    private let targetPID: pid_t
+    private let captureScope: VideoCaptureScope
     private let outputURL: URL
     private let clock: SessionClock
     private let framesPerSecond: Int
@@ -129,24 +136,24 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     private var lifecycle = VideoCaptureLifecycle()
     private var didStartSession = false
-    private var _windowFrame: CGRect?
+    private var _captureFrame: CGRect?
     private var _firstFrameTimestampNs: UInt64?
     private var captureError: Error?
     private var paused = false
     private var pausedAtHostTime: CMTime?
     private var accumulatedPauseDuration = CMTime.zero
 
-    init(targetPID: pid_t, outputURL: URL, clock: SessionClock, framesPerSecond: Int = 30) {
-        self.targetPID = targetPID
+    init(captureScope: VideoCaptureScope, outputURL: URL, clock: SessionClock, framesPerSecond: Int = 30) {
+        self.captureScope = captureScope
         self.outputURL = outputURL
         self.clock = clock
         self.framesPerSecond = framesPerSecond
     }
 
-    var windowFrame: CGRect? {
+    var captureFrame: CGRect? {
         stateLock.lock()
         defer { stateLock.unlock() }
-        return _windowFrame
+        return _captureFrame
     }
 
     var firstFrameTimestampNs: UInt64? {
@@ -161,19 +168,39 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
 
     func start() async throws -> VideoCaptureInfo {
         let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        let candidates = content.windows.filter {
-            $0.owningApplication?.processID == targetPID && $0.frame.width >= 64 && $0.frame.height >= 64
+        let frame: CGRect
+        let displayID: UInt32?
+        let scale: Double
+        let filter: SCContentFilter
+        switch captureScope {
+        case let .application(targetPID):
+            let candidates = content.windows.filter {
+                $0.owningApplication?.processID == targetPID && $0.frame.width >= 64 && $0.frame.height >= 64
+            }
+            guard let window = candidates.max(by: { score($0) < score($1) }) else {
+                throw RecordingError.capture(
+                    "The selected application has no visible recordable window. Open a window and try again."
+                )
+            }
+            frame = window.frame
+            displayID = nil
+            scale = Double(NSScreen.screens.first(where: { $0.frame.intersects(window.frame) })?.backingScaleFactor ?? 2)
+            filter = SCContentFilter(desktopIndependentWindow: window)
+        case let .display(requestedID):
+            let wantedID = requestedID ?? CGMainDisplayID()
+            guard let display = content.displays.first(where: { $0.displayID == wantedID }) else {
+                throw RecordingError.capture("Display \(wantedID) is not available for recording.")
+            }
+            frame = display.frame
+            displayID = display.displayID
+            scale = Double(NSScreen.screens.first(where: {
+                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
+            })?.backingScaleFactor ?? 1)
+            filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
         }
-        guard let window = candidates.max(by: { score($0) < score($1) }) else {
-            throw RecordingError.capture(
-                "The target has no visible recordable window. Open a window for the app and try again."
-            )
-        }
-
-        let scale = NSScreen.screens.first(where: { $0.frame.intersects(window.frame) })?.backingScaleFactor ?? 2
-        let width = even(Int((window.frame.width * scale).rounded()))
-        let height = even(Int((window.frame.height * scale).rounded()))
-        stateLock.withLock { _windowFrame = window.frame }
+        let width = even(Int((frame.width * scale).rounded()))
+        let height = even(Int((frame.height * scale).rounded()))
+        stateLock.withLock { _captureFrame = frame }
 
         let preparedWriter = try VideoWriterPipeline.prepare(
             outputURL: outputURL,
@@ -195,7 +222,6 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         configuration.capturesAudio = false
         configuration.colorSpaceName = CGColorSpace.sRGB
 
-        let filter = SCContentFilter(desktopIndependentWindow: window)
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
         stateLock.withLock {
@@ -211,6 +237,8 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         }
 
         return VideoCaptureInfo(
+            frame: frame,
+            displayID: displayID,
             width: width,
             height: height,
             displayScale: scale,

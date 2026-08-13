@@ -16,7 +16,8 @@ struct LiveAccessibilityHistory {
     mutating func append(
         _ tree: AXTreeSnapshot,
         timestampNs: UInt64,
-        reason: String
+        reason: String,
+        application: RecordingApplication
     ) -> ReplayAccessibilityStep {
         let diff = AXTreeDiffer.diff(previous: currentNodes, current: tree.nodes)
         let isInitial = currentNodes.isEmpty
@@ -27,6 +28,10 @@ struct LiveAccessibilityHistory {
             timestampNs: timestampNs,
             reason: reason,
             kind: isInitial ? "full" : "delta",
+            applicationID: application.id,
+            applicationName: application.name,
+            applicationBundleIdentifier: application.bundleIdentifier,
+            applicationPID: application.pid,
             rootID: tree.rootID,
             nodes: nodes,
             changedNodes: nodes.filter { changedIDs.contains($0.id) },
@@ -174,6 +179,8 @@ private final class LiveInspectionSession {
     private let clock = SessionClock()
     private let startedAt = Date()
     private let reader: AccessibilityTreeReader
+    private let registry = RecordingApplicationRegistry()
+    private let application: RecordingApplication
     private var accessibilityHistory = LiveAccessibilityHistory()
     private let eventLock = NSLock()
     private var indexedEvents: [IndexedEvent] = []
@@ -185,7 +192,8 @@ private final class LiveInspectionSession {
 
     init(target: TargetApplication) {
         self.target = target
-        reader = AccessibilityTreeReader(pid: target.pid)
+        application = registry.application(for: target.pid, timestampNs: 0)!
+        reader = AccessibilityTreeReader(pid: target.pid, applicationID: application.id)
     }
 
     deinit {
@@ -208,7 +216,8 @@ private final class LiveInspectionSession {
         accessibilityHistory.append(
             tree,
             timestampNs: clock.nowNanoseconds(),
-            reason: reason
+            reason: reason,
+            application: application
         )
         lastAccess = Date()
     }
@@ -242,7 +251,9 @@ private final class LiveInspectionSession {
         }
         if accessibilityHistory.steps.isEmpty { try capture(reason: "live:events") }
         let recorder = InputRecorder(
-            targetPID: target.pid,
+            scope: .application,
+            selectedPID: target.pid,
+            registry: registry,
             clock: clock,
             includeText: true,
             targetFrame: { [weak self] in self?.largestWindowFrame() }

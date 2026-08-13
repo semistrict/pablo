@@ -2,6 +2,33 @@ import AppKit
 import PabloCore
 import Security
 import SwiftUI
+import UniformTypeIdentifiers
+
+private final class PabloReviewWindow: NSWindow {
+    override func sendEvent(_ event: NSEvent) {
+        if event.type == .leftMouseDown,
+           event.clickCount == 2,
+           event.window === self,
+           event.locationInWindow.y >= contentLayoutRect.maxY,
+           !hasInteractiveControl(at: event.locationInWindow) {
+            performZoom(nil)
+            return
+        }
+        super.sendEvent(event)
+    }
+
+    private func hasInteractiveControl(at point: NSPoint) -> Bool {
+        var view = contentView?.superview?.hitTest(point)
+        while let current = view {
+            if current is NSButton || current is NSSegmentedControl ||
+                current is NSSlider || current is NSPopUpButton {
+                return true
+            }
+            view = current.superview
+        }
+        return false
+    }
+}
 
 @main
 struct PabloMenuBarApp: App {
@@ -10,49 +37,222 @@ struct PabloMenuBarApp: App {
 
     var body: some Scene {
         MenuBarExtra {
-            StatusPanel(model: model, replayModel: applicationDelegate.replayModel)
+            StatusPanel(
+                model: model,
+                showReview: { preferredURL in
+                    applicationDelegate.showReviewWindow(preferredURL: preferredURL)
+                }
+            )
         } label: {
             Image(systemName: model.menuBarSymbol)
                 .accessibilityLabel(model.statusTitle)
         }
         .menuBarExtraStyle(.window)
+        .commands {
+            CommandGroup(after: .windowArrangement) {
+                Divider()
+                Button("Arrange Side by Side") {
+                    applicationDelegate.arrangeReviewWindowsSideBySide()
+                }
+            }
+        }
     }
 }
 
-final class PabloApplicationDelegate: NSObject, NSApplicationDelegate {
-    @MainActor let replayModel = ReplayModel()
-    @MainActor private var reviewWindowController: NSWindowController?
+@MainActor
+final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private var reviewWindowControllers: [NSWindowController] = []
+    private var reviewWindowRecency: [ObjectIdentifier] = []
+    private var pendingRecordingURLs: [URL] = []
+    private var didFinishLaunching = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        showReviewWindow()
+        didFinishLaunching = true
+        let recordingURLs = pendingRecordingURLs
+        pendingRecordingURLs.removeAll()
+        if !recordingURLs.isEmpty {
+            for recordingURL in recordingURLs {
+                showReviewWindow(preferredURL: recordingURL)
+            }
+        } else {
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.reviewWindowControllers.isEmpty else { return }
+                self.showReviewWindow()
+            }
+        }
     }
 
-    @MainActor
-    func showReviewWindow(preferredURL: URL? = nil) {
-        _ = replayModel.loadLatest(preferredURL: preferredURL)
-        if reviewWindowController == nil {
-            let content = NSHostingController(rootView: ReplayView(model: replayModel))
-            let window = NSWindow(contentViewController: content)
-            window.title = "Pablo"
-            window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-            window.minSize = NSSize(width: 960, height: 620)
-            window.setContentSize(NSSize(width: 1_180, height: 720))
-            window.setFrameAutosaveName("PabloReviewWindow")
-            window.isReleasedWhenClosed = false
-            window.center()
-            reviewWindowController = NSWindowController(window: window)
+    func application(_ application: NSApplication, open urls: [URL]) {
+        let recordingURLs = urls
+            .filter { $0.pathExtension.caseInsensitiveCompare("pablo") == .orderedSame }
+        guard !recordingURLs.isEmpty else { return }
+        if didFinishLaunching {
+            for recordingURL in recordingURLs {
+                showReviewWindow(preferredURL: recordingURL)
+            }
+        } else {
+            pendingRecordingURLs.append(contentsOf: recordingURLs)
         }
-        reviewWindowController?.showWindow(nil)
-        reviewWindowController?.window?.makeKeyAndOrderFront(nil)
+    }
+
+    func showReviewWindow(preferredURL: URL? = nil) {
+        let replayModel = ReplayModel()
+        _ = replayModel.loadLatest(preferredURL: preferredURL)
+        let content = NSHostingController(rootView: ReplayView(
+            model: replayModel,
+            openRecordings: { [weak self] in self?.chooseRecordingsAndOpen() }
+        ))
+        let window = PabloReviewWindow(contentViewController: content)
+        let recordingURL = replayModel.recording?.packageURL
+        window.title = recordingURL?.deletingPathExtension().lastPathComponent ?? "Pablo"
+        window.representedURL = recordingURL
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.minSize = PabloReviewWindowLayout.preferredMinimumSize
+        window.setContentSize(NSSize(width: 1_180, height: 720))
+        window.isExcludedFromWindowsMenu = false
+        if reviewWindowControllers.isEmpty {
+            window.setFrameAutosaveName("PabloReviewWindow")
+        }
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        positionNewReviewWindow(window)
+        let controller = NSWindowController(window: window)
+        reviewWindowControllers.append(controller)
+        noteReviewWindowActivated(window)
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.setWindowsNeedUpdate(true)
         NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    func windowDidBecomeKey(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        noteReviewWindowActivated(window)
+    }
+
+    func windowWillClose(_ notification: Notification) {
+        guard let window = notification.object as? NSWindow else { return }
+        let identifier = ObjectIdentifier(window)
+        reviewWindowRecency.removeAll { $0 == identifier }
+        reviewWindowControllers.removeAll { $0.window === window }
+        NSApplication.shared.setWindowsNeedUpdate(true)
+    }
+
+    func arrangeReviewWindowsSideBySide() {
+        let windows = reviewWindowControllers.compactMap(\.window).filter {
+            $0.isVisible && !$0.isMiniaturized
+        }
+        guard !windows.isEmpty else { return }
+
+        let currentWindow = mostRecentReviewWindow.flatMap { candidate in
+            windows.first(where: { $0 === candidate })
+        } ?? windows[0]
+
+        var windowsByScreen: [ObjectIdentifier: (screen: NSScreen, windows: [NSWindow])] = [:]
+        for window in windows {
+            guard let screen = window.screen ?? currentWindow.screen ?? NSScreen.main else {
+                continue
+            }
+            let identifier = ObjectIdentifier(screen)
+            if windowsByScreen[identifier] == nil {
+                windowsByScreen[identifier] = (screen, [])
+            }
+            windowsByScreen[identifier]?.windows.append(window)
+        }
+
+        for group in windowsByScreen.values where group.windows.count > 1 {
+            let layout = PabloReviewWindowLayout.tiled(
+                windowCount: group.windows.count,
+                in: group.screen.visibleFrame
+            )
+            for (window, frame) in zip(group.windows, layout.frames) {
+                window.setFrame(frame, display: true, animate: true)
+            }
+        }
+
+        currentWindow.makeKeyAndOrderFront(nil)
+        noteReviewWindowActivated(currentWindow)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    private func chooseRecordingsAndOpen() {
+        let panel = NSOpenPanel()
+        panel.title = "Open Pablo Recordings"
+        panel.prompt = "Review"
+        panel.directoryURL = ReplayModel.recordingsDirectory
+        panel.allowedContentTypes = [
+            UTType(exportedAs: "com.ramon.pablo.recording", conformingTo: .package),
+        ]
+        panel.canChooseFiles = true
+        panel.canChooseDirectories = false
+        panel.allowsMultipleSelection = true
+        panel.begin { [weak self] response in
+            guard response == .OK else { return }
+            for recordingURL in panel.urls where
+                recordingURL.pathExtension.caseInsensitiveCompare("pablo") == .orderedSame {
+                self?.showReviewWindow(preferredURL: recordingURL)
+            }
+        }
     }
 
     func applicationShouldHandleReopen(
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        showReviewWindow()
+        if let window = mostRecentReviewWindow {
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.makeKeyAndOrderFront(nil)
+            noteReviewWindowActivated(window)
+            sender.activate(ignoringOtherApps: true)
+        } else {
+            showReviewWindow()
+        }
         return true
+    }
+
+    private var mostRecentReviewWindow: NSWindow? {
+        for identifier in reviewWindowRecency.reversed() {
+            if let window = reviewWindowControllers.lazy.compactMap(\.window).first(where: {
+                ObjectIdentifier($0) == identifier
+            }) {
+                return window
+            }
+        }
+        return reviewWindowControllers.reversed().compactMap(\.window).first
+    }
+
+    private func noteReviewWindowActivated(_ window: NSWindow) {
+        guard reviewWindowControllers.contains(where: { $0.window === window }) ||
+                window.delegate === self else { return }
+        let identifier = ObjectIdentifier(window)
+        reviewWindowRecency.removeAll { $0 == identifier }
+        reviewWindowRecency.append(identifier)
+    }
+
+    private func positionNewReviewWindow(_ window: NSWindow) {
+        guard let previousWindow = mostRecentReviewWindow else {
+            window.center()
+            return
+        }
+
+        let step: CGFloat = 28
+        let screenFrame = (previousWindow.screen ?? NSScreen.main)?.visibleFrame
+        var frame = window.frame
+        frame.origin = NSPoint(
+            x: previousWindow.frame.minX + step,
+            y: previousWindow.frame.minY - step
+        )
+
+        if let screenFrame,
+           frame.maxX > screenFrame.maxX - step || frame.minY < screenFrame.minY + step {
+            frame.origin = NSPoint(
+                x: screenFrame.minX + step,
+                y: screenFrame.maxY - frame.height - step
+            )
+        }
+        window.setFrame(frame, display: false)
     }
 }
 
@@ -142,9 +342,10 @@ final class RecorderModel: ObservableObject {
         }
     }
 
-    var canStart: Bool { status == .idle && selectedPID != nil }
+    var canStartApplication: Bool { status == .idle && selectedPID != nil }
+    var canStartScreen: Bool { status == .idle }
     var isActive: Bool { status == .recording || status == .paused }
-    var activeTargetName: String? { session?.targetName }
+    var activeScopeName: String? { session?.scopeName }
 
     func refreshApplications() {
         let ownPID = ProcessInfo.processInfo.processIdentifier
@@ -169,13 +370,32 @@ final class RecorderModel: ObservableObject {
         }
     }
 
-    func startRecording() async {
-        guard canStart, let selectedPID else { return }
+    func startApplicationRecording(pid: pid_t? = nil) async {
+        let pid = pid ?? selectedPID
+        guard status == .idle, let pid else { return }
         errorMessage = nil
         status = .starting
         do {
             var options = RecordOptions()
-            options.pid = selectedPID
+            options.scope = .application
+            options.pid = pid
+            options.outputURL = try nextRecordingURL()
+            options.captureText = captureText
+            try await beginRecording(options)
+        } catch {
+            session = nil
+            status = .idle
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func startScreenRecording() async {
+        guard canStartScreen else { return }
+        errorMessage = nil
+        status = .starting
+        do {
+            var options = RecordOptions()
+            options.scope = .display
             options.outputURL = try nextRecordingURL()
             options.captureText = captureText
             try await beginRecording(options)
@@ -590,10 +810,13 @@ final class RecorderModel: ObservableObject {
         guard request.method == .startRecording, let options = request.recordOptions else {
             return "This app wants to \(request.method.approvalDescription)."
         }
-        let target = options.appName
-            ?? options.bundleIdentifier
-            ?? options.pid.map { "PID \($0)" }
-            ?? "an application"
+        let target = options.scope == .display
+            ? options.displayID.map { "display \($0) and interactions across its applications" }
+                ?? "the entire main display and interactions across its applications"
+            : options.appName
+                ?? options.bundleIdentifier
+                ?? options.pid.map { "PID \($0)" }
+                ?? "an application"
         let textNotice = options.captureText ? " Typed text will be captured." : " Typed text will not be captured."
         return "This app wants to start a recording of \(target).\(textNotice)"
     }
@@ -612,7 +835,8 @@ final class RecorderModel: ObservableObject {
         }
         return PabloControlResult(
             state: state,
-            target: session?.targetName,
+            scopeName: session?.scopeName,
+            applicationIDs: session?.applicationIDs ?? [],
             recordingPath: session?.packageURL.path ?? lastRecordingURL?.path,
             elapsedNanoseconds: session?.durationNs ?? elapsedNanoseconds,
             annotation: annotation,
@@ -630,9 +854,16 @@ final class RecorderModel: ObservableObject {
     }
 
     func revealRecordings() {
-        let url = lastRecordingURL?.deletingLastPathComponent() ?? Self.recordingsDirectory
-        try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
-        NSWorkspace.shared.activateFileViewerSelecting(lastRecordingURL.map { [$0] } ?? [url])
+        let directory = Self.recordingsDirectory
+        do {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            guard NSWorkspace.shared.open(directory) else {
+                throw RecordingError.capture("Finder could not open the recordings directory.")
+            }
+            errorMessage = nil
+        } catch {
+            errorMessage = "Could not show recordings: \(error.localizedDescription)"
+        }
     }
 
     func openPrivacySettings(_ pane: PrivacyPane) {
@@ -676,7 +907,7 @@ enum PrivacyPane: String, CaseIterable, Identifiable {
 
 private struct StatusPanel: View {
     @ObservedObject var model: RecorderModel
-    @ObservedObject var replayModel: ReplayModel
+    let showReview: @MainActor (URL?) -> Void
     private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -689,6 +920,7 @@ private struct StatusPanel: View {
         }
         .frame(width: 340)
         .onReceive(timer) { _ in model.updateElapsedTime() }
+        .onAppear { model.refreshApplications() }
     }
 
     private var header: some View {
@@ -721,17 +953,17 @@ private struct StatusPanel: View {
     @ViewBuilder
     private var content: some View {
         VStack(alignment: .leading, spacing: 14) {
-            if model.isActive || model.status == .stopping {
+            if model.status == .starting {
+                HStack(spacing: 10) {
+                    ProgressView().controlSize(.small)
+                    Text("Starting recording…")
+                        .font(.subheadline.weight(.medium))
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else if model.isActive || model.status == .stopping {
                 activeControls
             } else {
-                VStack(alignment: .leading, spacing: 6) {
-                    Label("Ready for agent commands", systemImage: "terminal")
-                        .font(.subheadline.weight(.medium))
-                    Text("Recording and markup requests appear here for approval. Review evidence in the app window.")
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
+                idleControls
             }
 
             if let error = model.errorMessage {
@@ -741,13 +973,56 @@ private struct StatusPanel: View {
         .padding(14)
     }
 
+    private var idleControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Button {
+                Task { await model.startScreenRecording() }
+            } label: {
+                Label("Record Entire Screen", systemImage: "display")
+                    .frame(maxWidth: .infinity)
+            }
+            .buttonStyle(.borderedProminent)
+            .controlSize(.large)
+            .disabled(!model.canStartScreen)
+
+            Menu {
+                if model.applications.isEmpty {
+                    Text("No recordable applications")
+                } else {
+                    ForEach(model.applications) { application in
+                        Button(application.name) {
+                            model.selectedPID = application.pid
+                            Task { await model.startApplicationRecording(pid: application.pid) }
+                        }
+                    }
+                }
+                Divider()
+                Button("Refresh Applications") { model.refreshApplications() }
+            } label: {
+                Label("Record an Application", systemImage: "macwindow")
+                    .frame(maxWidth: .infinity)
+            }
+            .menuStyle(.borderlessButton)
+            .controlSize(.large)
+            .disabled(model.status != .idle)
+
+            Toggle("Capture typed text", isOn: $model.captureText)
+                .font(.caption)
+
+            Text("Recording and markup requests from agents still appear here for approval.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
     private var activeControls: some View {
         VStack(spacing: 12) {
-            if let targetName = model.activeTargetName {
+            if let scopeName = model.activeScopeName {
                 HStack {
                     Image(systemName: "macwindow")
                         .foregroundStyle(.secondary)
-                    Text(targetName)
+                    Text(scopeName)
                         .font(.subheadline.weight(.medium))
                     Spacer()
                     Text(model.status == .paused ? "PAUSED" : "LIVE")
@@ -807,8 +1082,7 @@ private struct StatusPanel: View {
     private var footer: some View {
         HStack {
             Button("Open Review") {
-                (NSApplication.shared.delegate as? PabloApplicationDelegate)?
-                    .showReviewWindow(preferredURL: model.lastRecordingURL)
+                showReview(model.lastRecordingURL)
             }
             .buttonStyle(.borderless)
             Divider().frame(height: 12)

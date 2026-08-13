@@ -20,15 +20,15 @@ Feature: Store and exchange Pablo evidence with schema-defined protobuf
   @automated
   # ReplayRecordingTests.unsupportedRecordingVersionsAreRejected
   Scenario: Unsupported recording versions fail before journals are read
-    Given a recording manifest declares a schema version other than two
+    Given a recording manifest declares a schema version other than three
     When Pablo opens the recording
     Then loading fails with an unsupported-format error
     And no journal is read or changed
 
   @automated
-  # ProtobufStreamTests.controlBridgeUsesProtobufV2
+  # ProtobufStreamTests.controlBridgeUsesProtobufV3
   Scenario: The CLI and app exchange protobuf RPC envelopes
     Given the CLI creates a PabloControlService Call request
-    When it serializes control protocol version two
+    When it serializes control protocol version three
     Then the request is protobuf rather than JSON
     And its request ID and method survive decoding

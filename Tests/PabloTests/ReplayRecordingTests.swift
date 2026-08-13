@@ -8,25 +8,7 @@ import Testing
     try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: packageURL) }
 
-    let manifest = RecordingManifest(
-        schemaVersion: 2,
-        startedAt: "2026-08-11T16:20:09.844Z",
-        endedAt: "2026-08-11T16:20:11.844Z",
-        durationNs: 2_000_000_000,
-        target: .init(pid: 42, bundleIdentifier: "example.app", name: "Example"),
-        capture: .init(
-            displayScale: 2,
-            width: 100,
-            height: 100,
-            framesPerSecond: 30,
-            firstFrameTimestampNs: 100_000_000
-        ),
-        files: [
-            "video": "video.mov",
-            "events": "events.pb",
-            "accessibility": "accessibility.pb",
-        ]
-    )
+    let manifest = testManifest()
     try JSONEncoder().encode(manifest).write(
         to: packageURL.appendingPathComponent("manifest.json")
     )
@@ -65,30 +47,33 @@ import Testing
     )
     let records = [
         AXSnapshotRecord(
-            schemaVersion: 2,
+            schemaVersion: 3,
             timestampNs: 200_000_000,
             reason: "initial",
             kind: "full",
+            application: testApplication,
             rootID: root.id,
             upserts: [root],
             removed: [],
             truncated: false
         ),
         AXSnapshotRecord(
-            schemaVersion: 2,
+            schemaVersion: 3,
             timestampNs: 1_100_000_000,
             reason: "input:mouseUp",
             kind: "delta",
+            application: testApplication,
             rootID: root.id,
             upserts: [updatedRoot],
             removed: [],
             truncated: false
         ),
         AXSnapshotRecord(
-            schemaVersion: 2,
+            schemaVersion: 3,
             timestampNs: 1_500_000_000,
             reason: "periodic",
             kind: "delta",
+            application: testApplication,
             rootID: root.id,
             upserts: [],
             removed: [root.id],
@@ -101,6 +86,7 @@ import Testing
     }
     try accessibilityData.write(to: packageURL.appendingPathComponent("accessibility.pb"))
     try Data().write(to: packageURL.appendingPathComponent("events.pb"))
+    try writeTestWorkspace(to: packageURL)
     FileManager.default.createFile(
         atPath: packageURL.appendingPathComponent("video.mov").path,
         contents: Data()
@@ -159,21 +145,7 @@ func unsupportedRecordingVersionsAreRejected() throws {
         .appendingPathComponent("pablo-unsupported-\(UUID().uuidString).pablo", isDirectory: true)
     try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: packageURL) }
-    let manifest = RecordingManifest(
-        schemaVersion: 1,
-        startedAt: "2026-08-11T16:20:09.844Z",
-        endedAt: nil,
-        durationNs: nil,
-        target: .init(pid: 42, bundleIdentifier: "example.app", name: "Example"),
-        capture: .init(
-            displayScale: 2,
-            width: 100,
-            height: 100,
-            framesPerSecond: 30,
-            firstFrameTimestampNs: nil
-        ),
-        files: ["video": "video.mov", "events": "events.pb", "accessibility": "accessibility.pb"]
-    )
+    let manifest = testManifest(schemaVersion: 2)
     try JSONEncoder().encode(manifest).write(
         to: packageURL.appendingPathComponent("manifest.json")
     )
@@ -181,4 +153,95 @@ func unsupportedRecordingVersionsAreRejected() throws {
     #expect(throws: RecordingError.self) {
         try ReplayRecording.load(from: packageURL)
     }
+}
+
+@Test("Interleaved application deltas materialize independently in a display recording")
+func multiApplicationReplayKeepsTreesSeparate() throws {
+    let packageURL = FileManager.default.temporaryDirectory
+        .appendingPathComponent("pablo-multi-app-\(UUID().uuidString).pablo", isDirectory: true)
+    try FileManager.default.createDirectory(at: packageURL, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: packageURL) }
+
+    let secondApplication = RecordingApplication(
+        id: "APP-002",
+        pid: 84,
+        bundleIdentifier: "example.second",
+        name: "Second",
+        firstSeenTimestampNs: 500_000_000,
+        lastSeenTimestampNs: nil
+    )
+    var manifest = testManifest()
+    manifest = RecordingManifest(
+        schemaVersion: 3,
+        startedAt: manifest.startedAt,
+        endedAt: manifest.endedAt,
+        durationNs: manifest.durationNs,
+        scope: .init(kind: .display, selectedApplicationID: nil, selectedDisplayID: 1),
+        displays: [],
+        applications: [testApplication, secondApplication],
+        capture: manifest.capture,
+        files: manifest.files
+    )
+    try JSONEncoder().encode(manifest).write(to: packageURL.appendingPathComponent("manifest.json"))
+
+    func node(_ id: String, _ title: String) -> AXNode {
+        AXNode(
+            id: id, parentID: nil, childIDs: [], role: "AXApplication", subrole: nil,
+            title: title, label: nil, value: nil, identifier: nil, help: nil,
+            enabled: true, focused: true, position: nil, size: nil
+        )
+    }
+    let records = [
+        AXSnapshotRecord(
+            schemaVersion: 3, timestampNs: 100_000_000, reason: "initial", kind: "full",
+            application: testApplication, rootID: "APP-001:root",
+            upserts: [node("APP-001:root", "A one")], removed: [], truncated: false
+        ),
+        AXSnapshotRecord(
+            schemaVersion: 3, timestampNs: 600_000_000, reason: "appeared", kind: "full",
+            application: secondApplication, rootID: "APP-002:root",
+            upserts: [node("APP-002:root", "B one")], removed: [], truncated: false
+        ),
+        AXSnapshotRecord(
+            schemaVersion: 3, timestampNs: 1_100_000_000, reason: "input:keyDown", kind: "delta",
+            application: testApplication, rootID: "APP-001:root",
+            upserts: [node("APP-001:root", "A two")], removed: [], truncated: false
+        ),
+    ]
+    var accessibilityData = Data()
+    for record in records { accessibilityData.append(try PabloProtobufCodec.encode(record)) }
+    try accessibilityData.write(to: packageURL.appendingPathComponent("accessibility.pb"))
+
+    let workspaceRecords = [
+        WorkspaceSnapshotRecord(
+            schemaVersion: 3, timestampNs: 100_000_000, reason: "initial",
+            frontmostApplicationID: testApplication.id, applications: [testApplication], windows: [],
+            appearedApplicationIDs: [testApplication.id], removedApplicationIDs: [],
+            appearedWindowIDs: [], removedWindowIDs: []
+        ),
+        WorkspaceSnapshotRecord(
+            schemaVersion: 3, timestampNs: 600_000_000, reason: "app-switch",
+            frontmostApplicationID: secondApplication.id,
+            applications: [testApplication, secondApplication], windows: [],
+            appearedApplicationIDs: [secondApplication.id], removedApplicationIDs: [],
+            appearedWindowIDs: [], removedWindowIDs: []
+        ),
+    ]
+    var workspaceData = Data()
+    for record in workspaceRecords { workspaceData.append(try PabloProtobufCodec.encode(record)) }
+    try workspaceData.write(to: packageURL.appendingPathComponent("workspace.pb"))
+    try Data().write(to: packageURL.appendingPathComponent("events.pb"))
+    try Data().write(to: packageURL.appendingPathComponent("video.mov"))
+
+    let replay = try ReplayRecording.load(from: packageURL)
+    let visible = replay.accessibilitySteps(atVideoTime: 1.1)
+    #expect(visible.count == 2)
+    #expect(visible.first(where: { $0.applicationID == "APP-001" })?.nodes.first?.title == "A two")
+    #expect(visible.first(where: { $0.applicationID == "APP-002" })?.nodes.first?.title == "B one")
+    #expect(replay.accessibilityStep(atVideoTime: 0.6)?.applicationID == "APP-002")
+    #expect(replay.workspaceStep(atVideoTime: 0.6)?.appearedApplicationIDs == ["APP-002"])
+    let workspaceOutput = try CLI.workspace(packageURL, json: false)
+    #expect(workspaceOutput.contains("WKS-0002"))
+    #expect(workspaceOutput.contains("frontmost=APP-002"))
+    #expect(workspaceOutput.contains("appeared=APP-002"))
 }

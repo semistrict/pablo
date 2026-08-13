@@ -13,12 +13,30 @@ final class CLITests: XCTestCase {
         XCTAssertFalse(options.captureText)
     }
 
-    func testRequiresExactlyOneTarget() {
+    func testRequiresOneRecordingScope() {
         XCTAssertThrowsError(try CLI.parse(["record"]))
         XCTAssertThrowsError(try CLI.parse(["record", "--app", "Notes", "--pid", "42"]))
+        XCTAssertThrowsError(try CLI.parse(["record", "--screen", "--app", "Notes"]))
+    }
+
+    func testParsesDisplayRecordingWithoutAnApplicationSelector() throws {
+        guard case .record(let options) = try CLI.parse([
+            "record", "--screen", "--display-id", "7", "--fps", "24",
+        ]) else {
+            return XCTFail("Expected record command")
+        }
+        XCTAssertEqual(options.scope, .display)
+        XCTAssertEqual(options.displayID, 7)
+        XCTAssertNil(options.pid)
+        XCTAssertNil(options.bundleIdentifier)
+        XCTAssertNil(options.appName)
+        XCTAssertEqual(options.framesPerSecond, 24)
     }
 
     func testParsesReplayCommands() throws {
+        guard case .workspace(recording: nil, json: true) = try CLI.parse(["workspace", "--json"]) else {
+            return XCTFail("Expected workspace command")
+        }
         guard case .frames(let frameSource, json: true) = try CLI.parse(["frames", "--json"]) else {
             return XCTFail("Expected frames command")
         }

@@ -126,6 +126,7 @@ public struct RecordingAnnotationDraft: Codable, Equatable, Sendable {
     public let text: String
     public let startTimestampNs: UInt64?
     public let endTimestampNs: UInt64?
+    public let applicationIDs: [String]
     public let accessibilityReferences: [String]
     public let accessibilityNodeIDs: [String]
     public let trace: RecordingAnnotationTrace?
@@ -135,6 +136,7 @@ public struct RecordingAnnotationDraft: Codable, Equatable, Sendable {
         text: String,
         startTimestampNs: UInt64? = nil,
         endTimestampNs: UInt64? = nil,
+        applicationIDs: [String] = [],
         accessibilityReferences: [String] = [],
         accessibilityNodeIDs: [String] = [],
         trace: RecordingAnnotationTrace? = nil
@@ -143,6 +145,7 @@ public struct RecordingAnnotationDraft: Codable, Equatable, Sendable {
         self.text = text
         self.startTimestampNs = startTimestampNs
         self.endTimestampNs = endTimestampNs
+        self.applicationIDs = applicationIDs
         self.accessibilityReferences = accessibilityReferences
         self.accessibilityNodeIDs = accessibilityNodeIDs
         self.trace = trace
@@ -161,6 +164,7 @@ public struct RecordingAnnotation: Codable, Identifiable, Equatable, Sendable {
     public let text: String
     public let startTimestampNs: UInt64?
     public let endTimestampNs: UInt64?
+    public let applicationIDs: [String]
     public let accessibilityReferences: [String]
     public let accessibilityNodeIDs: [String]
     public let trace: RecordingAnnotationTrace?
@@ -202,6 +206,7 @@ public enum RecordingAnnotationStore {
                 text: draft.text.trimmingCharacters(in: .whitespacesAndNewlines),
                 startTimestampNs: draft.startTimestampNs,
                 endTimestampNs: draft.endTimestampNs,
+                applicationIDs: uniqueNonempty(draft.applicationIDs),
                 accessibilityReferences: normalizedReferences(draft.accessibilityReferences),
                 accessibilityNodeIDs: uniqueNonempty(draft.accessibilityNodeIDs),
                 trace: draft.trace
@@ -237,6 +242,7 @@ public enum RecordingAnnotationStore {
                 text: existing.text,
                 startTimestampNs: existing.startTimestampNs,
                 endTimestampNs: existing.endTimestampNs,
+                applicationIDs: existing.applicationIDs,
                 accessibilityReferences: existing.accessibilityReferences,
                 accessibilityNodeIDs: existing.accessibilityNodeIDs,
                 trace: existing.trace
@@ -302,22 +308,49 @@ public enum RecordingAnnotationStore {
                 throw RecordingError.usage("The trace ends after the annotation end time.")
             }
         }
-        let frameCount = try accessibilityFrameCount(in: packageURL)
+        let manifest = try RecordingManifest.load(from: packageURL)
+        let validApplicationIDs = Set(manifest.applications.map(\.id))
+        let applicationIDs = uniqueNonempty(draft.applicationIDs)
+        for applicationID in applicationIDs where !validApplicationIDs.contains(applicationID) {
+            throw RecordingError.usage("Application \(applicationID) does not exist in this recording.")
+        }
+        let records = try accessibilityRecords(in: packageURL, manifest: manifest)
+        let frameCount = records.count
         for reference in normalizedReferences(draft.accessibilityReferences) {
             guard let index = accessibilityIndex(reference), index < frameCount else {
                 throw RecordingError.usage(
                     "Frame \(reference) does not exist; this recording has \(frameCount) accessibility frames."
                 )
             }
+            if !applicationIDs.isEmpty,
+               !applicationIDs.contains(records[index].application.id) {
+                throw RecordingError.usage(
+                    "Frame \(reference) belongs to \(records[index].application.id), which is not an annotation application."
+                )
+            }
+        }
+        for nodeID in uniqueNonempty(draft.accessibilityNodeIDs) {
+            guard let separator = nodeID.firstIndex(of: ":") else {
+                throw RecordingError.usage("Accessibility node \(nodeID) has no application namespace.")
+            }
+            let applicationID = String(nodeID[..<separator])
+            guard validApplicationIDs.contains(applicationID) else {
+                throw RecordingError.usage("Accessibility node \(nodeID) names an unknown application.")
+            }
+            if !applicationIDs.isEmpty, !applicationIDs.contains(applicationID) {
+                throw RecordingError.usage(
+                    "Accessibility node \(nodeID) is not owned by an annotation application."
+                )
+            }
         }
     }
 
-    private static func accessibilityFrameCount(in packageURL: URL) throws -> Int {
-        let manifest = try RecordingManifest.load(from: packageURL)
-        let url = packageURL.appendingPathComponent(
-            manifest.files["accessibility"] ?? "accessibility.pb"
-        )
-        return try RecordingStreamReader.accessibility(at: url).count
+    private static func accessibilityRecords(
+        in packageURL: URL,
+        manifest: RecordingManifest
+    ) throws -> [AXSnapshotRecord] {
+        let url = try manifest.fileURL(for: "accessibility", in: packageURL)
+        return try RecordingStreamReader.accessibility(at: url)
     }
 
     private static func normalizedReferences(_ references: [String]) -> [String] {
