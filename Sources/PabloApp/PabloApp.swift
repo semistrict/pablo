@@ -33,7 +33,7 @@ private final class PabloReviewWindow: NSWindow {
 @main
 struct PabloMenuBarApp: App {
     @NSApplicationDelegateAdaptor(PabloApplicationDelegate.self) private var applicationDelegate
-    @StateObject private var model = RecorderModel()
+    @StateObject private var model = RecorderModel.shared
 
     var body: some Scene {
         MenuBarExtra {
@@ -61,6 +61,7 @@ struct PabloMenuBarApp: App {
 
 @MainActor
 final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
+    private var recorderWindowController: NSWindowController?
     private var reviewWindowControllers: [NSWindowController] = []
     private var reviewWindowRecency: [ObjectIdentifier] = []
     private var pendingRecordingURLs: [URL] = []
@@ -68,17 +69,11 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         didFinishLaunching = true
+        showRecorderWindow()
         let recordingURLs = pendingRecordingURLs
         pendingRecordingURLs.removeAll()
-        if !recordingURLs.isEmpty {
-            for recordingURL in recordingURLs {
-                showReviewWindow(preferredURL: recordingURL)
-            }
-        } else {
-            DispatchQueue.main.async { [weak self] in
-                guard let self, self.reviewWindowControllers.isEmpty else { return }
-                self.showReviewWindow()
-            }
+        for recordingURL in recordingURLs {
+            showReviewWindow(preferredURL: recordingURL)
         }
     }
 
@@ -125,6 +120,42 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
+    func showRecorderWindow() {
+        if let window = recorderWindowController?.window {
+            if window.isMiniaturized {
+                window.deminiaturize(nil)
+            }
+            window.makeKeyAndOrderFront(nil)
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            return
+        }
+
+        let content = NSHostingController(rootView: RecorderWindowView(
+            model: RecorderModel.shared,
+            showReview: { [weak self] preferredURL in
+                self?.showReviewWindow(preferredURL: preferredURL)
+            },
+            openRecordings: { [weak self] in self?.chooseRecordingsAndOpen() }
+        ))
+        let window = PabloReviewWindow(contentViewController: content)
+        window.title = "Pablo Recorder"
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.minSize = NSSize(width: 580, height: 350)
+        window.setContentSize(NSSize(width: 680, height: 340))
+        window.setFrameAutosaveName("PabloRecorderWindow")
+        window.isExcludedFromWindowsMenu = false
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        window.center()
+
+        let controller = NSWindowController(window: window)
+        recorderWindowController = controller
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.setWindowsNeedUpdate(true)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
     func windowDidBecomeKey(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
         noteReviewWindowActivated(window)
@@ -132,6 +163,11 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
 
     func windowWillClose(_ notification: Notification) {
         guard let window = notification.object as? NSWindow else { return }
+        if recorderWindowController?.window === window {
+            recorderWindowController = nil
+            NSApplication.shared.setWindowsNeedUpdate(true)
+            return
+        }
         let identifier = ObjectIdentifier(window)
         reviewWindowRecency.removeAll { $0 == identifier }
         reviewWindowControllers.removeAll { $0.window === window }
@@ -199,16 +235,7 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         _ sender: NSApplication,
         hasVisibleWindows flag: Bool
     ) -> Bool {
-        if let window = mostRecentReviewWindow {
-            if window.isMiniaturized {
-                window.deminiaturize(nil)
-            }
-            window.makeKeyAndOrderFront(nil)
-            noteReviewWindowActivated(window)
-            sender.activate(ignoringOtherApps: true)
-        } else {
-            showReviewWindow()
-        }
+        showRecorderWindow()
         return true
     }
 
@@ -224,8 +251,7 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
     }
 
     private func noteReviewWindowActivated(_ window: NSWindow) {
-        guard reviewWindowControllers.contains(where: { $0.window === window }) ||
-                window.delegate === self else { return }
+        guard reviewWindowControllers.contains(where: { $0.window === window }) else { return }
         let identifier = ObjectIdentifier(window)
         reviewWindowRecency.removeAll { $0 == identifier }
         reviewWindowRecency.append(identifier)
@@ -258,6 +284,8 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
 
 @MainActor
 final class RecorderModel: ObservableObject {
+    static let shared = RecorderModel()
+
     private struct ControlCaller {
         let displayName: String
         let applicationIdentifier: String?
@@ -902,6 +930,196 @@ enum PrivacyPane: String, CaseIterable, Identifiable {
         case .screenRecording:
             return "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture"
         }
+    }
+}
+
+struct RecorderWindowView: View {
+    @ObservedObject var model: RecorderModel
+    let showReview: @MainActor (URL?) -> Void
+    let openRecordings: @MainActor () -> Void
+    private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                ZStack {
+                    Circle()
+                        .fill(statusColor.opacity(0.14))
+                        .frame(width: 46, height: 46)
+                    Image(systemName: model.menuBarSymbol)
+                        .font(.system(size: 22, weight: .semibold))
+                        .foregroundStyle(statusColor)
+                }
+
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Pablo Recorder").font(.title2.weight(.semibold))
+                    Text(model.statusTitle)
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                }
+
+                if let scopeName = model.activeScopeName {
+                    Label(scopeName, systemImage: "record.circle")
+                        .font(.subheadline)
+                        .lineLimit(1)
+                        .foregroundStyle(.secondary)
+                }
+
+                Spacer(minLength: 12)
+
+                if model.isActive || model.status == .stopping {
+                    Text(formattedDuration)
+                        .font(.system(.title2, design: .monospaced, weight: .medium))
+                        .contentTransition(.numericText())
+                }
+            }
+
+            Divider()
+
+            controlRow
+
+            if let error = model.errorMessage {
+                errorCard(error)
+            }
+
+            Spacer(minLength: 0)
+
+            Divider()
+
+            HStack(spacing: 12) {
+                Button("Open Review") { showReview(model.lastRecordingURL) }
+                Button("Open Recordings…", action: openRecordings)
+                Button("Show Recordings") { model.revealRecordings() }
+                Spacer()
+                Button("Quit Pablo") { NSApplication.shared.terminate(nil) }
+            }
+        }
+        .padding(22)
+        .frame(minWidth: 520, minHeight: 270, alignment: .topLeading)
+        .background(Color(nsColor: .windowBackgroundColor))
+        .onAppear { model.refreshApplications() }
+        .onReceive(timer) { _ in model.updateElapsedTime() }
+    }
+
+    @ViewBuilder
+    private var controlRow: some View {
+        if model.status == .starting {
+            HStack(spacing: 12) {
+                ProgressView()
+                Text("Starting recording…")
+                    .font(.subheadline.weight(.medium))
+            }
+        } else if model.isActive || model.status == .stopping {
+            VStack(alignment: .leading, spacing: 14) {
+                Text(model.status == .paused ? "Capture is paused" : "Video, input, and accessibility are recording")
+                    .font(.subheadline)
+                    .foregroundStyle(.secondary)
+
+                HStack(spacing: 12) {
+                    Button {
+                        model.togglePause()
+                    } label: {
+                        Label(
+                            model.status == .paused ? "Resume Recording" : "Pause Recording",
+                            systemImage: model.status == .paused ? "play.fill" : "pause.fill"
+                        )
+                        .frame(minWidth: 145)
+                    }
+                    .buttonStyle(.bordered)
+                    .controlSize(.large)
+                    .disabled(model.status == .stopping)
+
+                    Button {
+                        Task { await model.stopRecording() }
+                    } label: {
+                        Label("Stop Recording", systemImage: "stop.fill")
+                            .frame(minWidth: 145)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .tint(.red)
+                    .disabled(model.status == .stopping)
+                }
+            }
+        } else {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 12) {
+                    Button {
+                        Task { await model.startScreenRecording() }
+                    } label: {
+                        Label("Record Entire Screen", systemImage: "display")
+                            .frame(minWidth: 175)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .controlSize(.large)
+                    .disabled(!model.canStartScreen)
+
+                    Menu {
+                        if model.applications.isEmpty {
+                            Text("No recordable applications")
+                        } else {
+                            ForEach(model.applications) { application in
+                                Button(application.name) {
+                                    model.selectedPID = application.pid
+                                    Task { await model.startApplicationRecording(pid: application.pid) }
+                                }
+                            }
+                        }
+                        Divider()
+                        Button("Refresh Applications") { model.refreshApplications() }
+                    } label: {
+                        Label("Record an Application", systemImage: "macwindow")
+                            .frame(minWidth: 175)
+                    }
+                    .menuStyle(.borderlessButton)
+                    .controlSize(.large)
+                    .disabled(model.status != .idle)
+                }
+
+                Toggle("Capture typed text", isOn: $model.captureText)
+                    .toggleStyle(.checkbox)
+                    .font(.subheadline)
+
+                Text("Recording and markup requests from other apps still require approval.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    private func errorCard(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Label("Pablo needs attention", systemImage: "exclamationmark.triangle.fill")
+                .font(.caption.weight(.semibold))
+                .foregroundStyle(.orange)
+            Text(message)
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer()
+            Menu("Open Privacy Settings") {
+                ForEach(PrivacyPane.allCases) { pane in
+                    Button(pane.rawValue) { model.openPrivacySettings(pane) }
+                }
+            }
+            .font(.caption)
+        }
+        .padding(9)
+        .background(.orange.opacity(0.08), in: RoundedRectangle(cornerRadius: 9))
+    }
+
+    private var statusColor: Color {
+        switch model.status {
+        case .recording: return .red
+        case .paused: return .orange
+        case .starting, .stopping: return .blue
+        case .idle: return .secondary
+        }
+    }
+
+    private var formattedDuration: String {
+        let seconds = model.elapsedNanoseconds / 1_000_000_000
+        return String(format: "%02d:%02d", seconds / 60, seconds % 60)
     }
 }
 

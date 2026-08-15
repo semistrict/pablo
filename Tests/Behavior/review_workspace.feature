@@ -173,12 +173,12 @@ Feature: Review recordings in one synchronized evidence workspace
     And each window retains independent playback, timeline zoom, and selection state
 
   @signed-app @manual
-  Scenario: Reopening Pablo from the Dock raises an existing recording
-    Given Pablo is running with one or more review windows behind another application
+  Scenario: Reopening Pablo from the Dock raises the dedicated recorder
+    Given Pablo is running with its recorder and one or more review windows behind another application
     When the tester clicks Pablo in the Dock
-    Then Pablo raises an existing review window and makes it key
-    And it does not create a duplicate window for an already open recording
-    And the raised window preserves its playback time, timeline zoom, and selection
+    Then Pablo raises the existing `Pablo Recorder` window and makes it key
+    And it does not create a duplicate recorder or review window
+    And every review window preserves its playback time, timeline zoom, and selection
 
   @automated
   # Expected: ReviewWindowPlacementTests.sideBySideFramesTileVisibleReviewWindows

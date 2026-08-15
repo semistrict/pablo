@@ -95,6 +95,26 @@ Feature: Record one Mac application on a single monotonic timeline
     And the same panel replaces the start actions with pause and stop controls
 
   @signed-app @manual
+  Scenario: A dedicated recorder window remains a complete control surface
+    Given Pablo's menu-bar icon is hidden because the menu bar has no remaining space
+    When the user launches Pablo or reopens it from the Dock
+    Then one dedicated `Pablo Recorder` window becomes key
+    And it is separate from every recording review window
+    When the user views the recorder window
+    Then `Record Entire Screen` is available
+    And `Record an Application` lists the same running applications as the menu-bar panel
+    And typed-text capture can be toggled before recording
+    And `Open Review`, `Open Recordings…`, `Show Recordings`, and `Quit Pablo` are available
+    When Pablo reports a permission error
+    Then the same privacy-settings choices as the menu-bar panel are available
+    When recording starts from the recorder window, menu-bar panel, or an approved app
+    Then the recorder window and menu-bar panel show the same recording state, scope, and elapsed time
+    And both replace their start actions with pause and stop controls
+    And review windows remain focused on replay and markup rather than recording controls
+    When the user pauses, resumes, or stops from the recorder window or menu-bar panel
+    Then both control surfaces update to the same state
+
+  @signed-app @manual
   Scenario: Show Recordings opens the recording directory
     Given Pablo is idle or recording
     When the user chooses `Show Recordings` in the menu-bar panel
