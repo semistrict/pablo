@@ -1,0 +1,62 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    name: Validate and test
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Install Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: "1.72.0"
+
+      - name: Report toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+          buf --version
+
+      - name: Validate protobuf sources
+        run: |
+          buf format --diff --exit-code
+          buf lint
+          buf generate
+          if [[ -n "$(git status --porcelain -- Sources/Pablo/Generated)" ]]; then
+            git diff -- Sources/Pablo/Generated
+            git status --short -- Sources/Pablo/Generated
+            echo "Generated Swift protobuf sources are not current." >&2
+            exit 1
+          fi
+
+      - name: Run tests
+        run: swift test
+
+      - name: Build arm64 app bundle
+        env:
+          PABLO_ARCHITECTURES: arm64
+        run: ./scripts/build-app.sh release
+
+      - name: Verify app bundle
+        run: |
+          executable=$(plutil -extract CFBundleExecutable raw Resources/Pablo-Info.plist)
+          test "$(lipo -archs "dist/Pablo.app/Contents/MacOS/$executable")" = arm64
+          test "$(lipo -archs dist/Pablo.app/Contents/MacOS/pablo)" = arm64
+          codesign --verify --deep --strict --verbose=2 dist/Pablo.app

@@ -11,6 +11,7 @@ build=$(plutil -extract CFBundleVersion raw "$info_plist")
 release_zip="$project_directory/dist/Pablo-$version-$build-mac-arm64.zip"
 temporary_directory=$(mktemp -d "${TMPDIR:-/tmp}/pablo-notarization.XXXXXX")
 submission_zip="$temporary_directory/Pablo.zip"
+trap 'rm -rf "$temporary_directory"' EXIT
 signing_identity=$(security find-identity -v -p codesigning \
     | sed -n 's/.*"\(Developer ID Application:[^"]*\)".*/\1/p' \
     | head -n 1)
@@ -26,8 +27,12 @@ PABLO_ARCHITECTURES="arm64" \
 
 codesign --verify --deep --strict --verbose=2 "$bundle_path"
 ditto -c -k --keepParent "$bundle_path" "$submission_zip"
+notary_arguments=(--keychain-profile "${PABLO_NOTARY_PROFILE:-pablo-notary}")
+if [[ -n ${PABLO_NOTARY_KEYCHAIN:-} ]]; then
+    notary_arguments+=(--keychain "$PABLO_NOTARY_KEYCHAIN")
+fi
 xcrun notarytool submit "$submission_zip" \
-    --keychain-profile pablo-notary \
+    "${notary_arguments[@]}" \
     --wait
 xcrun stapler staple "$bundle_path"
 xcrun stapler validate "$bundle_path"

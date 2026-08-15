@@ -210,6 +210,8 @@ That script:
 
 Before publishing, extract the exact ZIP into a clean temporary directory and verify the extracted app with `codesign`, `spctl`, and `xcrun stapler validate`. Publish the ZIP on the matching GitHub release so the README's latest-release link remains stable.
 
+GitHub Actions configuration and required release-environment secrets are documented in `docs/release-automation.md`. CI runs for pull requests and `main`; a matching version tag at the current `main` commit starts the protected signing, notarization, attestation, and publication job.
+
 Do not commit certificates, private keys, provisioning profiles, recordings, build products, or notarization credentials. The existing `.gitignore` covers the common forms.
 
 ## Product boundaries

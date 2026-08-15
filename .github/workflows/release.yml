@@ -1,0 +1,203 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  validate:
+    name: Validate release source
+    runs-on: macos-26
+    timeout-minutes: 30
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          fetch-depth: 0
+
+      - name: Require the version tag at current main
+        run: |
+          version=$(plutil -extract CFBundleShortVersionString raw Resources/Pablo-Info.plist)
+          build=$(plutil -extract CFBundleVersion raw Resources/Pablo-Info.plist)
+          test "$GITHUB_REF_NAME" = "v$version"
+          [[ "$build" =~ ^[0-9]+$ ]]
+          git fetch --no-tags origin main
+          release_sha=$(git rev-parse "${GITHUB_SHA}^{commit}")
+          main_sha=$(git rev-parse FETCH_HEAD)
+          if [[ "$release_sha" != "$main_sha" ]]; then
+            echo "Release tags must point at the current main commit." >&2
+            exit 1
+          fi
+
+      - name: Install Buf
+        uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
+        with:
+          version: "1.72.0"
+
+      - name: Validate protobuf sources
+        run: |
+          buf format --diff --exit-code
+          buf lint
+          buf generate
+          if [[ -n "$(git status --porcelain -- Sources/Pablo/Generated)" ]]; then
+            git diff -- Sources/Pablo/Generated
+            git status --short -- Sources/Pablo/Generated
+            echo "Generated Swift protobuf sources are not current." >&2
+            exit 1
+          fi
+
+      - name: Run tests
+        run: swift test
+
+  publish:
+    name: Sign, notarize, and publish
+    needs: validate
+    runs-on: macos-26
+    timeout-minutes: 45
+    environment: release
+    permissions:
+      contents: write
+      id-token: write
+      attestations: write
+    steps:
+      - name: Check out source
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+
+      - name: Check release credentials
+        id: credentials
+        env:
+          DEVELOPER_ID_CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}
+          DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          NOTARY_API_KEY_P8_BASE64: ${{ secrets.NOTARY_API_KEY_P8_BASE64 }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+        run: |
+          missing=()
+          [[ -z "$DEVELOPER_ID_CERTIFICATE_P12_BASE64" ]] && missing+=(DEVELOPER_ID_CERTIFICATE_P12_BASE64)
+          [[ -z "$DEVELOPER_ID_CERTIFICATE_PASSWORD" ]] && missing+=(DEVELOPER_ID_CERTIFICATE_PASSWORD)
+          [[ -z "$NOTARY_API_KEY_P8_BASE64" ]] && missing+=(NOTARY_API_KEY_P8_BASE64)
+          [[ -z "$NOTARY_API_KEY_ID" ]] && missing+=(NOTARY_API_KEY_ID)
+          [[ -z "$NOTARY_API_ISSUER_ID" ]] && missing+=(NOTARY_API_ISSUER_ID)
+
+          if (( ${#missing[@]} > 0 )); then
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "Release publishing is disabled because required release credentials are not configured."
+            printf 'Missing: %s\n' "${missing[*]}"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Import release credentials
+        if: steps.credentials.outputs.configured == 'true'
+        env:
+          DEVELOPER_ID_CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}
+          DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          NOTARY_API_KEY_P8_BASE64: ${{ secrets.NOTARY_API_KEY_P8_BASE64 }}
+          NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
+          NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
+        run: |
+          certificate_path="$RUNNER_TEMP/developer-id.p12"
+          api_key_path="$RUNNER_TEMP/AuthKey_${NOTARY_API_KEY_ID}.p8"
+          keychain_path="$RUNNER_TEMP/pablo-release.keychain-db"
+          keychain_password=$(openssl rand -hex 32)
+          echo "::add-mask::$keychain_password"
+
+          printf '%s' "$DEVELOPER_ID_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          printf '%s' "$NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$api_key_path"
+          chmod 600 "$certificate_path" "$api_key_path"
+
+          security create-keychain -p "$keychain_password" "$keychain_path"
+          security set-keychain-settings -lut 2700 "$keychain_path"
+          security unlock-keychain -p "$keychain_password" "$keychain_path"
+          security import "$certificate_path" \
+            -k "$keychain_path" \
+            -P "$DEVELOPER_ID_CERTIFICATE_PASSWORD" \
+            -T /usr/bin/codesign \
+            -T /usr/bin/security
+          security set-key-partition-list \
+            -S apple-tool:,apple:,codesign: \
+            -s \
+            -k "$keychain_password" \
+            "$keychain_path"
+          security list-keychains -d user -s "$keychain_path"
+          security default-keychain -d user -s "$keychain_path"
+
+          xcrun notarytool store-credentials pablo-notary \
+            --key "$api_key_path" \
+            --key-id "$NOTARY_API_KEY_ID" \
+            --issuer "$NOTARY_API_ISSUER_ID" \
+            --keychain "$keychain_path"
+
+          {
+            echo "PABLO_RELEASE_KEYCHAIN=$keychain_path"
+            echo "PABLO_NOTARY_KEYCHAIN=$keychain_path"
+          } >> "$GITHUB_ENV"
+
+      - name: Build signed and notarized arm64 release
+        if: steps.credentials.outputs.configured == 'true'
+        run: ./scripts/build-distribution.sh
+
+      - name: Locate release artifact
+        id: artifact
+        if: steps.credentials.outputs.configured == 'true'
+        run: |
+          version=$(plutil -extract CFBundleShortVersionString raw Resources/Pablo-Info.plist)
+          build=$(plutil -extract CFBundleVersion raw Resources/Pablo-Info.plist)
+          release_zip="dist/Pablo-$version-$build-mac-arm64.zip"
+          test -f "$release_zip"
+          echo "path=$release_zip" >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Verify exact packaged artifact
+        if: steps.credentials.outputs.configured == 'true'
+        env:
+          RELEASE_ZIP: ${{ steps.artifact.outputs.path }}
+        run: |
+          verification_directory=$(mktemp -d "$RUNNER_TEMP/pablo-release-verification.XXXXXX")
+          ditto -x -k "$RELEASE_ZIP" "$verification_directory"
+          app_path="$verification_directory/Pablo.app"
+          executable=$(plutil -extract CFBundleExecutable raw "$app_path/Contents/Info.plist")
+
+          test "$(lipo -archs "$app_path/Contents/MacOS/$executable")" = arm64
+          test "$(lipo -archs "$app_path/Contents/MacOS/pablo")" = arm64
+          codesign --verify --deep --strict --verbose=4 "$app_path"
+          spctl --assess --type execute --verbose=4 "$app_path"
+          xcrun stapler validate "$app_path"
+          shasum -a 256 "$RELEASE_ZIP"
+
+      - name: Attest release provenance
+        if: steps.credentials.outputs.configured == 'true'
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: ${{ steps.artifact.outputs.path }}
+
+      - name: Publish GitHub release
+        if: steps.credentials.outputs.configured == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_ZIP: ${{ steps.artifact.outputs.path }}
+          VERSION: ${{ steps.artifact.outputs.version }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            "$RELEASE_ZIP" \
+            --verify-tag \
+            --title "Pablo $VERSION" \
+            --generate-notes
+
+      - name: Remove release keychain
+        if: always() && steps.credentials.outputs.configured == 'true'
+        run: |
+          if [[ -n "${PABLO_RELEASE_KEYCHAIN:-}" && -e "$PABLO_RELEASE_KEYCHAIN" ]]; then
+            security delete-keychain "$PABLO_RELEASE_KEYCHAIN"
+          fi
+          rm -f \
+            "$RUNNER_TEMP/developer-id.p12" \
+            "$RUNNER_TEMP"/AuthKey_*.p8
