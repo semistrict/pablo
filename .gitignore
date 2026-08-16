@@ -2,6 +2,8 @@
 .swiftpm/
 dist/
 DerivedData/
+node_modules/
+.pnpm-store/
 *.xcarchive
 *.dSYM/
 *.dSYM.zip
@@ -19,3 +21,4 @@ xcuserdata/
 *.provisionprofile
 
 .DS_Store
+/AGENTS.local.md

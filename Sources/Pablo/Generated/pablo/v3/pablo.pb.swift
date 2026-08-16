@@ -8,6 +8,11 @@
 // For information on using the generated types, please see the documentation:
 //   https://github.com/apple/swift-protobuf/
 
+#if canImport(FoundationEssentials)
+import FoundationEssentials
+#else
+import Foundation
+#endif
 import SwiftProtobuf
 
 // If the compiler emits an error on this type, it is because this file
@@ -18,44 +23,6 @@ import SwiftProtobuf
 fileprivate nonisolated struct _GeneratedWithProtocGenSwiftVersion: SwiftProtobuf.ProtobufAPIVersionCheck {
   struct _2: SwiftProtobuf.ProtobufAPIVersion_2 {}
   typealias Version = _2
-}
-
-nonisolated enum PabloV3RecordingScopeKind: SwiftProtobuf.Enum, Swift.CaseIterable {
-  typealias RawValue = Int
-  case unspecified // = 0
-  case application // = 1
-  case display // = 2
-  case UNRECOGNIZED(Int)
-
-  init() {
-    self = .unspecified
-  }
-
-  init?(rawValue: Int) {
-    switch rawValue {
-    case 0: self = .unspecified
-    case 1: self = .application
-    case 2: self = .display
-    default: self = .UNRECOGNIZED(rawValue)
-    }
-  }
-
-  var rawValue: Int {
-    switch self {
-    case .unspecified: return 0
-    case .application: return 1
-    case .display: return 2
-    case .UNRECOGNIZED(let i): return i
-    }
-  }
-
-  // The compiler won't synthesize support with the UNRECOGNIZED case.
-  static let allCases: [PabloV3RecordingScopeKind] = [
-    .unspecified,
-    .application,
-    .display,
-  ]
-
 }
 
 nonisolated enum PabloV3LiveActionKind: SwiftProtobuf.Enum, Swift.CaseIterable {
@@ -292,6 +259,84 @@ nonisolated enum PabloV3AutomationActionPhase: SwiftProtobuf.Enum, Swift.CaseIte
 
 }
 
+nonisolated enum PabloV3SafariDOMCommandKind: SwiftProtobuf.Enum, Swift.CaseIterable {
+  typealias RawValue = Int
+  case unspecified // = 0
+  case dumpDom // = 1
+  case dumpAccessibilityTree // = 2
+  case click // = 3
+  case focus // = 4
+  case setValue // = 5
+  case scrollIntoView // = 6
+  case listTabs // = 7
+  case startRrwebRecording // = 8
+  case pauseRrwebRecording // = 9
+  case resumeRrwebRecording // = 10
+  case stopRrwebRecording // = 11
+  case rrwebRecordingStatus // = 12
+  case UNRECOGNIZED(Int)
+
+  init() {
+    self = .unspecified
+  }
+
+  init?(rawValue: Int) {
+    switch rawValue {
+    case 0: self = .unspecified
+    case 1: self = .dumpDom
+    case 2: self = .dumpAccessibilityTree
+    case 3: self = .click
+    case 4: self = .focus
+    case 5: self = .setValue
+    case 6: self = .scrollIntoView
+    case 7: self = .listTabs
+    case 8: self = .startRrwebRecording
+    case 9: self = .pauseRrwebRecording
+    case 10: self = .resumeRrwebRecording
+    case 11: self = .stopRrwebRecording
+    case 12: self = .rrwebRecordingStatus
+    default: self = .UNRECOGNIZED(rawValue)
+    }
+  }
+
+  var rawValue: Int {
+    switch self {
+    case .unspecified: return 0
+    case .dumpDom: return 1
+    case .dumpAccessibilityTree: return 2
+    case .click: return 3
+    case .focus: return 4
+    case .setValue: return 5
+    case .scrollIntoView: return 6
+    case .listTabs: return 7
+    case .startRrwebRecording: return 8
+    case .pauseRrwebRecording: return 9
+    case .resumeRrwebRecording: return 10
+    case .stopRrwebRecording: return 11
+    case .rrwebRecordingStatus: return 12
+    case .UNRECOGNIZED(let i): return i
+    }
+  }
+
+  // The compiler won't synthesize support with the UNRECOGNIZED case.
+  static let allCases: [PabloV3SafariDOMCommandKind] = [
+    .unspecified,
+    .dumpDom,
+    .dumpAccessibilityTree,
+    .click,
+    .focus,
+    .setValue,
+    .scrollIntoView,
+    .listTabs,
+    .startRrwebRecording,
+    .pauseRrwebRecording,
+    .resumeRrwebRecording,
+    .stopRrwebRecording,
+    .rrwebRecordingStatus,
+  ]
+
+}
+
 nonisolated enum PabloV3AnnotationKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   typealias RawValue = Int
   case unspecified // = 0
@@ -410,122 +455,6 @@ nonisolated enum PabloV3AnnotationAuthorType: SwiftProtobuf.Enum, Swift.CaseIter
     .unspecified,
     .human,
     .application,
-  ]
-
-}
-
-nonisolated enum PabloV3LiveInspectionKind: SwiftProtobuf.Enum, Swift.CaseIterable {
-  typealias RawValue = Int
-  case unspecified // = 0
-  case inspect // = 1
-  case frames // = 2
-  case frame // = 3
-  case events // = 4
-  case annotations // = 5
-  case UNRECOGNIZED(Int)
-
-  init() {
-    self = .unspecified
-  }
-
-  init?(rawValue: Int) {
-    switch rawValue {
-    case 0: self = .unspecified
-    case 1: self = .inspect
-    case 2: self = .frames
-    case 3: self = .frame
-    case 4: self = .events
-    case 5: self = .annotations
-    default: self = .UNRECOGNIZED(rawValue)
-    }
-  }
-
-  var rawValue: Int {
-    switch self {
-    case .unspecified: return 0
-    case .inspect: return 1
-    case .frames: return 2
-    case .frame: return 3
-    case .events: return 4
-    case .annotations: return 5
-    case .UNRECOGNIZED(let i): return i
-    }
-  }
-
-  // The compiler won't synthesize support with the UNRECOGNIZED case.
-  static let allCases: [PabloV3LiveInspectionKind] = [
-    .unspecified,
-    .inspect,
-    .frames,
-    .frame,
-    .events,
-    .annotations,
-  ]
-
-}
-
-nonisolated enum PabloV3ControlMethod: SwiftProtobuf.Enum, Swift.CaseIterable {
-  typealias RawValue = Int
-  case unspecified // = 0
-  case recordStart // = 1
-  case recordPause // = 2
-  case recordResume // = 3
-  case recordStop // = 4
-  case recordStatus // = 5
-  case annotationAdd // = 6
-  case annotationResolve // = 7
-  case inspectLive // = 8
-  case actionLive // = 9
-  case UNRECOGNIZED(Int)
-
-  init() {
-    self = .unspecified
-  }
-
-  init?(rawValue: Int) {
-    switch rawValue {
-    case 0: self = .unspecified
-    case 1: self = .recordStart
-    case 2: self = .recordPause
-    case 3: self = .recordResume
-    case 4: self = .recordStop
-    case 5: self = .recordStatus
-    case 6: self = .annotationAdd
-    case 7: self = .annotationResolve
-    case 8: self = .inspectLive
-    case 9: self = .actionLive
-    default: self = .UNRECOGNIZED(rawValue)
-    }
-  }
-
-  var rawValue: Int {
-    switch self {
-    case .unspecified: return 0
-    case .recordStart: return 1
-    case .recordPause: return 2
-    case .recordResume: return 3
-    case .recordStop: return 4
-    case .recordStatus: return 5
-    case .annotationAdd: return 6
-    case .annotationResolve: return 7
-    case .inspectLive: return 8
-    case .actionLive: return 9
-    case .UNRECOGNIZED(let i): return i
-    }
-  }
-
-  // The compiler won't synthesize support with the UNRECOGNIZED case.
-  static let allCases: [PabloV3ControlMethod] = [
-    .unspecified,
-    .recordStart,
-    .recordPause,
-    .recordResume,
-    .recordStop,
-    .recordStatus,
-    .annotationAdd,
-    .annotationResolve,
-    .inspectLive,
-    .actionLive,
   ]
 
 }
@@ -767,145 +696,110 @@ nonisolated struct PabloV3LiveApplicationTarget: Sendable {
   fileprivate var _appName: String? = nil
 }
 
-nonisolated struct PabloV3LiveActionRequest: @unchecked Sendable {
+nonisolated struct PabloV3SafariDOMCommand: Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var kind: PabloV3LiveActionKind {
-    get {_storage._kind}
-    set {_uniqueStorage()._kind = newValue}
-  }
+  var id: String = String()
 
-  var target: PabloV3LiveApplicationTarget {
-    get {_storage._target ?? PabloV3LiveApplicationTarget()}
-    set {_uniqueStorage()._target = newValue}
+  var kind: PabloV3SafariDOMCommandKind = .unspecified
+
+  var selector: String {
+    get {_selector ?? String()}
+    set {_selector = newValue}
   }
-  /// Returns true if `target` has been explicitly set.
-  var hasTarget: Bool {_storage._target != nil}
-  /// Clears the value of `target`. Subsequent reads from it will return its default value.
-  mutating func clearTarget() {_uniqueStorage()._target = nil}
+  /// Returns true if `selector` has been explicitly set.
+  var hasSelector: Bool {self._selector != nil}
+  /// Clears the value of `selector`. Subsequent reads from it will return its default value.
+  mutating func clearSelector() {self._selector = nil}
 
   var nodeID: String {
-    get {_storage._nodeID ?? String()}
-    set {_uniqueStorage()._nodeID = newValue}
+    get {_nodeID ?? String()}
+    set {_nodeID = newValue}
   }
   /// Returns true if `nodeID` has been explicitly set.
-  var hasNodeID: Bool {_storage._nodeID != nil}
+  var hasNodeID: Bool {self._nodeID != nil}
   /// Clears the value of `nodeID`. Subsequent reads from it will return its default value.
-  mutating func clearNodeID() {_uniqueStorage()._nodeID = nil}
+  mutating func clearNodeID() {self._nodeID = nil}
 
-  var point: PabloV3Point {
-    get {_storage._point ?? PabloV3Point()}
-    set {_uniqueStorage()._point = newValue}
+  var value: String {
+    get {_value ?? String()}
+    set {_value = newValue}
   }
-  /// Returns true if `point` has been explicitly set.
-  var hasPoint: Bool {_storage._point != nil}
-  /// Clears the value of `point`. Subsequent reads from it will return its default value.
-  mutating func clearPoint() {_uniqueStorage()._point = nil}
+  /// Returns true if `value` has been explicitly set.
+  var hasValue: Bool {self._value != nil}
+  /// Clears the value of `value`. Subsequent reads from it will return its default value.
+  mutating func clearValue() {self._value = nil}
 
-  var fromNodeID: String {
-    get {_storage._fromNodeID ?? String()}
-    set {_uniqueStorage()._fromNodeID = newValue}
-  }
-  /// Returns true if `fromNodeID` has been explicitly set.
-  var hasFromNodeID: Bool {_storage._fromNodeID != nil}
-  /// Clears the value of `fromNodeID`. Subsequent reads from it will return its default value.
-  mutating func clearFromNodeID() {_uniqueStorage()._fromNodeID = nil}
+  var includeHidden: Bool = false
 
-  var fromPoint: PabloV3Point {
-    get {_storage._fromPoint ?? PabloV3Point()}
-    set {_uniqueStorage()._fromPoint = newValue}
-  }
-  /// Returns true if `fromPoint` has been explicitly set.
-  var hasFromPoint: Bool {_storage._fromPoint != nil}
-  /// Clears the value of `fromPoint`. Subsequent reads from it will return its default value.
-  mutating func clearFromPoint() {_uniqueStorage()._fromPoint = nil}
+  var maxNodes: UInt32 = 0
 
-  var toNodeID: String {
-    get {_storage._toNodeID ?? String()}
-    set {_uniqueStorage()._toNodeID = newValue}
-  }
-  /// Returns true if `toNodeID` has been explicitly set.
-  var hasToNodeID: Bool {_storage._toNodeID != nil}
-  /// Clears the value of `toNodeID`. Subsequent reads from it will return its default value.
-  mutating func clearToNodeID() {_uniqueStorage()._toNodeID = nil}
+  var maxDepth: UInt32 = 0
 
-  var toPoint: PabloV3Point {
-    get {_storage._toPoint ?? PabloV3Point()}
-    set {_uniqueStorage()._toPoint = newValue}
+  var tabID: Int64 {
+    get {_tabID ?? 0}
+    set {_tabID = newValue}
   }
-  /// Returns true if `toPoint` has been explicitly set.
-  var hasToPoint: Bool {_storage._toPoint != nil}
-  /// Clears the value of `toPoint`. Subsequent reads from it will return its default value.
-  mutating func clearToPoint() {_uniqueStorage()._toPoint = nil}
+  /// Returns true if `tabID` has been explicitly set.
+  var hasTabID: Bool {self._tabID != nil}
+  /// Clears the value of `tabID`. Subsequent reads from it will return its default value.
+  mutating func clearTabID() {self._tabID = nil}
 
-  var mouseButton: PabloV3MouseButton {
-    get {_storage._mouseButton}
-    set {_uniqueStorage()._mouseButton = newValue}
+  var recordingID: String {
+    get {_recordingID ?? String()}
+    set {_recordingID = newValue}
   }
-
-  var clickCount: Int64 {
-    get {_storage._clickCount}
-    set {_uniqueStorage()._clickCount = newValue}
-  }
-
-  var duration: Double {
-    get {_storage._duration}
-    set {_uniqueStorage()._duration = newValue}
-  }
-
-  var scrollDirection: PabloV3ScrollDirection {
-    get {_storage._scrollDirection ?? .unspecified}
-    set {_uniqueStorage()._scrollDirection = newValue}
-  }
-  /// Returns true if `scrollDirection` has been explicitly set.
-  var hasScrollDirection: Bool {_storage._scrollDirection != nil}
-  /// Clears the value of `scrollDirection`. Subsequent reads from it will return its default value.
-  mutating func clearScrollDirection() {_uniqueStorage()._scrollDirection = nil}
-
-  var scrollAmount: Int64 {
-    get {_storage._scrollAmount}
-    set {_uniqueStorage()._scrollAmount = newValue}
-  }
-
-  var text: String {
-    get {_storage._text ?? String()}
-    set {_uniqueStorage()._text = newValue}
-  }
-  /// Returns true if `text` has been explicitly set.
-  var hasText: Bool {_storage._text != nil}
-  /// Clears the value of `text`. Subsequent reads from it will return its default value.
-  mutating func clearText() {_uniqueStorage()._text = nil}
-
-  var key: String {
-    get {_storage._key ?? String()}
-    set {_uniqueStorage()._key = newValue}
-  }
-  /// Returns true if `key` has been explicitly set.
-  var hasKey: Bool {_storage._key != nil}
-  /// Clears the value of `key`. Subsequent reads from it will return its default value.
-  mutating func clearKey() {_uniqueStorage()._key = nil}
-
-  var modifiers: [PabloV3KeyModifier] {
-    get {_storage._modifiers}
-    set {_uniqueStorage()._modifiers = newValue}
-  }
-
-  var accessibilityAction: String {
-    get {_storage._accessibilityAction ?? String()}
-    set {_uniqueStorage()._accessibilityAction = newValue}
-  }
-  /// Returns true if `accessibilityAction` has been explicitly set.
-  var hasAccessibilityAction: Bool {_storage._accessibilityAction != nil}
-  /// Clears the value of `accessibilityAction`. Subsequent reads from it will return its default value.
-  mutating func clearAccessibilityAction() {_uniqueStorage()._accessibilityAction = nil}
+  /// Returns true if `recordingID` has been explicitly set.
+  var hasRecordingID: Bool {self._recordingID != nil}
+  /// Clears the value of `recordingID`. Subsequent reads from it will return its default value.
+  mutating func clearRecordingID() {self._recordingID = nil}
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
-  fileprivate var _storage = _StorageClass.defaultInstance
+  fileprivate var _selector: String? = nil
+  fileprivate var _nodeID: String? = nil
+  fileprivate var _value: String? = nil
+  fileprivate var _tabID: Int64? = nil
+  fileprivate var _recordingID: String? = nil
+}
+
+nonisolated struct PabloV3SafariDOMResponse: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var id: String = String()
+
+  var success: Bool = false
+
+  var jsonPayload: Data {
+    get {_jsonPayload ?? Data()}
+    set {_jsonPayload = newValue}
+  }
+  /// Returns true if `jsonPayload` has been explicitly set.
+  var hasJsonPayload: Bool {self._jsonPayload != nil}
+  /// Clears the value of `jsonPayload`. Subsequent reads from it will return its default value.
+  mutating func clearJsonPayload() {self._jsonPayload = nil}
+
+  var error: String {
+    get {_error ?? String()}
+    set {_error = newValue}
+  }
+  /// Returns true if `error` has been explicitly set.
+  var hasError: Bool {self._error != nil}
+  /// Clears the value of `error`. Subsequent reads from it will return its default value.
+  mutating func clearError() {self._error = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _jsonPayload: Data? = nil
+  fileprivate var _error: String? = nil
 }
 
 nonisolated struct PabloV3AutomationCaller: Sendable {
@@ -1124,6 +1018,11 @@ nonisolated struct PabloV3AutomationActionTrace: @unchecked Sendable {
   var hasResolvedApplicationID: Bool {_storage._resolvedApplicationID != nil}
   /// Clears the value of `resolvedApplicationID`. Subsequent reads from it will return its default value.
   mutating func clearResolvedApplicationID() {_uniqueStorage()._resolvedApplicationID = nil}
+
+  var foregroundActionsUnlocked: Bool {
+    get {_storage._foregroundActionsUnlocked}
+    set {_uniqueStorage()._foregroundActionsUnlocked = newValue}
+  }
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1526,57 +1425,6 @@ nonisolated struct PabloV3AnnotationTrace: Sendable {
   init() {}
 }
 
-nonisolated struct PabloV3AnnotationDraft: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var kind: PabloV3AnnotationKind = .unspecified
-
-  var text: String = String()
-
-  var startTimestampNs: UInt64 {
-    get {_startTimestampNs ?? 0}
-    set {_startTimestampNs = newValue}
-  }
-  /// Returns true if `startTimestampNs` has been explicitly set.
-  var hasStartTimestampNs: Bool {self._startTimestampNs != nil}
-  /// Clears the value of `startTimestampNs`. Subsequent reads from it will return its default value.
-  mutating func clearStartTimestampNs() {self._startTimestampNs = nil}
-
-  var endTimestampNs: UInt64 {
-    get {_endTimestampNs ?? 0}
-    set {_endTimestampNs = newValue}
-  }
-  /// Returns true if `endTimestampNs` has been explicitly set.
-  var hasEndTimestampNs: Bool {self._endTimestampNs != nil}
-  /// Clears the value of `endTimestampNs`. Subsequent reads from it will return its default value.
-  mutating func clearEndTimestampNs() {self._endTimestampNs = nil}
-
-  var applicationIds: [String] = []
-
-  var accessibilityReferences: [String] = []
-
-  var accessibilityNodeIds: [String] = []
-
-  var trace: PabloV3AnnotationTrace {
-    get {_trace ?? PabloV3AnnotationTrace()}
-    set {_trace = newValue}
-  }
-  /// Returns true if `trace` has been explicitly set.
-  var hasTrace: Bool {self._trace != nil}
-  /// Clears the value of `trace`. Subsequent reads from it will return its default value.
-  mutating func clearTrace() {self._trace = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _startTimestampNs: UInt64? = nil
-  fileprivate var _endTimestampNs: UInt64? = nil
-  fileprivate var _trace: PabloV3AnnotationTrace? = nil
-}
-
 nonisolated struct PabloV3RecordingAnnotation: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -1684,317 +1532,9 @@ nonisolated struct PabloV3RecordingAnnotation: @unchecked Sendable {
   fileprivate var _storage = _StorageClass.defaultInstance
 }
 
-nonisolated struct PabloV3LiveInspectionRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var kind: PabloV3LiveInspectionKind = .unspecified
-
-  var target: PabloV3LiveApplicationTarget {
-    get {_target ?? PabloV3LiveApplicationTarget()}
-    set {_target = newValue}
-  }
-  /// Returns true if `target` has been explicitly set.
-  var hasTarget: Bool {self._target != nil}
-  /// Clears the value of `target`. Subsequent reads from it will return its default value.
-  mutating func clearTarget() {self._target = nil}
-
-  var reference: String {
-    get {_reference ?? String()}
-    set {_reference = newValue}
-  }
-  /// Returns true if `reference` has been explicitly set.
-  var hasReference: Bool {self._reference != nil}
-  /// Clears the value of `reference`. Subsequent reads from it will return its default value.
-  mutating func clearReference() {self._reference = nil}
-
-  var changedOnly: Bool = false
-
-  var limit: Int64 = 0
-
-  var json: Bool = false
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _target: PabloV3LiveApplicationTarget? = nil
-  fileprivate var _reference: String? = nil
-}
-
-nonisolated struct PabloV3RecordOptions: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var scope: PabloV3RecordingScopeKind = .unspecified
-
-  var pid: Int32 {
-    get {_pid ?? 0}
-    set {_pid = newValue}
-  }
-  /// Returns true if `pid` has been explicitly set.
-  var hasPid: Bool {self._pid != nil}
-  /// Clears the value of `pid`. Subsequent reads from it will return its default value.
-  mutating func clearPid() {self._pid = nil}
-
-  var bundleIdentifier: String {
-    get {_bundleIdentifier ?? String()}
-    set {_bundleIdentifier = newValue}
-  }
-  /// Returns true if `bundleIdentifier` has been explicitly set.
-  var hasBundleIdentifier: Bool {self._bundleIdentifier != nil}
-  /// Clears the value of `bundleIdentifier`. Subsequent reads from it will return its default value.
-  mutating func clearBundleIdentifier() {self._bundleIdentifier = nil}
-
-  var appName: String {
-    get {_appName ?? String()}
-    set {_appName = newValue}
-  }
-  /// Returns true if `appName` has been explicitly set.
-  var hasAppName: Bool {self._appName != nil}
-  /// Clears the value of `appName`. Subsequent reads from it will return its default value.
-  mutating func clearAppName() {self._appName = nil}
-
-  var displayID: UInt32 {
-    get {_displayID ?? 0}
-    set {_displayID = newValue}
-  }
-  /// Returns true if `displayID` has been explicitly set.
-  var hasDisplayID: Bool {self._displayID != nil}
-  /// Clears the value of `displayID`. Subsequent reads from it will return its default value.
-  mutating func clearDisplayID() {self._displayID = nil}
-
-  var outputPath: String {
-    get {_outputPath ?? String()}
-    set {_outputPath = newValue}
-  }
-  /// Returns true if `outputPath` has been explicitly set.
-  var hasOutputPath: Bool {self._outputPath != nil}
-  /// Clears the value of `outputPath`. Subsequent reads from it will return its default value.
-  mutating func clearOutputPath() {self._outputPath = nil}
-
-  var duration: Double {
-    get {_duration ?? 0}
-    set {_duration = newValue}
-  }
-  /// Returns true if `duration` has been explicitly set.
-  var hasDuration: Bool {self._duration != nil}
-  /// Clears the value of `duration`. Subsequent reads from it will return its default value.
-  mutating func clearDuration() {self._duration = nil}
-
-  var snapshotInterval: Double = 0
-
-  var captureText: Bool = false
-
-  var framesPerSecond: Int64 = 0
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _pid: Int32? = nil
-  fileprivate var _bundleIdentifier: String? = nil
-  fileprivate var _appName: String? = nil
-  fileprivate var _displayID: UInt32? = nil
-  fileprivate var _outputPath: String? = nil
-  fileprivate var _duration: Double? = nil
-}
-
-nonisolated struct PabloV3AnnotationRequest: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var recordingPath: String = String()
-
-  var draft: PabloV3AnnotationDraft {
-    get {_draft ?? PabloV3AnnotationDraft()}
-    set {_draft = newValue}
-  }
-  /// Returns true if `draft` has been explicitly set.
-  var hasDraft: Bool {self._draft != nil}
-  /// Clears the value of `draft`. Subsequent reads from it will return its default value.
-  mutating func clearDraft() {self._draft = nil}
-
-  var reference: String {
-    get {_reference ?? String()}
-    set {_reference = newValue}
-  }
-  /// Returns true if `reference` has been explicitly set.
-  var hasReference: Bool {self._reference != nil}
-  /// Clears the value of `reference`. Subsequent reads from it will return its default value.
-  mutating func clearReference() {self._reference = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _draft: PabloV3AnnotationDraft? = nil
-  fileprivate var _reference: String? = nil
-}
-
-nonisolated struct PabloV3CallRequest: @unchecked Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var protocolVersion: UInt32 {
-    get {_storage._protocolVersion}
-    set {_uniqueStorage()._protocolVersion = newValue}
-  }
-
-  var id: String {
-    get {_storage._id}
-    set {_uniqueStorage()._id = newValue}
-  }
-
-  var method: PabloV3ControlMethod {
-    get {_storage._method}
-    set {_uniqueStorage()._method = newValue}
-  }
-
-  var recordOptions: PabloV3RecordOptions {
-    get {_storage._recordOptions ?? PabloV3RecordOptions()}
-    set {_uniqueStorage()._recordOptions = newValue}
-  }
-  /// Returns true if `recordOptions` has been explicitly set.
-  var hasRecordOptions: Bool {_storage._recordOptions != nil}
-  /// Clears the value of `recordOptions`. Subsequent reads from it will return its default value.
-  mutating func clearRecordOptions() {_uniqueStorage()._recordOptions = nil}
-
-  var annotationRequest: PabloV3AnnotationRequest {
-    get {_storage._annotationRequest ?? PabloV3AnnotationRequest()}
-    set {_uniqueStorage()._annotationRequest = newValue}
-  }
-  /// Returns true if `annotationRequest` has been explicitly set.
-  var hasAnnotationRequest: Bool {_storage._annotationRequest != nil}
-  /// Clears the value of `annotationRequest`. Subsequent reads from it will return its default value.
-  mutating func clearAnnotationRequest() {_uniqueStorage()._annotationRequest = nil}
-
-  var liveInspectionRequest: PabloV3LiveInspectionRequest {
-    get {_storage._liveInspectionRequest ?? PabloV3LiveInspectionRequest()}
-    set {_uniqueStorage()._liveInspectionRequest = newValue}
-  }
-  /// Returns true if `liveInspectionRequest` has been explicitly set.
-  var hasLiveInspectionRequest: Bool {_storage._liveInspectionRequest != nil}
-  /// Clears the value of `liveInspectionRequest`. Subsequent reads from it will return its default value.
-  mutating func clearLiveInspectionRequest() {_uniqueStorage()._liveInspectionRequest = nil}
-
-  var liveActionRequest: PabloV3LiveActionRequest {
-    get {_storage._liveActionRequest ?? PabloV3LiveActionRequest()}
-    set {_uniqueStorage()._liveActionRequest = newValue}
-  }
-  /// Returns true if `liveActionRequest` has been explicitly set.
-  var hasLiveActionRequest: Bool {_storage._liveActionRequest != nil}
-  /// Clears the value of `liveActionRequest`. Subsequent reads from it will return its default value.
-  mutating func clearLiveActionRequest() {_uniqueStorage()._liveActionRequest = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _storage = _StorageClass.defaultInstance
-}
-
-nonisolated struct PabloV3ControlResult: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var state: String = String()
-
-  var scopeName: String {
-    get {_scopeName ?? String()}
-    set {_scopeName = newValue}
-  }
-  /// Returns true if `scopeName` has been explicitly set.
-  var hasScopeName: Bool {self._scopeName != nil}
-  /// Clears the value of `scopeName`. Subsequent reads from it will return its default value.
-  mutating func clearScopeName() {self._scopeName = nil}
-
-  var recordingPath: String {
-    get {_recordingPath ?? String()}
-    set {_recordingPath = newValue}
-  }
-  /// Returns true if `recordingPath` has been explicitly set.
-  var hasRecordingPath: Bool {self._recordingPath != nil}
-  /// Clears the value of `recordingPath`. Subsequent reads from it will return its default value.
-  mutating func clearRecordingPath() {self._recordingPath = nil}
-
-  var elapsedNanoseconds: UInt64 = 0
-
-  var annotation: PabloV3RecordingAnnotation {
-    get {_annotation ?? PabloV3RecordingAnnotation()}
-    set {_annotation = newValue}
-  }
-  /// Returns true if `annotation` has been explicitly set.
-  var hasAnnotation: Bool {self._annotation != nil}
-  /// Clears the value of `annotation`. Subsequent reads from it will return its default value.
-  mutating func clearAnnotation() {self._annotation = nil}
-
-  var output: String {
-    get {_output ?? String()}
-    set {_output = newValue}
-  }
-  /// Returns true if `output` has been explicitly set.
-  var hasOutput: Bool {self._output != nil}
-  /// Clears the value of `output`. Subsequent reads from it will return its default value.
-  mutating func clearOutput() {self._output = nil}
-
-  var applicationIds: [String] = []
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _scopeName: String? = nil
-  fileprivate var _recordingPath: String? = nil
-  fileprivate var _annotation: PabloV3RecordingAnnotation? = nil
-  fileprivate var _output: String? = nil
-}
-
-nonisolated struct PabloV3CallResponse: Sendable {
-  // SwiftProtobuf.Message conformance is added in an extension below. See the
-  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
-  // methods supported on all messages.
-
-  var id: String = String()
-
-  var result: PabloV3ControlResult {
-    get {_result ?? PabloV3ControlResult()}
-    set {_result = newValue}
-  }
-  /// Returns true if `result` has been explicitly set.
-  var hasResult: Bool {self._result != nil}
-  /// Clears the value of `result`. Subsequent reads from it will return its default value.
-  mutating func clearResult() {self._result = nil}
-
-  var error: String {
-    get {_error ?? String()}
-    set {_error = newValue}
-  }
-  /// Returns true if `error` has been explicitly set.
-  var hasError: Bool {self._error != nil}
-  /// Clears the value of `error`. Subsequent reads from it will return its default value.
-  mutating func clearError() {self._error = nil}
-
-  var unknownFields = SwiftProtobuf.UnknownStorage()
-
-  init() {}
-
-  fileprivate var _result: PabloV3ControlResult? = nil
-  fileprivate var _error: String? = nil
-}
-
 // MARK: - Code below here is support for the SwiftProtobuf runtime.
 
 fileprivate nonisolated let _protobuf_package = "pablo.v3"
-
-nonisolated extension PabloV3RecordingScopeKind: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0RECORDING_SCOPE_KIND_UNSPECIFIED\0\u{1}RECORDING_SCOPE_KIND_APPLICATION\0\u{1}RECORDING_SCOPE_KIND_DISPLAY\0")
-}
 
 nonisolated extension PabloV3LiveActionKind: SwiftProtobuf._ProtoNameProviding {
   static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0LIVE_ACTION_KIND_UNSPECIFIED\0\u{1}LIVE_ACTION_KIND_CLICK\0\u{1}LIVE_ACTION_KIND_DRAG\0\u{1}LIVE_ACTION_KIND_SCROLL\0\u{1}LIVE_ACTION_KIND_TYPE\0\u{1}LIVE_ACTION_KIND_KEY\0\u{1}LIVE_ACTION_KIND_PERFORM\0")
@@ -2016,6 +1556,10 @@ nonisolated extension PabloV3AutomationActionPhase: SwiftProtobuf._ProtoNameProv
   static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0AUTOMATION_ACTION_PHASE_UNSPECIFIED\0\u{1}AUTOMATION_ACTION_PHASE_REQUESTED\0\u{1}AUTOMATION_ACTION_PHASE_SUCCEEDED\0\u{1}AUTOMATION_ACTION_PHASE_FAILED\0")
 }
 
+nonisolated extension PabloV3SafariDOMCommandKind: SwiftProtobuf._ProtoNameProviding {
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0SAFARI_DOM_COMMAND_KIND_UNSPECIFIED\0\u{1}SAFARI_DOM_COMMAND_KIND_DUMP_DOM\0\u{1}SAFARI_DOM_COMMAND_KIND_DUMP_ACCESSIBILITY_TREE\0\u{1}SAFARI_DOM_COMMAND_KIND_CLICK\0\u{1}SAFARI_DOM_COMMAND_KIND_FOCUS\0\u{1}SAFARI_DOM_COMMAND_KIND_SET_VALUE\0\u{1}SAFARI_DOM_COMMAND_KIND_SCROLL_INTO_VIEW\0\u{1}SAFARI_DOM_COMMAND_KIND_LIST_TABS\0\u{1}SAFARI_DOM_COMMAND_KIND_START_RRWEB_RECORDING\0\u{1}SAFARI_DOM_COMMAND_KIND_PAUSE_RRWEB_RECORDING\0\u{1}SAFARI_DOM_COMMAND_KIND_RESUME_RRWEB_RECORDING\0\u{1}SAFARI_DOM_COMMAND_KIND_STOP_RRWEB_RECORDING\0\u{1}SAFARI_DOM_COMMAND_KIND_RRWEB_RECORDING_STATUS\0")
+}
+
 nonisolated extension PabloV3AnnotationKind: SwiftProtobuf._ProtoNameProviding {
   static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0ANNOTATION_KIND_UNSPECIFIED\0\u{1}ANNOTATION_KIND_ISSUE\0\u{1}ANNOTATION_KIND_OBSERVATION\0\u{1}ANNOTATION_KIND_QUESTION\0\u{1}ANNOTATION_KIND_HIGHLIGHT\0")
 }
@@ -2026,14 +1570,6 @@ nonisolated extension PabloV3AnnotationStatus: SwiftProtobuf._ProtoNameProviding
 
 nonisolated extension PabloV3AnnotationAuthorType: SwiftProtobuf._ProtoNameProviding {
   static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0ANNOTATION_AUTHOR_TYPE_UNSPECIFIED\0\u{1}ANNOTATION_AUTHOR_TYPE_HUMAN\0\u{1}ANNOTATION_AUTHOR_TYPE_APPLICATION\0")
-}
-
-nonisolated extension PabloV3LiveInspectionKind: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0LIVE_INSPECTION_KIND_UNSPECIFIED\0\u{1}LIVE_INSPECTION_KIND_INSPECT\0\u{1}LIVE_INSPECTION_KIND_FRAMES\0\u{1}LIVE_INSPECTION_KIND_FRAME\0\u{1}LIVE_INSPECTION_KIND_EVENTS\0\u{1}LIVE_INSPECTION_KIND_ANNOTATIONS\0")
-}
-
-nonisolated extension PabloV3ControlMethod: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0CONTROL_METHOD_UNSPECIFIED\0\u{1}CONTROL_METHOD_RECORD_START\0\u{1}CONTROL_METHOD_RECORD_PAUSE\0\u{1}CONTROL_METHOD_RECORD_RESUME\0\u{1}CONTROL_METHOD_RECORD_STOP\0\u{1}CONTROL_METHOD_RECORD_STATUS\0\u{1}CONTROL_METHOD_ANNOTATION_ADD\0\u{1}CONTROL_METHOD_ANNOTATION_RESOLVE\0\u{1}CONTROL_METHOD_INSPECT_LIVE\0\u{1}CONTROL_METHOD_ACTION_LIVE\0")
 }
 
 nonisolated extension PabloV3Point: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
@@ -2456,183 +1992,129 @@ nonisolated extension PabloV3LiveApplicationTarget: SwiftProtobuf.Message, Swift
   }
 }
 
-nonisolated extension PabloV3LiveActionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".LiveActionRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}kind\0\u{1}target\0\u{3}node_id\0\u{1}point\0\u{3}from_node_id\0\u{3}from_point\0\u{3}to_node_id\0\u{3}to_point\0\u{3}mouse_button\0\u{3}click_count\0\u{1}duration\0\u{3}scroll_direction\0\u{3}scroll_amount\0\u{1}text\0\u{1}key\0\u{1}modifiers\0\u{3}accessibility_action\0")
-
-  fileprivate class _StorageClass {
-    var _kind: PabloV3LiveActionKind = .unspecified
-    var _target: PabloV3LiveApplicationTarget? = nil
-    var _nodeID: String? = nil
-    var _point: PabloV3Point? = nil
-    var _fromNodeID: String? = nil
-    var _fromPoint: PabloV3Point? = nil
-    var _toNodeID: String? = nil
-    var _toPoint: PabloV3Point? = nil
-    var _mouseButton: PabloV3MouseButton = .unspecified
-    var _clickCount: Int64 = 0
-    var _duration: Double = 0
-    var _scrollDirection: PabloV3ScrollDirection? = nil
-    var _scrollAmount: Int64 = 0
-    var _text: String? = nil
-    var _key: String? = nil
-    var _modifiers: [PabloV3KeyModifier] = []
-    var _accessibilityAction: String? = nil
-
-      // This property is used as the initial default value for new instances of the type.
-      // The type itself is protecting the reference to its storage via CoW semantics.
-      // This will force a copy to be made of this reference when the first mutation occurs;
-      // hence, it is safe to mark this as `nonisolated(unsafe)`.
-      static nonisolated(unsafe) let defaultInstance = _StorageClass()
-
-    private init() {}
-
-    init(copying source: _StorageClass) {
-      _kind = source._kind
-      _target = source._target
-      _nodeID = source._nodeID
-      _point = source._point
-      _fromNodeID = source._fromNodeID
-      _fromPoint = source._fromPoint
-      _toNodeID = source._toNodeID
-      _toPoint = source._toPoint
-      _mouseButton = source._mouseButton
-      _clickCount = source._clickCount
-      _duration = source._duration
-      _scrollDirection = source._scrollDirection
-      _scrollAmount = source._scrollAmount
-      _text = source._text
-      _key = source._key
-      _modifiers = source._modifiers
-      _accessibilityAction = source._accessibilityAction
-    }
-  }
-
-  fileprivate mutating func _uniqueStorage() -> _StorageClass {
-    if !isKnownUniquelyReferenced(&_storage) {
-      _storage = _StorageClass(copying: _storage)
-    }
-    return _storage
-  }
+nonisolated extension PabloV3SafariDOMCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SafariDOMCommand"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}kind\0\u{1}selector\0\u{3}node_id\0\u{1}value\0\u{3}include_hidden\0\u{3}max_nodes\0\u{3}max_depth\0\u{3}tab_id\0\u{3}recording_id\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    _ = _uniqueStorage()
-    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
-      while let fieldNumber = try decoder.nextFieldNumber() {
-        // The use of inline closures is to circumvent an issue where the compiler
-        // allocates stack space for every case branch when no optimizations are
-        // enabled. https://github.com/apple/swift-protobuf/issues/1034
-        switch fieldNumber {
-        case 1: try { try decoder.decodeSingularEnumField(value: &_storage._kind) }()
-        case 2: try { try decoder.decodeSingularMessageField(value: &_storage._target) }()
-        case 3: try { try decoder.decodeSingularStringField(value: &_storage._nodeID) }()
-        case 4: try { try decoder.decodeSingularMessageField(value: &_storage._point) }()
-        case 5: try { try decoder.decodeSingularStringField(value: &_storage._fromNodeID) }()
-        case 6: try { try decoder.decodeSingularMessageField(value: &_storage._fromPoint) }()
-        case 7: try { try decoder.decodeSingularStringField(value: &_storage._toNodeID) }()
-        case 8: try { try decoder.decodeSingularMessageField(value: &_storage._toPoint) }()
-        case 9: try { try decoder.decodeSingularEnumField(value: &_storage._mouseButton) }()
-        case 10: try { try decoder.decodeSingularInt64Field(value: &_storage._clickCount) }()
-        case 11: try { try decoder.decodeSingularDoubleField(value: &_storage._duration) }()
-        case 12: try { try decoder.decodeSingularEnumField(value: &_storage._scrollDirection) }()
-        case 13: try { try decoder.decodeSingularInt64Field(value: &_storage._scrollAmount) }()
-        case 14: try { try decoder.decodeSingularStringField(value: &_storage._text) }()
-        case 15: try { try decoder.decodeSingularStringField(value: &_storage._key) }()
-        case 16: try { try decoder.decodeRepeatedEnumField(value: &_storage._modifiers) }()
-        case 17: try { try decoder.decodeSingularStringField(value: &_storage._accessibilityAction) }()
-        default: break
-        }
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 2: try { try decoder.decodeSingularEnumField(value: &self.kind) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._selector) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._nodeID) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self._value) }()
+      case 6: try { try decoder.decodeSingularBoolField(value: &self.includeHidden) }()
+      case 7: try { try decoder.decodeSingularUInt32Field(value: &self.maxNodes) }()
+      case 8: try { try decoder.decodeSingularUInt32Field(value: &self.maxDepth) }()
+      case 9: try { try decoder.decodeSingularInt64Field(value: &self._tabID) }()
+      case 10: try { try decoder.decodeSingularStringField(value: &self._recordingID) }()
+      default: break
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every if/case branch local when no optimizations
-      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-      // https://github.com/apple/swift-protobuf/issues/1182
-      if _storage._kind != .unspecified {
-        try visitor.visitSingularEnumField(value: _storage._kind, fieldNumber: 1)
-      }
-      try { if let v = _storage._target {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
-      } }()
-      try { if let v = _storage._nodeID {
-        try visitor.visitSingularStringField(value: v, fieldNumber: 3)
-      } }()
-      try { if let v = _storage._point {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
-      } }()
-      try { if let v = _storage._fromNodeID {
-        try visitor.visitSingularStringField(value: v, fieldNumber: 5)
-      } }()
-      try { if let v = _storage._fromPoint {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
-      } }()
-      try { if let v = _storage._toNodeID {
-        try visitor.visitSingularStringField(value: v, fieldNumber: 7)
-      } }()
-      try { if let v = _storage._toPoint {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
-      } }()
-      if _storage._mouseButton != .unspecified {
-        try visitor.visitSingularEnumField(value: _storage._mouseButton, fieldNumber: 9)
-      }
-      if _storage._clickCount != 0 {
-        try visitor.visitSingularInt64Field(value: _storage._clickCount, fieldNumber: 10)
-      }
-      if _storage._duration.bitPattern != 0 {
-        try visitor.visitSingularDoubleField(value: _storage._duration, fieldNumber: 11)
-      }
-      try { if let v = _storage._scrollDirection {
-        try visitor.visitSingularEnumField(value: v, fieldNumber: 12)
-      } }()
-      if _storage._scrollAmount != 0 {
-        try visitor.visitSingularInt64Field(value: _storage._scrollAmount, fieldNumber: 13)
-      }
-      try { if let v = _storage._text {
-        try visitor.visitSingularStringField(value: v, fieldNumber: 14)
-      } }()
-      try { if let v = _storage._key {
-        try visitor.visitSingularStringField(value: v, fieldNumber: 15)
-      } }()
-      if !_storage._modifiers.isEmpty {
-        try visitor.visitPackedEnumField(value: _storage._modifiers, fieldNumber: 16)
-      }
-      try { if let v = _storage._accessibilityAction {
-        try visitor.visitSingularStringField(value: v, fieldNumber: 17)
-      } }()
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
     }
+    if self.kind != .unspecified {
+      try visitor.visitSingularEnumField(value: self.kind, fieldNumber: 2)
+    }
+    try { if let v = self._selector {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._nodeID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._value {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 5)
+    } }()
+    if self.includeHidden != false {
+      try visitor.visitSingularBoolField(value: self.includeHidden, fieldNumber: 6)
+    }
+    if self.maxNodes != 0 {
+      try visitor.visitSingularUInt32Field(value: self.maxNodes, fieldNumber: 7)
+    }
+    if self.maxDepth != 0 {
+      try visitor.visitSingularUInt32Field(value: self.maxDepth, fieldNumber: 8)
+    }
+    try { if let v = self._tabID {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 9)
+    } }()
+    try { if let v = self._recordingID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 10)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
-  static func ==(lhs: PabloV3LiveActionRequest, rhs: PabloV3LiveActionRequest) -> Bool {
-    if lhs._storage !== rhs._storage {
-      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
-        let _storage = _args.0
-        let rhs_storage = _args.1
-        if _storage._kind != rhs_storage._kind {return false}
-        if _storage._target != rhs_storage._target {return false}
-        if _storage._nodeID != rhs_storage._nodeID {return false}
-        if _storage._point != rhs_storage._point {return false}
-        if _storage._fromNodeID != rhs_storage._fromNodeID {return false}
-        if _storage._fromPoint != rhs_storage._fromPoint {return false}
-        if _storage._toNodeID != rhs_storage._toNodeID {return false}
-        if _storage._toPoint != rhs_storage._toPoint {return false}
-        if _storage._mouseButton != rhs_storage._mouseButton {return false}
-        if _storage._clickCount != rhs_storage._clickCount {return false}
-        if _storage._duration != rhs_storage._duration {return false}
-        if _storage._scrollDirection != rhs_storage._scrollDirection {return false}
-        if _storage._scrollAmount != rhs_storage._scrollAmount {return false}
-        if _storage._text != rhs_storage._text {return false}
-        if _storage._key != rhs_storage._key {return false}
-        if _storage._modifiers != rhs_storage._modifiers {return false}
-        if _storage._accessibilityAction != rhs_storage._accessibilityAction {return false}
-        return true
+  static func ==(lhs: PabloV3SafariDOMCommand, rhs: PabloV3SafariDOMCommand) -> Bool {
+    if lhs.id != rhs.id {return false}
+    if lhs.kind != rhs.kind {return false}
+    if lhs._selector != rhs._selector {return false}
+    if lhs._nodeID != rhs._nodeID {return false}
+    if lhs._value != rhs._value {return false}
+    if lhs.includeHidden != rhs.includeHidden {return false}
+    if lhs.maxNodes != rhs.maxNodes {return false}
+    if lhs.maxDepth != rhs.maxDepth {return false}
+    if lhs._tabID != rhs._tabID {return false}
+    if lhs._recordingID != rhs._recordingID {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
+nonisolated extension PabloV3SafariDOMResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SafariDOMResponse"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}success\0\u{3}json_payload\0\u{1}error\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
+      case 2: try { try decoder.decodeSingularBoolField(value: &self.success) }()
+      case 3: try { try decoder.decodeSingularBytesField(value: &self._jsonPayload) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._error) }()
+      default: break
       }
-      if !storagesAreEqual {return false}
     }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    if !self.id.isEmpty {
+      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
+    }
+    if self.success != false {
+      try visitor.visitSingularBoolField(value: self.success, fieldNumber: 2)
+    }
+    try { if let v = self._jsonPayload {
+      try visitor.visitSingularBytesField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._error {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: PabloV3SafariDOMResponse, rhs: PabloV3SafariDOMResponse) -> Bool {
+    if lhs.id != rhs.id {return false}
+    if lhs.success != rhs.success {return false}
+    if lhs._jsonPayload != rhs._jsonPayload {return false}
+    if lhs._error != rhs._error {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2694,7 +2176,7 @@ nonisolated extension PabloV3AutomationCaller: SwiftProtobuf.Message, SwiftProto
 
 nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AutomationActionTrace"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}action_id\0\u{1}phase\0\u{1}kind\0\u{1}target\0\u{3}node_id\0\u{1}point\0\u{3}from_node_id\0\u{3}from_point\0\u{3}to_node_id\0\u{3}to_point\0\u{3}mouse_button\0\u{3}click_count\0\u{1}duration\0\u{3}scroll_direction\0\u{3}scroll_amount\0\u{3}text_length\0\u{1}key\0\u{1}modifiers\0\u{3}accessibility_action\0\u{1}caller\0\u{1}transport\0\u{3}recording_was_paused\0\u{3}resolved_application_id\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}action_id\0\u{1}phase\0\u{1}kind\0\u{1}target\0\u{3}node_id\0\u{1}point\0\u{3}from_node_id\0\u{3}from_point\0\u{3}to_node_id\0\u{3}to_point\0\u{3}mouse_button\0\u{3}click_count\0\u{1}duration\0\u{3}scroll_direction\0\u{3}scroll_amount\0\u{3}text_length\0\u{1}key\0\u{1}modifiers\0\u{3}accessibility_action\0\u{1}caller\0\u{1}transport\0\u{3}recording_was_paused\0\u{3}resolved_application_id\0\u{3}foreground_actions_unlocked\0")
 
   fileprivate class _StorageClass {
     var _actionID: String = String()
@@ -2720,6 +2202,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
     var _transport: String = String()
     var _recordingWasPaused: Bool = false
     var _resolvedApplicationID: String? = nil
+    var _foregroundActionsUnlocked: Bool = false
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -2753,6 +2236,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
       _transport = source._transport
       _recordingWasPaused = source._recordingWasPaused
       _resolvedApplicationID = source._resolvedApplicationID
+      _foregroundActionsUnlocked = source._foregroundActionsUnlocked
     }
   }
 
@@ -2794,6 +2278,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
         case 21: try { try decoder.decodeSingularStringField(value: &_storage._transport) }()
         case 22: try { try decoder.decodeSingularBoolField(value: &_storage._recordingWasPaused) }()
         case 23: try { try decoder.decodeSingularStringField(value: &_storage._resolvedApplicationID) }()
+        case 24: try { try decoder.decodeSingularBoolField(value: &_storage._foregroundActionsUnlocked) }()
         default: break
         }
       }
@@ -2875,6 +2360,9 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
       try { if let v = _storage._resolvedApplicationID {
         try visitor.visitSingularStringField(value: v, fieldNumber: 23)
       } }()
+      if _storage._foregroundActionsUnlocked != false {
+        try visitor.visitSingularBoolField(value: _storage._foregroundActionsUnlocked, fieldNumber: 24)
+      }
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -2907,6 +2395,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
         if _storage._transport != rhs_storage._transport {return false}
         if _storage._recordingWasPaused != rhs_storage._recordingWasPaused {return false}
         if _storage._resolvedApplicationID != rhs_storage._resolvedApplicationID {return false}
+        if _storage._foregroundActionsUnlocked != rhs_storage._foregroundActionsUnlocked {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -3327,75 +2816,6 @@ nonisolated extension PabloV3AnnotationTrace: SwiftProtobuf.Message, SwiftProtob
   }
 }
 
-nonisolated extension PabloV3AnnotationDraft: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AnnotationDraft"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}kind\0\u{1}text\0\u{3}start_timestamp_ns\0\u{3}end_timestamp_ns\0\u{3}application_ids\0\u{3}accessibility_references\0\u{3}accessibility_node_ids\0\u{1}trace\0")
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularEnumField(value: &self.kind) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self.text) }()
-      case 3: try { try decoder.decodeSingularUInt64Field(value: &self._startTimestampNs) }()
-      case 4: try { try decoder.decodeSingularUInt64Field(value: &self._endTimestampNs) }()
-      case 5: try { try decoder.decodeRepeatedStringField(value: &self.applicationIds) }()
-      case 6: try { try decoder.decodeRepeatedStringField(value: &self.accessibilityReferences) }()
-      case 7: try { try decoder.decodeRepeatedStringField(value: &self.accessibilityNodeIds) }()
-      case 8: try { try decoder.decodeSingularMessageField(value: &self._trace) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if self.kind != .unspecified {
-      try visitor.visitSingularEnumField(value: self.kind, fieldNumber: 1)
-    }
-    if !self.text.isEmpty {
-      try visitor.visitSingularStringField(value: self.text, fieldNumber: 2)
-    }
-    try { if let v = self._startTimestampNs {
-      try visitor.visitSingularUInt64Field(value: v, fieldNumber: 3)
-    } }()
-    try { if let v = self._endTimestampNs {
-      try visitor.visitSingularUInt64Field(value: v, fieldNumber: 4)
-    } }()
-    if !self.applicationIds.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.applicationIds, fieldNumber: 5)
-    }
-    if !self.accessibilityReferences.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.accessibilityReferences, fieldNumber: 6)
-    }
-    if !self.accessibilityNodeIds.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.accessibilityNodeIds, fieldNumber: 7)
-    }
-    try { if let v = self._trace {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 8)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: PabloV3AnnotationDraft, rhs: PabloV3AnnotationDraft) -> Bool {
-    if lhs.kind != rhs.kind {return false}
-    if lhs.text != rhs.text {return false}
-    if lhs._startTimestampNs != rhs._startTimestampNs {return false}
-    if lhs._endTimestampNs != rhs._endTimestampNs {return false}
-    if lhs.applicationIds != rhs.applicationIds {return false}
-    if lhs.accessibilityReferences != rhs.accessibilityReferences {return false}
-    if lhs.accessibilityNodeIds != rhs.accessibilityNodeIds {return false}
-    if lhs._trace != rhs._trace {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
 nonisolated extension PabloV3RecordingAnnotation: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".RecordingAnnotation"
   static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}sequence\0\u{3}created_at\0\u{3}updated_at\0\u{3}created_by\0\u{3}updated_by\0\u{1}kind\0\u{1}status\0\u{1}text\0\u{3}start_timestamp_ns\0\u{3}end_timestamp_ns\0\u{3}application_ids\0\u{3}accessibility_references\0\u{3}accessibility_node_ids\0\u{1}trace\0")
@@ -3559,408 +2979,6 @@ nonisolated extension PabloV3RecordingAnnotation: SwiftProtobuf.Message, SwiftPr
       }
       if !storagesAreEqual {return false}
     }
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension PabloV3LiveInspectionRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".LiveInspectionRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}kind\0\u{1}target\0\u{1}reference\0\u{3}changed_only\0\u{1}limit\0\u{1}json\0")
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularEnumField(value: &self.kind) }()
-      case 2: try { try decoder.decodeSingularMessageField(value: &self._target) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self._reference) }()
-      case 4: try { try decoder.decodeSingularBoolField(value: &self.changedOnly) }()
-      case 5: try { try decoder.decodeSingularInt64Field(value: &self.limit) }()
-      case 6: try { try decoder.decodeSingularBoolField(value: &self.json) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if self.kind != .unspecified {
-      try visitor.visitSingularEnumField(value: self.kind, fieldNumber: 1)
-    }
-    try { if let v = self._target {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
-    } }()
-    try { if let v = self._reference {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
-    } }()
-    if self.changedOnly != false {
-      try visitor.visitSingularBoolField(value: self.changedOnly, fieldNumber: 4)
-    }
-    if self.limit != 0 {
-      try visitor.visitSingularInt64Field(value: self.limit, fieldNumber: 5)
-    }
-    if self.json != false {
-      try visitor.visitSingularBoolField(value: self.json, fieldNumber: 6)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: PabloV3LiveInspectionRequest, rhs: PabloV3LiveInspectionRequest) -> Bool {
-    if lhs.kind != rhs.kind {return false}
-    if lhs._target != rhs._target {return false}
-    if lhs._reference != rhs._reference {return false}
-    if lhs.changedOnly != rhs.changedOnly {return false}
-    if lhs.limit != rhs.limit {return false}
-    if lhs.json != rhs.json {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension PabloV3RecordOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".RecordOptions"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}scope\0\u{1}pid\0\u{3}bundle_identifier\0\u{3}app_name\0\u{3}display_id\0\u{3}output_path\0\u{1}duration\0\u{3}snapshot_interval\0\u{3}capture_text\0\u{3}frames_per_second\0")
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularEnumField(value: &self.scope) }()
-      case 2: try { try decoder.decodeSingularInt32Field(value: &self._pid) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self._bundleIdentifier) }()
-      case 4: try { try decoder.decodeSingularStringField(value: &self._appName) }()
-      case 5: try { try decoder.decodeSingularUInt32Field(value: &self._displayID) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self._outputPath) }()
-      case 7: try { try decoder.decodeSingularDoubleField(value: &self._duration) }()
-      case 8: try { try decoder.decodeSingularDoubleField(value: &self.snapshotInterval) }()
-      case 9: try { try decoder.decodeSingularBoolField(value: &self.captureText) }()
-      case 10: try { try decoder.decodeSingularInt64Field(value: &self.framesPerSecond) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if self.scope != .unspecified {
-      try visitor.visitSingularEnumField(value: self.scope, fieldNumber: 1)
-    }
-    try { if let v = self._pid {
-      try visitor.visitSingularInt32Field(value: v, fieldNumber: 2)
-    } }()
-    try { if let v = self._bundleIdentifier {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
-    } }()
-    try { if let v = self._appName {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
-    } }()
-    try { if let v = self._displayID {
-      try visitor.visitSingularUInt32Field(value: v, fieldNumber: 5)
-    } }()
-    try { if let v = self._outputPath {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 6)
-    } }()
-    try { if let v = self._duration {
-      try visitor.visitSingularDoubleField(value: v, fieldNumber: 7)
-    } }()
-    if self.snapshotInterval.bitPattern != 0 {
-      try visitor.visitSingularDoubleField(value: self.snapshotInterval, fieldNumber: 8)
-    }
-    if self.captureText != false {
-      try visitor.visitSingularBoolField(value: self.captureText, fieldNumber: 9)
-    }
-    if self.framesPerSecond != 0 {
-      try visitor.visitSingularInt64Field(value: self.framesPerSecond, fieldNumber: 10)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: PabloV3RecordOptions, rhs: PabloV3RecordOptions) -> Bool {
-    if lhs.scope != rhs.scope {return false}
-    if lhs._pid != rhs._pid {return false}
-    if lhs._bundleIdentifier != rhs._bundleIdentifier {return false}
-    if lhs._appName != rhs._appName {return false}
-    if lhs._displayID != rhs._displayID {return false}
-    if lhs._outputPath != rhs._outputPath {return false}
-    if lhs._duration != rhs._duration {return false}
-    if lhs.snapshotInterval != rhs.snapshotInterval {return false}
-    if lhs.captureText != rhs.captureText {return false}
-    if lhs.framesPerSecond != rhs.framesPerSecond {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension PabloV3AnnotationRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".AnnotationRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}recording_path\0\u{1}draft\0\u{1}reference\0")
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.recordingPath) }()
-      case 2: try { try decoder.decodeSingularMessageField(value: &self._draft) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self._reference) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.recordingPath.isEmpty {
-      try visitor.visitSingularStringField(value: self.recordingPath, fieldNumber: 1)
-    }
-    try { if let v = self._draft {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
-    } }()
-    try { if let v = self._reference {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: PabloV3AnnotationRequest, rhs: PabloV3AnnotationRequest) -> Bool {
-    if lhs.recordingPath != rhs.recordingPath {return false}
-    if lhs._draft != rhs._draft {return false}
-    if lhs._reference != rhs._reference {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension PabloV3CallRequest: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".CallRequest"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}protocol_version\0\u{1}id\0\u{1}method\0\u{3}record_options\0\u{3}annotation_request\0\u{3}live_inspection_request\0\u{3}live_action_request\0")
-
-  fileprivate class _StorageClass {
-    var _protocolVersion: UInt32 = 0
-    var _id: String = String()
-    var _method: PabloV3ControlMethod = .unspecified
-    var _recordOptions: PabloV3RecordOptions? = nil
-    var _annotationRequest: PabloV3AnnotationRequest? = nil
-    var _liveInspectionRequest: PabloV3LiveInspectionRequest? = nil
-    var _liveActionRequest: PabloV3LiveActionRequest? = nil
-
-      // This property is used as the initial default value for new instances of the type.
-      // The type itself is protecting the reference to its storage via CoW semantics.
-      // This will force a copy to be made of this reference when the first mutation occurs;
-      // hence, it is safe to mark this as `nonisolated(unsafe)`.
-      static nonisolated(unsafe) let defaultInstance = _StorageClass()
-
-    private init() {}
-
-    init(copying source: _StorageClass) {
-      _protocolVersion = source._protocolVersion
-      _id = source._id
-      _method = source._method
-      _recordOptions = source._recordOptions
-      _annotationRequest = source._annotationRequest
-      _liveInspectionRequest = source._liveInspectionRequest
-      _liveActionRequest = source._liveActionRequest
-    }
-  }
-
-  fileprivate mutating func _uniqueStorage() -> _StorageClass {
-    if !isKnownUniquelyReferenced(&_storage) {
-      _storage = _StorageClass(copying: _storage)
-    }
-    return _storage
-  }
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    _ = _uniqueStorage()
-    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
-      while let fieldNumber = try decoder.nextFieldNumber() {
-        // The use of inline closures is to circumvent an issue where the compiler
-        // allocates stack space for every case branch when no optimizations are
-        // enabled. https://github.com/apple/swift-protobuf/issues/1034
-        switch fieldNumber {
-        case 1: try { try decoder.decodeSingularUInt32Field(value: &_storage._protocolVersion) }()
-        case 2: try { try decoder.decodeSingularStringField(value: &_storage._id) }()
-        case 3: try { try decoder.decodeSingularEnumField(value: &_storage._method) }()
-        case 4: try { try decoder.decodeSingularMessageField(value: &_storage._recordOptions) }()
-        case 5: try { try decoder.decodeSingularMessageField(value: &_storage._annotationRequest) }()
-        case 6: try { try decoder.decodeSingularMessageField(value: &_storage._liveInspectionRequest) }()
-        case 7: try { try decoder.decodeSingularMessageField(value: &_storage._liveActionRequest) }()
-        default: break
-        }
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every if/case branch local when no optimizations
-      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-      // https://github.com/apple/swift-protobuf/issues/1182
-      if _storage._protocolVersion != 0 {
-        try visitor.visitSingularUInt32Field(value: _storage._protocolVersion, fieldNumber: 1)
-      }
-      if !_storage._id.isEmpty {
-        try visitor.visitSingularStringField(value: _storage._id, fieldNumber: 2)
-      }
-      if _storage._method != .unspecified {
-        try visitor.visitSingularEnumField(value: _storage._method, fieldNumber: 3)
-      }
-      try { if let v = _storage._recordOptions {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 4)
-      } }()
-      try { if let v = _storage._annotationRequest {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
-      } }()
-      try { if let v = _storage._liveInspectionRequest {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 6)
-      } }()
-      try { if let v = _storage._liveActionRequest {
-        try visitor.visitSingularMessageField(value: v, fieldNumber: 7)
-      } }()
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: PabloV3CallRequest, rhs: PabloV3CallRequest) -> Bool {
-    if lhs._storage !== rhs._storage {
-      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
-        let _storage = _args.0
-        let rhs_storage = _args.1
-        if _storage._protocolVersion != rhs_storage._protocolVersion {return false}
-        if _storage._id != rhs_storage._id {return false}
-        if _storage._method != rhs_storage._method {return false}
-        if _storage._recordOptions != rhs_storage._recordOptions {return false}
-        if _storage._annotationRequest != rhs_storage._annotationRequest {return false}
-        if _storage._liveInspectionRequest != rhs_storage._liveInspectionRequest {return false}
-        if _storage._liveActionRequest != rhs_storage._liveActionRequest {return false}
-        return true
-      }
-      if !storagesAreEqual {return false}
-    }
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension PabloV3ControlResult: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".ControlResult"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}state\0\u{3}scope_name\0\u{3}recording_path\0\u{3}elapsed_nanoseconds\0\u{1}annotation\0\u{1}output\0\u{3}application_ids\0")
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.state) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self._scopeName) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self._recordingPath) }()
-      case 4: try { try decoder.decodeSingularUInt64Field(value: &self.elapsedNanoseconds) }()
-      case 5: try { try decoder.decodeSingularMessageField(value: &self._annotation) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self._output) }()
-      case 7: try { try decoder.decodeRepeatedStringField(value: &self.applicationIds) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.state.isEmpty {
-      try visitor.visitSingularStringField(value: self.state, fieldNumber: 1)
-    }
-    try { if let v = self._scopeName {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
-    } }()
-    try { if let v = self._recordingPath {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
-    } }()
-    if self.elapsedNanoseconds != 0 {
-      try visitor.visitSingularUInt64Field(value: self.elapsedNanoseconds, fieldNumber: 4)
-    }
-    try { if let v = self._annotation {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 5)
-    } }()
-    try { if let v = self._output {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 6)
-    } }()
-    if !self.applicationIds.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.applicationIds, fieldNumber: 7)
-    }
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: PabloV3ControlResult, rhs: PabloV3ControlResult) -> Bool {
-    if lhs.state != rhs.state {return false}
-    if lhs._scopeName != rhs._scopeName {return false}
-    if lhs._recordingPath != rhs._recordingPath {return false}
-    if lhs.elapsedNanoseconds != rhs.elapsedNanoseconds {return false}
-    if lhs._annotation != rhs._annotation {return false}
-    if lhs._output != rhs._output {return false}
-    if lhs.applicationIds != rhs.applicationIds {return false}
-    if lhs.unknownFields != rhs.unknownFields {return false}
-    return true
-  }
-}
-
-nonisolated extension PabloV3CallResponse: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
-  static let protoMessageName: String = _protobuf_package + ".CallResponse"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}result\0\u{1}error\0")
-
-  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      case 2: try { try decoder.decodeSingularMessageField(value: &self._result) }()
-      case 3: try { try decoder.decodeSingularStringField(value: &self._error) }()
-      default: break
-      }
-    }
-  }
-
-  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.id.isEmpty {
-      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
-    }
-    try { if let v = self._result {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 2)
-    } }()
-    try { if let v = self._error {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
-    } }()
-    try unknownFields.traverse(visitor: &visitor)
-  }
-
-  static func ==(lhs: PabloV3CallResponse, rhs: PabloV3CallResponse) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs._result != rhs._result {return false}
-    if lhs._error != rhs._error {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

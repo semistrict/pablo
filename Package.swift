@@ -20,6 +20,7 @@ let package = Package(
                 .product(name: "SwiftProtobuf", package: "swift-protobuf"),
             ],
             path: "Sources/Pablo",
+            resources: [.process("Resources")],
             linkerSettings: [
                 .linkedFramework("AppKit"),
                 .linkedFramework("AVFoundation"),
@@ -36,9 +37,14 @@ let package = Package(
             name: "PabloApp",
             dependencies: ["PabloCore"],
             path: "Sources/PabloApp",
-            linkerSettings: [.linkedFramework("AVKit")]
+            resources: [.process("Resources")],
+            linkerSettings: [
+                .linkedFramework("AVKit"),
+                .linkedFramework("SafariServices"),
+                .linkedFramework("WebKit"),
+            ]
         ),
-        .testTarget(name: "PabloTests", dependencies: ["PabloCore"]),
+        .testTarget(name: "PabloTests", dependencies: ["PabloCore", "PabloApp"]),
     ],
     swiftLanguageModes: [.v5]
 )

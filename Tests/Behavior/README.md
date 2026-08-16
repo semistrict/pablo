@@ -25,13 +25,15 @@ The `.feature` files in this directory describe intended product behavior in a G
 | Swift suite | Behavioral feature |
 | --- | --- |
 | `AutomationActionTraceTests` | `recording_lifecycle.feature` |
+| `SafariDOMProtocolTests`, `AppBundlePackagingTests`, `ControlProtocolTests` | `safari_extension.feature` |
+| `RRWebRecordingTests`, `RRWebSpoolStoreTests`, `RRWebReplayModelTests`, `SafariDOMProtocolTests`, `ControlProtocolTests`, `AppBundlePackagingTests` | `rrweb.feature` |
 | `AXTreeDifferTests` | `accessibility_replay.feature` |
 | `AppBundlePackagingTests` | `packaging.feature` |
 | `CLITests` | `cli.feature`, `annotations.feature`, and `live_actions.feature` |
 | `ControlProtocolTests` | `control_and_consent.feature` and `live_actions.feature` |
 | `LiveActionTests` | `live_actions.feature` |
 | `LiveInspectionTests` | `cli.feature` |
-| `ProtobufStreamTests` | `protobuf.feature` and `control_and_consent.feature` |
+| `ProtobufStreamTests` | `protobuf.feature` |
 | `RecordingAnnotationTests` | `annotations.feature` |
 | `ReplayRecordingTests` | `accessibility_replay.feature`, `playback.feature`, and `protobuf.feature` |
 | `SessionClockTests` | `recording_lifecycle.feature` |

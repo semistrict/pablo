@@ -14,10 +14,12 @@ Feature: Keep recording control and consent inside the Pablo app
 
   @automated
   # ControlProtocolTests.callerIdentityComesFromNearestInvokingApplication
-  Scenario: Caller identity comes from the invoking application rather than the CLI helper
-    Given the bundled CLI was launched by a signed foreground application
+  Scenario: Caller identity comes from the invoking application rather than the HTTP helper
+    Given curl was launched by a signed foreground application
     When Pablo walks the process ancestry
-    Then it skips prohibited helpers and processes without bundle identifiers
+    Then a signed app-bundled helper may resolve to its running owning application when their live signing teams match
+    And it skips other prohibited helpers and processes without bundle identifiers
+    And a root-owned terminal login process does not hide its terminal application parent
     And resolves the nearest eligible invoking application
     And the approval dialog names that application and its verified developer
 
@@ -28,9 +30,23 @@ Feature: Keep recording control and consent inside the Pablo app
     Then its parent directory mode is `0700`
     And its socket mode is `0600`
     When a same-user client connects
-    Then one connection handles one protobuf `PabloControlService.Call` request
-    And requests larger than 64 KiB fail closed
+    Then one connection handles one HTTP JSON request
+    And the JSON body is accepted without a `Content-Type` header
+    And the method comes from the URL rather than a JSON field
+    And clients do not send protocol versions or request IDs
+    And the HTTP verb does not affect routing
+    And live inspection output is pretty-printed structured JSON rather than an escaped string
+    And JSON request bodies larger than 64 KiB fail closed
     And peer credentials must match the current user
+
+  @automated
+  # ControlProtocolTests.controlSocketServesOpenAPI
+  Scenario: Local control is self-describing
+    Given the control service is running
+    When a same-user client gets `/openapi.json`
+    Then Pablo returns an OpenAPI 3.1 document without showing approval
+    And the document describes its discovery and control endpoints
+    And the document identifies the Unix-domain socket transport
 
   @automated
   # ControlProtocolTests.liveInspectionControlRoundTrip

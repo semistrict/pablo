@@ -23,6 +23,11 @@ jobs:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "10.34.0"
+
       - name: Install Buf
         uses: bufbuild/buf-setup-action@a47c93e0b1648d5651a065437926377d060baa99 # v1.50.0
         with:
@@ -46,12 +51,23 @@ jobs:
             exit 1
           fi
 
+      - name: Validate rrweb assets
+        run: |
+          pnpm --dir SafariExtension/JavaScript install --frozen-lockfile
+          ./scripts/build-rrweb-assets.sh
+          if [[ -n "$(git status --porcelain -- SafariExtension/Generated Sources/PabloApp/Resources/RRWebPlayer)" ]]; then
+            git diff -- SafariExtension/Generated Sources/PabloApp/Resources/RRWebPlayer
+            echo "Generated rrweb assets are not current." >&2
+            exit 1
+          fi
+
       - name: Run tests
         run: swift test
 
       - name: Build arm64 app bundle
         env:
           PABLO_ARCHITECTURES: arm64
+          PABLO_SIGNING_IDENTITY: "-"
         run: ./scripts/build-app.sh release
 
       - name: Verify app bundle

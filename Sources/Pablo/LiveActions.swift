@@ -12,7 +12,7 @@ public final class PabloLiveActionController {
 
     public func perform(_ request: PabloLiveActionRequest) async throws -> String {
         try PabloLiveActionValidator.validate(request)
-        guard AXIsProcessTrusted(), CGPreflightPostEventAccess() else {
+        guard AXIsProcessTrusted() else {
             throw RecordingError.permission(
                 "Accessibility access is required to control a live application. " +
                 "Enable Pablo in System Settings > Privacy & Security > Accessibility."
@@ -24,13 +24,28 @@ public final class PabloLiveActionController {
             requiresSnapshot: requiresSnapshot
         )
         let target = context.target
+        let reader = context.reader
+        let snapshot = context.snapshot ?? AXTreeSnapshot(rootID: nil, nodes: [:], truncated: false)
+
+        if request.kind == .perform {
+            return try performAccessibilityAction(request, target: target, reader: reader)
+        }
+        if request.kind == .click,
+           let result = try performBackgroundClickIfAvailable(request, target: target, reader: reader) {
+            return result
+        }
+
+        try LiveActionForegroundPolicy.requireUnlock(for: request)
+        guard CGPreflightPostEventAccess() else {
+            throw RecordingError.permission(
+                "Accessibility access is required to post foreground input. " +
+                "Enable Pablo in System Settings > Privacy & Security > Accessibility."
+            )
+        }
         guard let application = NSRunningApplication(processIdentifier: target.pid) else {
             throw RecordingError.targetNotFound("The target application is no longer running.")
         }
         try await activate(application)
-
-        let reader = context.reader
-        let snapshot = context.snapshot ?? AXTreeSnapshot(rootID: nil, nodes: [:], truncated: false)
 
         switch request.kind {
         case .click:
@@ -44,8 +59,29 @@ public final class PabloLiveActionController {
         case .key:
             return try await pressKey(request, target: target)
         case .perform:
-            return try performAccessibilityAction(request, target: target, reader: reader)
+            preconditionFailure("Accessibility actions return before foreground activation")
         }
+    }
+
+    private func performBackgroundClickIfAvailable(
+        _ request: PabloLiveActionRequest,
+        target: TargetApplication,
+        reader: AccessibilityTreeReader
+    ) throws -> String? {
+        guard let nodeID = request.nodeID,
+              request.mouseButton == .left,
+              request.clickCount == 1,
+              let element = reader.element(id: nodeID),
+              availableActions(for: element).contains(kAXPressAction as String) else {
+            return nil
+        }
+        let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
+        guard result == .success else {
+            throw RecordingError.capture(
+                "The target rejected AXPress for node \(nodeID) (error \(result.rawValue))."
+            )
+        }
+        return "clicked  \(target.name)  node=\(nodeID)  action=AXPress"
     }
 
     private func click(
@@ -54,18 +90,6 @@ public final class PabloLiveActionController {
         reader: AccessibilityTreeReader,
         snapshot: AXTreeSnapshot
     ) async throws -> String {
-        if let nodeID = request.nodeID,
-           request.mouseButton == .left,
-           request.clickCount == 1,
-           let element = reader.element(id: nodeID),
-           availableActions(for: element).contains(kAXPressAction as String) {
-            let result = AXUIElementPerformAction(element, kAXPressAction as CFString)
-            guard result == .success else {
-                throw RecordingError.capture("The target rejected AXPress for node \(nodeID) (error \(result.rawValue)).")
-            }
-            return "clicked  \(target.name)  node=\(nodeID)  action=AXPress"
-        }
-
         let windowFrame = request.point == nil
             ? .zero
             : try largestWindowFrame(in: snapshot, reader: reader)
@@ -441,6 +465,22 @@ public final class PabloLiveActionController {
         case .left: return (.left, .leftMouseDown, .leftMouseUp, .leftMouseDragged)
         case .right: return (.right, .rightMouseDown, .rightMouseUp, .rightMouseDragged)
         case .middle: return (.center, .otherMouseDown, .otherMouseUp, .otherMouseDragged)
+        }
+    }
+}
+
+enum LiveActionForegroundPolicy {
+    static func requiresUnlock(for request: PabloLiveActionRequest) -> Bool {
+        request.kind != .perform
+    }
+
+    static func requireUnlock(for request: PabloLiveActionRequest) throws {
+        guard !requiresUnlock(for: request) || request.unlockForegroundActions else {
+            throw RecordingError.usage(
+                "This action requires Pablo to bring the target application to the foreground, " +
+                "but foreground actions are locked by default. Set unlockForegroundActions to true " +
+                "only when the user explicitly accepts the focus change. This option is NOT RECOMMENDED."
+            )
         }
     }
 }

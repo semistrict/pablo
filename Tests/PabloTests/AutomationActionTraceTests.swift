@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import PabloCore
 
-@Test("CLI actions append requested and outcome records without typed text")
+@Test("Local API actions append requested and outcome records without typed text")
 func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
     let directory = FileManager.default.temporaryDirectory
         .appendingPathComponent("pablo-action-trace-\(UUID().uuidString)", isDirectory: true)
@@ -20,7 +20,8 @@ func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
         kind: .typeText,
         target: .init(appName: "Notes"),
         nodeID: "ax-editor",
-        text: secretText
+        text: secretText,
+        unlockForegroundActions: true
     )
     let caller = PabloAutomationCaller(
         displayName: "Agent Host",
@@ -34,7 +35,7 @@ func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
         phase: .requested,
         request: request,
         caller: caller,
-        transport: "pabloCLI",
+        transport: "http+unix",
         recordingWasPaused: false
     )
     let succeeded = PabloAutomationActionTrace(
@@ -42,7 +43,7 @@ func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
         phase: .succeeded,
         request: request,
         caller: caller,
-        transport: "pabloCLI",
+        transport: "http+unix",
         recordingWasPaused: false
     )
 
@@ -72,6 +73,7 @@ func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
     #expect(records.allSatisfy { $0.automationAction?.resolvedApplicationID == "APP-001" })
     #expect(records.allSatisfy { $0.text == nil })
     #expect(records.allSatisfy { $0.automationAction?.textLength == secretText.count })
+    #expect(records.allSatisfy { $0.automationAction?.foregroundActionsUnlocked == true })
     #expect(records.allSatisfy { $0.automationAction?.caller.verified == true })
     #expect(records.allSatisfy { $0.automationAction?.caller.developerName == "Example Developer" })
 }

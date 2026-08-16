@@ -36,6 +36,20 @@
                 <string>com.ramon.pablo.recording</string>
             </array>
         </dict>
+        <dict>
+            <key>CFBundleTypeIconFile</key>
+            <string>AppIcon.icns</string>
+            <key>CFBundleTypeName</key>
+            <string>Pablo Safari Web Recording</string>
+            <key>CFBundleTypeRole</key>
+            <string>Viewer</string>
+            <key>LSHandlerRank</key>
+            <string>Owner</string>
+            <key>LSItemContentTypes</key>
+            <array>
+                <string>com.ramon.pablo.web-recording</string>
+            </array>
+        </dict>
     </array>
     <key>UTExportedTypeDeclarations</key>
     <array>
@@ -56,11 +70,28 @@
                 </array>
             </dict>
         </dict>
+        <dict>
+            <key>UTTypeConformsTo</key>
+            <array>
+                <string>com.apple.package</string>
+            </array>
+            <key>UTTypeDescription</key>
+            <string>Pablo Safari Web Recording</string>
+            <key>UTTypeIdentifier</key>
+            <string>com.ramon.pablo.web-recording</string>
+            <key>UTTypeTagSpecification</key>
+            <dict>
+                <key>public.filename-extension</key>
+                <array>
+                    <string>pabloweb</string>
+                </array>
+            </dict>
+        </dict>
     </array>
     <key>CFBundleShortVersionString</key>
-    <string>0.1.12</string>
+	<string>0.1.14</string>
     <key>CFBundleVersion</key>
-    <string>18</string>
+	<string>23</string>
     <key>LSMinimumSystemVersion</key>
     <string>14.0</string>
     <key>NSAccessibilityUsageDescription</key>

@@ -109,6 +109,36 @@ func liveActionSnapshotRequirementsAreMinimal() {
     #expect(focusedType == false)
 }
 
+@Test("Foreground input is locked unless a request explicitly unlocks it")
+func liveActionForegroundPolicyFailsClosed() throws {
+    let target = PabloLiveApplicationTarget(appName: "Notes")
+    let lockedKey = PabloLiveActionRequest(kind: .key, target: target, key: "return")
+    let unlockedKey = PabloLiveActionRequest(
+        kind: .key,
+        target: target,
+        key: "return",
+        unlockForegroundActions: true
+    )
+    let backgroundAction = PabloLiveActionRequest(
+        kind: .perform,
+        target: target,
+        nodeID: "ax-save",
+        accessibilityAction: "press"
+    )
+
+    #expect(throws: RecordingError.self) {
+        try LiveActionForegroundPolicy.requireUnlock(for: lockedKey)
+    }
+    do {
+        try LiveActionForegroundPolicy.requireUnlock(for: lockedKey)
+        Issue.record("Expected the foreground action to remain locked")
+    } catch {
+        #expect(error.localizedDescription.contains("NOT RECOMMENDED"))
+    }
+    try LiveActionForegroundPolicy.requireUnlock(for: unlockedKey)
+    try LiveActionForegroundPolicy.requireUnlock(for: backgroundAction)
+}
+
 @Test("Closed menu descendants are skipped but visible menus and ordinary containers remain")
 func accessibilityTraversalSkipsClosedMenus() {
     let closedMenu = AccessibilityTraversalPolicy.shouldTraverseChildren(

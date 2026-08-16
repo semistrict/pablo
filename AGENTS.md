@@ -47,7 +47,7 @@ Recording.pablo/
 
 The session clock uses monotonic nanoseconds. Paused time is removed from every evidence timeline and video. Workspace snapshots record frontmost state plus explicit app/window appearance and removal. Accessibility trees materialize independently per stable `APP-###` identity. Each accessibility record has a global `A11Y-###` index shared by replay and CLI.
 
-The protobuf source of truth is `proto/pablo/v3/pablo.proto`; `buf.gen.yaml` pins Swift generation. Run `buf format --diff --exit-code`, `buf lint`, and `buf generate` after schema changes. Never edit generated `.pb.swift` files. Streams use unsigned varint length-delimited protobuf records. Only recording schema and control protocol version 3 are supported; there is no compatibility path.
+The recording protobuf source of truth is `proto/pablo/v3/pablo.proto`; `buf.gen.yaml` pins Swift generation. Run `buf format --diff --exit-code`, `buf lint`, and `buf generate` after schema changes. Never edit generated `.pb.swift` files. Evidence streams use unsigned varint length-delimited protobuf records. The local control API uses unversioned HTTP/1.1 URLs with JSON bodies over its Unix-domain socket. Only recording schema version 3 is supported; there is no compatibility path.
 
 Captured artifacts and the manifest are evidence and remain untouched by markup. `annotations.pb` is an append-only journal of full annotation states with stable `NOTE-###` references. Visual markup is a full-fidelity spatiotemporal freehand trace: normalized x/y samples carry session timestamps, with equal timestamps denoting a shape on one paused video frame. Resolving an annotation appends a new state. Agent annotation mutations go through the approved app bridge; read-only annotation inspection stays offline.
 
@@ -63,9 +63,9 @@ Recording lifecycle commands go through the running app over a Unix-domain socke
 ~/Library/Application Support/Pablo/control.sock
 ```
 
-The parent directory is mode `0700`, the socket is mode `0600`, peer credentials must match the current user, requests are capped at 64 KiB, responses are capped at 16 MiB, and each connection handles one protobuf `PabloControlService.Call` request. Offline inspection commands read recording packages directly and never contact the app. Live inspection and actions use the same bridge and daily approval as recording control. Live accessibility frames and bounded event history remain in memory and disappear when the app exits.
+The parent directory is mode `0700`, the socket is mode `0600`, peer credentials must match the current user, JSON request bodies are capped at 64 KiB, JSON response bodies are capped at 16 MiB, and each connection handles one HTTP request. Control calls use method-specific URLs such as `/record.status` and `/action.live`; request bodies contain only that method's payload, and the HTTP verb is ignored. The self-describing contract is available without approval at `/openapi.json`. Update `api/control-api.openapi.yaml` and run `scripts/generate-control-openapi.rb` after changing the API. Offline inspection commands read recording packages directly and never contact the app. Live inspection and actions use the same bridge and daily approval as recording control. Live accessibility frames and bounded event history remain in memory and disappear when the app exits.
 
-The app resolves the real invoking application by walking the CLI process ancestry. Background/helper processes with a prohibited activation policy and processes without a bundle identifier are skipped. The caller's live code signature is validated, then its static signing information supplies the application identifier, developer name, and team identifier shown in the approval dialog.
+The app resolves the real invoking application by walking the local client's process ancestry. If ordinary process inspection cannot cross a root-owned terminal login process, the read-only kernel process table supplies its parent. A signed helper inside a running application bundle may resolve to that owning application only when both live code signatures have the same team identifier. Other background/helper processes with a prohibited activation policy and processes without a bundle identifier are skipped. The caller's live code signature is validated, then its static signing information supplies the application identifier, developer name, and team identifier shown in the approval dialog.
 
 Verified applications can be allowed once per application/developer identity per local calendar day. Unsigned or otherwise unverifiable callers require approval every time. Never move this decision into the CLI or trust caller-supplied identity fields.
 
@@ -92,7 +92,7 @@ Build a signed local app:
 open dist/Pablo.app
 ```
 
-The script signs with the first available Apple Development identity. Set `PABLO_SIGNING_IDENTITY` to an exact identity name to override it. If no identity exists, it falls back to ad-hoc signing and macOS privacy approvals may reset after every rebuild.
+The script signs with the first available Apple Development identity. Set `PABLO_SIGNING_IDENTITY` to an exact identity name to override it. If no identity is available, the script fails. Set `PABLO_SIGNING_IDENTITY=-` only when an explicit ad-hoc build is intended, such as unsigned CI packaging checks.
 
 Build and run only the CLI during development:
 
@@ -111,6 +111,13 @@ pablo status
 pablo pause
 pablo resume
 pablo stop
+```
+
+Reset all macOS privacy grants for the installed app after its signing identity
+changes, then grant them again when prompted:
+
+```sh
+./scripts/reset-permissions.sh
 ```
 
 Useful offline inspection commands:

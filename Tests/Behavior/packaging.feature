@@ -24,11 +24,19 @@ Feature: Package and distribute a trustworthy Apple-silicon application
 
   @distribution
   Scenario: Distribution contains arm64 executables only
-    Given a Developer ID Application identity and notary profile are configured
+    Given a Developer ID Application identity, App Group provisioning profiles, and notary profile are configured
     When `scripts/build-distribution.sh` completes
     Then GUI and CLI executables are thin arm64 Mach-O files
     And no x86_64 slice is present
     And the ZIP name ends in `mac-arm64.zip`
+
+  @distribution
+  Scenario: Distribution authorizes app-extension shared storage
+    Given Developer ID provisioning profiles exist for the app and Safari extension
+    When `scripts/build-distribution.sh` completes
+    Then each bundle embeds its matching provisioning profile
+    And each signature contains its exact application identifier
+    And both profiles authorize `D9G32AG3E5.com.ramon.pablo.safari`
 
   @distribution
   Scenario: Extracted release passes signature, notarization, and Gatekeeper checks

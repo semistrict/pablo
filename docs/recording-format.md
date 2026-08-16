@@ -1,5 +1,9 @@
 # Recording format v3
 
+This document describes `.pablo` video/accessibility packages. Safari DOM-event
+recordings use the separate `.pabloweb` format documented in
+[Safari web recordings](rrweb.md); the two evidence formats are not combined.
+
 Version 3 is a multi-application desktop-session format. There is no v2 decoder or compatibility representation. Application-scoped and display-scoped recordings use exactly the same manifest, streams, identities, and replay algorithms.
 
 `manifest.json` is UTF-8 JSON. Evidence and annotation journals are length-delimited protobuf streams defined by `proto/pablo/v3/pablo.proto` and generated with Buf. Each record is an unsigned protobuf varint length followed by one serialized message. Oversized, truncated, or invalid records fail closed.
@@ -64,10 +68,10 @@ For display scope, accessibility rectangles normalize against `manifest.capture.
 
 Each complete state has stable `NOTE-###` sequence identity. Anchors can name application identities, accessibility frames, namespaced nodes, a time interval, and a normalized spatiotemporal freehand trace. Resolving appends a state; it never rewrites evidence or an earlier state.
 
-## Local control RPC
+## Local control API
 
-The app and CLI exchange exactly one framed `pablo.v3.CallRequest` and `pablo.v3.CallResponse` per Unix-domain socket connection. Protocol version 3 is accepted; older messages are rejected. Same-user peer checks, size limits, verified caller resolution, and human approval remain app-owned. Protobuf fields never supply trusted caller identity.
+The app accepts one HTTP/1.1 request and response per Unix-domain socket connection. Control methods use distinct `POST` URLs, and each JSON body contains only that method's payload. Clients do not send protocol versions, request IDs, methods, or trusted caller identity in JSON. Same-user peer checks, size limits, verified caller resolution, and human approval remain app-owned. See [control-api.md](control-api.md) for the wire contract and curl examples.
 
 ## Compatibility policy
 
-Pablo accepts only recording schema version 3 and control protocol version 3. There is no migration, fallback decoder, legacy target field, or dual-write path. Do not reuse or renumber v3 protobuf fields. Change the source proto, run Buf, and update all producers, consumers, and behavior tests together.
+Pablo accepts only recording schema version 3. The HTTP/JSON control API has unversioned URLs and no compatibility fallback. There is no migration, fallback decoder, legacy target field, or dual-write path. Do not reuse or renumber v3 recording protobuf fields. Change the source proto, run Buf, and update all evidence producers, consumers, and behavior tests together. Change the JSON control models, client, server, API documentation, and behavior tests together when the control contract changes.

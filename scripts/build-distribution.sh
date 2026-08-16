@@ -21,8 +21,15 @@ if [[ -z $signing_identity ]]; then
     exit 1
 fi
 
+app_profile=${PABLO_APP_PROVISIONING_PROFILE:-$($script_directory/find-distribution-profile.sh \
+    com.ramon.pablo D9G32AG3E5 D9G32AG3E5.com.ramon.pablo.safari)}
+safari_profile=${PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE:-$($script_directory/find-distribution-profile.sh \
+    com.ramon.pablo.safari.extension D9G32AG3E5 D9G32AG3E5.com.ramon.pablo.safari)}
+
 PABLO_SIGNING_IDENTITY="$signing_identity" \
 PABLO_ARCHITECTURES="arm64" \
+PABLO_APP_PROVISIONING_PROFILE="$app_profile" \
+PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE="$safari_profile" \
     "$script_directory/build-app.sh" release
 
 codesign --verify --deep --strict --verbose=2 "$bundle_path"

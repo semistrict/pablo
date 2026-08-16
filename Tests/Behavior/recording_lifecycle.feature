@@ -2,6 +2,16 @@ Feature: Record one Mac application on a single monotonic timeline
   Pablo records video, target-scoped input, and accessibility state while respecting pause and user-controlled capture termination.
 
   @automated
+  # RecordingStorageTests.defaultApplicationRecordingNamesIncludeTheApplication
+  Scenario: Default application recording names identify their target
+    Given an application recording has no explicit output path
+    When Pablo creates its recording package URL
+    Then the package filename includes the resolved application name and timestamp
+    And characters that cannot safely appear in filenames are replaced
+    And display recordings retain the generic timestamped recording name
+    And an explicit output path remains unchanged
+
+  @automated
   # SessionClockTests.testPausedTimeIsExcludedFromTimeline
   Scenario: Paused time is excluded from the recording timeline
     Given a session clock starts at monotonic time 1 second
@@ -14,7 +24,7 @@ Feature: Record one Mac application on a single monotonic timeline
   @automated
   # AutomationActionTraceTests.automationActionsAreExplicitAndRedactedInTheEventTrace
   Scenario: Agent actions are explicit evidence in the event trace
-    Given an approved calling application controls any live app through the Pablo CLI while a recording is active or paused
+    Given an approved calling application controls any live app through the local API while a recording is active or paused
     When it requests click, drag, scroll, type, key, or accessibility actions
     Then `events.pb` contains an `automationAction` record before each action is attempted
     And the record identifies the action, target, verified calling application, developer, and one stable action UUID
@@ -115,12 +125,42 @@ Feature: Record one Mac application on a single monotonic timeline
     Then both control surfaces update to the same state
 
   @signed-app @manual
+  Scenario: A completed recording opens for review automatically
+    Given a recording was started from the recorder window, menu-bar panel, or an approved app
+    When the user, an approved app, a duration limit, or macOS sharing controls stop the recording
+    And Pablo successfully finalizes the recording package
+    Then Pablo opens that exact `.pablo` package in a new review window
+    And it opens the review window only once
+    And the recorder returns to Ready
+    When recording finalization fails
+    Then Pablo shows the error without opening an incomplete package for review
+
+  @signed-app @manual
+  Scenario: Copy agent instructions from the recorder window
+    Given the dedicated `Pablo Recorder` window is open
+    When the user chooses `Copy Agent Instructions`
+    Then the clipboard contains Pablo's current control socket path
+    And it contains the curl command for fetching the OpenAPI contract
+    And it tells the agent to leave Pablo's approval dialog to the user
+    And it tells the agent to require an explicit request before recording
+    And the button temporarily reports `Copied`
+
+  @signed-app @manual
   Scenario: Show Recordings opens the recording directory
     Given Pablo is idle or recording
     When the user chooses `Show Recordings` in the menu-bar panel
-    Then Pablo creates `~/Movies/Pablo Recordings` if necessary
+    Then Pablo creates `~/Documents/Pablo Recordings` if necessary
     And Finder opens that directory
     And any failure is shown in Pablo instead of being discarded
+
+  @automated
+  # RecordingStorageTests.legacyRecordingsMoveWithoutOverwriting
+  Scenario: Existing recordings move from Movies to Documents once
+    Given existing `.pablo` packages are in `~/Movies/Pablo Recordings`
+    When the updated Pablo app launches
+    Then packages without naming conflicts move to `~/Documents/Pablo Recordings`
+    And an existing package at the destination is never overwritten
+    And unrelated files remain untouched
 
   @signed-app @manual
   Scenario: Open Review raises the review window

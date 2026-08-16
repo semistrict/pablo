@@ -251,7 +251,7 @@ public enum CLI {
     Record options:
       --screen                  Record the entire main display and every interacting app
       --display-id ID           Record a specific display instead of the main display
-      -o, --output PATH          Output package (default: ~/Movies/Pablo Recordings)
+      -o, --output PATH          Output package (default: ~/Documents/Pablo Recordings)
       --duration SECONDS        Stop automatically; otherwise use pablo stop
       --snapshot-interval SEC   Periodic accessibility snapshot interval (default: 1)
       --fps FPS                 Video frame rate from 1 to 60 (default: 30)
@@ -263,6 +263,8 @@ public enum CLI {
       --pid PID                Inspect a running application by process ID
 
     Live action options:
+      --unlock-foreground-actions
+                               Allow Pablo to activate the target (NOT RECOMMENDED)
       --node ID                Target an accessibility node from a live frame
       --point X,Y              Target normalized coordinates in the largest window
       --button BUTTON          left, right, or middle (default: left)
@@ -293,7 +295,7 @@ public enum CLI {
       pablo record --app Notes --duration 20 -o notes-session.pablo
 
     Recording controls are sent to the Pablo app and require daily approval per calling application.
-    Inspection commands default to the latest recording in ~/Movies/Pablo Recordings.
+    Inspection commands default to the latest recording in ~/Documents/Pablo Recordings.
     Live inspection is memory-only and goes through the running Pablo app for approval.
     The first live events request begins observing input directed to the target app.
     Use the stable A11Y-### references in the app or CLI to discuss a specific frame.
@@ -423,7 +425,7 @@ public enum CLI {
     }
 
     public static func formatControlResult(_ result: PabloControlResult) -> String {
-        if let output = result.output { return output }
+        if let output = result.output { return output.formattedString() }
         if let annotation = result.annotation {
             return "\(annotation.reference)  \(annotation.status.rawValue)  \(annotation.kind.rawValue)  " +
                 annotation.text
@@ -450,7 +452,7 @@ public enum CLI {
         case .recording(let url):
             return try frames(url, json: json)
         case .live(let target):
-            return try inspectLive(.init(kind: .frames, target: target, json: json))
+            return try inspectLive(.init(kind: .frames, target: target))
         }
     }
 
@@ -473,8 +475,7 @@ public enum CLI {
                 kind: .frame,
                 target: target,
                 reference: reference,
-                changedOnly: changedOnly,
-                json: json
+                changedOnly: changedOnly
             ))
         }
     }
@@ -488,7 +489,7 @@ public enum CLI {
         case .recording(let url):
             return try events(url, limit: limit, json: json)
         case .live(let target):
-            return try inspectLive(.init(kind: .events, target: target, limit: limit, json: json))
+            return try inspectLive(.init(kind: .events, target: target, limit: limit))
         }
     }
 
@@ -497,7 +498,7 @@ public enum CLI {
         case .recording(let url):
             return try annotations(url, json: json)
         case .live(let target):
-            return try inspectLive(.init(kind: .annotations, target: target, json: json))
+            return try inspectLive(.init(kind: .annotations, target: target))
         }
     }
 
@@ -509,7 +510,7 @@ public enum CLI {
         guard let output = result.output else {
             throw RecordingError.capture("The Pablo app returned no live inspection output.")
         }
-        return output
+        return output.formattedString()
     }
 
     public static func performLiveAction(_ action: PabloLiveActionRequest) throws -> String {
@@ -520,7 +521,7 @@ public enum CLI {
         guard let output = result.output else {
             throw RecordingError.capture("The Pablo app returned no live action result.")
         }
-        return output
+        return output.formattedString()
     }
 
     public static func inspect(_ requestedURL: URL?) throws -> String {
@@ -747,6 +748,7 @@ public enum CLI {
         var key: String?
         var modifiers: [PabloLiveKeyModifier] = []
         var accessibilityAction: String?
+        var unlockForegroundActions = false
 
         var target: PabloLiveApplicationTarget {
             PabloLiveApplicationTarget(
@@ -829,6 +831,8 @@ public enum CLI {
                 )
             case "--action" where kind == .perform:
                 parsed.accessibilityAction = try next(arguments, &index, option: argument)
+            case "--unlock-foreground-actions":
+                parsed.unlockForegroundActions = true
             default:
                 throw RecordingError.usage("Unknown or inapplicable option for \(kind.rawValue): \(argument)")
             }
@@ -900,7 +904,8 @@ public enum CLI {
             text: parsed.text,
             key: parsed.key,
             modifiers: parsed.modifiers,
-            accessibilityAction: parsed.accessibilityAction
+            accessibilityAction: parsed.accessibilityAction,
+            unlockForegroundActions: parsed.unlockForegroundActions
         )
     }
 
@@ -1186,8 +1191,7 @@ public enum CLI {
     }
 
     private static var recordingsDirectory: URL {
-        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
-        return movies.appendingPathComponent("Pablo Recordings", isDirectory: true)
+        PabloRecordingStorage.localRecordingsDirectory
     }
 
     private static func modificationDate(_ url: URL) -> Date {

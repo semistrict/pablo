@@ -120,12 +120,14 @@ final class CLITests: XCTestCase {
 
         let drag = try liveAction([
             "drag", "--app", "Notes", "--from", "0.1,0.2", "--to", "0.8,0.9",
-            "--duration", "1.25",
+            "--duration", "1.25", "--unlock-foreground-actions",
         ])
         XCTAssertEqual(drag.kind, .drag)
         XCTAssertEqual(drag.fromPoint, PabloLivePoint(x: 0.1, y: 0.2))
         XCTAssertEqual(drag.toPoint, PabloLivePoint(x: 0.8, y: 0.9))
         XCTAssertEqual(drag.duration, 1.25)
+        XCTAssertTrue(drag.unlockForegroundActions)
+        XCTAssertFalse(click.unlockForegroundActions)
 
         let scroll = try liveAction([
             "scroll", "--app", "Notes", "--direction", "down", "--amount", "8",

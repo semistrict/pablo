@@ -91,7 +91,8 @@ Feature: Parse and run the Pablo command-line interface predictably
     Then each observation receives a stable `A11Y-###` reference
     When the tester runs `frame A11Y-001 --app <name>`
     Then the accessibility tree uses the same text shape as a recorded frame
-    And `--changed` and `--json` behave as they do for a recording
+    And live output is always pretty-printed JSON
+    And `--changed` behaves as it does for a recording
 
   @automated
   # LiveInspectionTests.liveAccessibilityHistoryIsStableAndBounded
@@ -111,7 +112,8 @@ Feature: Parse and run the Pablo command-line interface predictably
     And begins observing input directed to that target
     When the user interacts with the target and the tester runs the command again
     Then the output uses stable `EVT-####` references
-    And `--limit` and `--json` behave as they do for recorded events
+    And `--limit` behaves as it does for recorded events
+    And live output is always pretty-printed JSON
     And the history remains only in memory
 
   @signed-app @human-approval @manual
@@ -119,7 +121,7 @@ Feature: Parse and run the Pablo command-line interface predictably
     Given a live inspection session exists
     When the tester runs `annotations --app <name>`
     Then Pablo returns an empty annotation collection
-    And explains in text output that live inspection is read-only
+    And returns a pretty-printed empty JSON collection
     And does not modify or create a recording
 
   @manual

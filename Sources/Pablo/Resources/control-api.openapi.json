@@ -1,0 +1,1306 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Pablo Local Control API",
+    "version": "3",
+    "description": "HTTP JSON control, live inspection, and live action calls over Pablo's current-user Unix-domain socket. Caller identity comes from socket peer credentials and process ancestry, never request fields. Agents should inspect a fresh accessibility frame before acting, prefer exact node IDs, and inspect again afterward to verify the intended state change. Foreground actions are locked by default."
+  },
+  "servers": [
+    {
+      "url": "http://localhost",
+      "description": "Unix-domain socket transport; the host is not contacted.",
+      "x-unix-socket": "~/Library/Application Support/Pablo/control.sock"
+    }
+  ],
+  "x-request-body-maximum-bytes": 65536,
+  "x-response-body-maximum-bytes": 16777216,
+  "x-content-type-optional": true,
+  "x-http-methods": "any",
+  "paths": {
+    "/openapi.json": {
+      "get": {
+        "operationId": "getOpenAPIDocument",
+        "summary": "Return this OpenAPI document",
+        "responses": {
+          "200": {
+            "description": "OpenAPI 3.1 document",
+            "content": {
+              "application/vnd.oai.openapi+json": {
+                "schema": {
+                  "type": "object"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/record.start": {
+      "post": {
+        "operationId": "startRecording",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordOptions"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/record.pause": {
+      "post": {
+        "operationId": "pauseRecording",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/record.resume": {
+      "post": {
+        "operationId": "resumeRecording",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/record.stop": {
+      "post": {
+        "operationId": "stopRecording",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/record.status": {
+      "post": {
+        "operationId": "getRecordingStatus",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/annotation.add": {
+      "post": {
+        "operationId": "addAnnotation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/annotation.resolve": {
+      "post": {
+        "operationId": "resolveAnnotation",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/inspect.live": {
+      "post": {
+        "operationId": "inspectLive",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiveInspectionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/action.live": {
+      "post": {
+        "operationId": "actLive",
+        "description": "Control a live application. Pablo does not activate the target by default. Accessibility `perform` actions and single left clicks on nodes exposing AXPress can run in the background. Actions that require target activation fail unless unlockForegroundActions is true. That option is NOT RECOMMENDED and agents must not set it without the user's explicit acceptance of the focus change.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/LiveActionRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/safari.dom": {
+      "post": {
+        "operationId": "controlUnlockedSafariTab",
+        "description": "Inspect or manipulate the active Safari tab without activating Safari. The user must enable Pablo Safari and click its toolbar button on the tab first. The activeTab grant ends when the tab navigates. Pablo requests no persistent website access; results are derived from the page DOM, not WebKit's private native accessibility tree.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SafariDOMRequest"
+              },
+              "examples": {
+                "accessibilityTree": {
+                  "value": {
+                    "kind": "dumpAccessibilityTree"
+                  }
+                },
+                "clickNode": {
+                  "value": {
+                    "kind": "click",
+                    "nodeID": "#submit"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/safari.tabs": {
+      "post": {
+        "operationId": "listUnlockedSafariTabs",
+        "description": "List the active tab in each Safari window for which the user has clicked the Pablo Safari toolbar button since the most recent navigation. The operation neither activates Safari nor requests persistent website access.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/rrweb.start": {
+      "post": {
+        "operationId": "startRRWebRecording",
+        "description": "Start masked rrweb event capture in one tab returned by safari.tabs. Pablo generates the recording identifier and writes a .pabloweb package; the caller supplies only the current tab ID.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RRWebStartRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/rrweb.pause": {
+      "post": {
+        "operationId": "pauseRRWebRecording",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/rrweb.resume": {
+      "post": {
+        "operationId": "resumeRRWebRecording",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/rrweb.stop": {
+      "post": {
+        "operationId": "stopRRWebRecording",
+        "description": "Stop capture, persist all received events, and finalize the package.",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/rrweb.status": {
+      "post": {
+        "operationId": "getRRWebRecordingStatus",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/rrweb.recordings": {
+      "post": {
+        "operationId": "listRRWebRecordings",
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/rrweb.inspect": {
+      "post": {
+        "operationId": "inspectRRWebRecording",
+        "description": "Return a saved recording manifest and optionally a bounded prefix of its rrweb events. Supply exactly one recording selector.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RRWebInspectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "responses": {
+      "CallResponse": {
+        "description": "A completed or application-rejected call",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/CallResponse"
+            }
+          }
+        }
+      },
+      "BadRequest": {
+        "description": "Unsupported method URL, malformed HTTP, or malformed JSON",
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/HTTPError"
+            }
+          }
+        }
+      }
+    },
+    "schemas": {
+      "ApplicationTarget": {
+        "type": "object",
+        "description": "Supply exactly one target selector.",
+        "oneOf": [
+          {
+            "required": [
+              "pid"
+            ]
+          },
+          {
+            "required": [
+              "bundleIdentifier"
+            ]
+          },
+          {
+            "required": [
+              "appName"
+            ]
+          }
+        ],
+        "properties": {
+          "pid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "bundleIdentifier": {
+            "type": "string"
+          },
+          "appName": {
+            "type": "string"
+          }
+        }
+      },
+      "Point": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "y": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          }
+        }
+      },
+      "RecordOptions": {
+        "type": "object",
+        "required": [
+          "scope"
+        ],
+        "properties": {
+          "scope": {
+            "type": "string",
+            "enum": [
+              "application",
+              "display"
+            ]
+          },
+          "pid": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "bundleIdentifier": {
+            "type": "string"
+          },
+          "appName": {
+            "type": "string"
+          },
+          "displayID": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "outputPath": {
+            "type": "string"
+          },
+          "duration": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "snapshotInterval": {
+            "type": "number",
+            "default": 1
+          },
+          "captureText": {
+            "type": "boolean",
+            "default": true
+          },
+          "framesPerSecond": {
+            "type": "integer",
+            "default": 30
+          }
+        }
+      },
+      "AnnotationRequest": {
+        "type": "object",
+        "required": [
+          "recordingPath"
+        ],
+        "properties": {
+          "recordingPath": {
+            "type": "string"
+          },
+          "draft": {
+            "$ref": "#/components/schemas/AnnotationDraft"
+          },
+          "reference": {
+            "type": "string",
+            "pattern": "^NOTE-[0-9]{3,}$"
+          }
+        }
+      },
+      "AnnotationDraft": {
+        "type": "object",
+        "required": [
+          "kind",
+          "text",
+          "applicationIDs",
+          "accessibilityReferences",
+          "accessibilityNodeIDs"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "issue",
+              "observation",
+              "question",
+              "highlight"
+            ]
+          },
+          "text": {
+            "type": "string"
+          },
+          "startTimestampNs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "endTimestampNs": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "applicationIDs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessibilityReferences": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "accessibilityNodeIDs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "trace": {
+            "$ref": "#/components/schemas/AnnotationTrace"
+          }
+        }
+      },
+      "AnnotationTrace": {
+        "type": "object",
+        "required": [
+          "samples",
+          "lineWidth"
+        ],
+        "properties": {
+          "samples": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "timestampNs",
+                "x",
+                "y"
+              ],
+              "properties": {
+                "timestampNs": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "x": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                },
+                "y": {
+                  "type": "number",
+                  "minimum": 0,
+                  "maximum": 1
+                }
+              }
+            }
+          },
+          "lineWidth": {
+            "type": "number",
+            "exclusiveMinimum": 0,
+            "maximum": 0.1
+          }
+        }
+      },
+      "LiveInspectionRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "target"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "inspect",
+              "frames",
+              "frame",
+              "events",
+              "annotations"
+            ]
+          },
+          "target": {
+            "$ref": "#/components/schemas/ApplicationTarget"
+          },
+          "reference": {
+            "type": "string"
+          },
+          "changedOnly": {
+            "type": "boolean",
+            "default": false
+          },
+          "limit": {
+            "type": "integer",
+            "default": 100
+          }
+        }
+      },
+      "LiveActionRequest": {
+        "type": "object",
+        "required": [
+          "kind",
+          "target"
+        ],
+        "description": "A validated live action. Inspect immediately before acting and use a node ID from the latest frame when possible. The per-kind field requirements are expressed below.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "const": "click"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "oneOf": [
+              {
+                "required": [
+                  "nodeID"
+                ]
+              },
+              {
+                "required": [
+                  "point"
+                ]
+              }
+            ]
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "drag"
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "allOf": [
+              {
+                "oneOf": [
+                  {
+                    "required": [
+                      "fromNodeID"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "fromPoint"
+                    ]
+                  }
+                ]
+              },
+              {
+                "oneOf": [
+                  {
+                    "required": [
+                      "toNodeID"
+                    ]
+                  },
+                  {
+                    "required": [
+                      "toPoint"
+                    ]
+                  }
+                ]
+              }
+            ]
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "scroll"
+              }
+            },
+            "required": [
+              "kind",
+              "scrollDirection"
+            ]
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "type"
+              }
+            },
+            "required": [
+              "kind",
+              "text"
+            ]
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "key"
+              }
+            },
+            "required": [
+              "kind",
+              "key"
+            ]
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "perform"
+              }
+            },
+            "required": [
+              "kind",
+              "nodeID",
+              "accessibilityAction"
+            ]
+          }
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "click",
+              "drag",
+              "scroll",
+              "type",
+              "key",
+              "perform"
+            ]
+          },
+          "target": {
+            "$ref": "#/components/schemas/ApplicationTarget"
+          },
+          "nodeID": {
+            "type": "string",
+            "description": "Stable node ID from the latest live accessibility frame."
+          },
+          "point": {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/Point"
+              }
+            ],
+            "description": "Normalized point in the target's largest accessible window."
+          },
+          "fromNodeID": {
+            "type": "string"
+          },
+          "fromPoint": {
+            "$ref": "#/components/schemas/Point"
+          },
+          "toNodeID": {
+            "type": "string"
+          },
+          "toPoint": {
+            "$ref": "#/components/schemas/Point"
+          },
+          "mouseButton": {
+            "type": "string",
+            "enum": [
+              "left",
+              "right",
+              "middle"
+            ],
+            "default": "left"
+          },
+          "clickCount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3,
+            "default": 1
+          },
+          "duration": {
+            "type": "number",
+            "minimum": 0.05,
+            "maximum": 10,
+            "default": 0.5
+          },
+          "scrollDirection": {
+            "type": "string",
+            "enum": [
+              "up",
+              "down",
+              "left",
+              "right"
+            ]
+          },
+          "scrollAmount": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 100,
+            "default": 3
+          },
+          "text": {
+            "type": "string",
+            "minLength": 1,
+            "maxLength": 32768,
+            "description": "Text to type. Action output and evidence never echo its contents."
+          },
+          "key": {
+            "type": "string"
+          },
+          "modifiers": {
+            "type": "array",
+            "default": [
+
+            ],
+            "items": {
+              "type": "string",
+              "enum": [
+                "command",
+                "option",
+                "control",
+                "shift",
+                "function"
+              ]
+            }
+          },
+          "accessibilityAction": {
+            "type": "string",
+            "description": "Action currently exposed by the selected node, such as press or increment."
+          },
+          "unlockForegroundActions": {
+            "type": "boolean",
+            "default": false,
+            "description": "NOT RECOMMENDED. Allows Pablo to activate the target for pointer, scroll, drag, typing, key, and fallback click input. Agents must leave this false unless the user explicitly accepts the focus change."
+          }
+        }
+      },
+      "SafariDOMRequest": {
+        "type": "object",
+        "required": [
+          "kind"
+        ],
+        "description": "A bounded command for the active Safari tab explicitly unlocked through the extension toolbar button. Use nodeID values from a fresh dump; nodeID is a CSS selector and is invalid after navigation or DOM replacement.",
+        "oneOf": [
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "dumpDOM",
+                  "dumpAccessibilityTree"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ]
+          },
+          {
+            "properties": {
+              "kind": {
+                "enum": [
+                  "click",
+                  "focus",
+                  "scrollIntoView"
+                ]
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "oneOf": [
+              {
+                "required": [
+                  "selector"
+                ]
+              },
+              {
+                "required": [
+                  "nodeID"
+                ]
+              }
+            ]
+          },
+          {
+            "properties": {
+              "kind": {
+                "const": "setValue"
+              }
+            },
+            "required": [
+              "kind",
+              "value"
+            ],
+            "oneOf": [
+              {
+                "required": [
+                  "selector"
+                ]
+              },
+              {
+                "required": [
+                  "nodeID"
+                ]
+              }
+            ]
+          }
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "dumpDOM",
+              "dumpAccessibilityTree",
+              "click",
+              "focus",
+              "setValue",
+              "scrollIntoView"
+            ]
+          },
+          "selector": {
+            "type": "string",
+            "minLength": 1,
+            "description": "CSS selector for an action target. Supply selector or nodeID, not both."
+          },
+          "nodeID": {
+            "type": "string",
+            "minLength": 1,
+            "description": "CSS-selector node ID returned by the latest DOM or accessibility dump."
+          },
+          "value": {
+            "type": "string",
+            "maxLength": 32768,
+            "description": "Value for setValue. Responses and automation evidence expose only its character count."
+          },
+          "includeHidden": {
+            "type": "boolean",
+            "default": false
+          },
+          "maxNodes": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 2000
+          },
+          "maxDepth": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 50,
+            "default": 20
+          },
+          "tabID": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "description": "An unlocked tab ID returned by safari.tabs. If omitted, Pablo uses Safari's active tab in its current window."
+          }
+        }
+      },
+      "RRWebStartRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "tabID"
+        ],
+        "properties": {
+          "tabID": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1,
+            "description": "Current unlocked tab ID returned by safari.tabs."
+          }
+        }
+      },
+      "RRWebInspectRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "oneOf": [
+          {
+            "required": [
+              "recordingPath"
+            ]
+          },
+          {
+            "required": [
+              "recordingID"
+            ]
+          }
+        ],
+        "properties": {
+          "recordingPath": {
+            "type": "string",
+            "description": "Absolute path to a .pabloweb package."
+          },
+          "recordingID": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Server-generated recording identifier from a manifest."
+          },
+          "includeEvents": {
+            "type": "boolean",
+            "default": false
+          },
+          "eventLimit": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 10000,
+            "default": 1000
+          }
+        }
+      },
+      "SafariTab": {
+        "type": "object",
+        "required": [
+          "id",
+          "title",
+          "url"
+        ],
+        "properties": {
+          "id": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 1
+          },
+          "windowID": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": "string"
+          },
+          "url": {
+            "type": "string",
+            "format": "uri"
+          }
+        }
+      },
+      "SafariTabsOutput": {
+        "type": "object",
+        "required": [
+          "tabs"
+        ],
+        "properties": {
+          "tabs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SafariTab"
+            }
+          }
+        }
+      },
+      "RRWebRecordingManifest": {
+        "type": "object",
+        "required": [
+          "schemaVersion",
+          "recordingID",
+          "tab",
+          "startedAt",
+          "state",
+          "eventCount",
+          "inputsMasked",
+          "rrwebVersion"
+        ],
+        "properties": {
+          "schemaVersion": {
+            "type": "integer",
+            "const": 1
+          },
+          "recordingID": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "tab": {
+            "$ref": "#/components/schemas/SafariTab"
+          },
+          "startedAt": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "endedAt": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "recording",
+              "paused",
+              "complete",
+              "interrupted",
+              "failed"
+            ]
+          },
+          "eventCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "inputsMasked": {
+            "type": "boolean",
+            "const": true
+          },
+          "rrwebVersion": {
+            "type": "string"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "RRWebRecording": {
+        "type": "object",
+        "required": [
+          "path",
+          "manifest"
+        ],
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "manifest": {
+            "$ref": "#/components/schemas/RRWebRecordingManifest"
+          }
+        }
+      },
+      "RRWebStatusOutput": {
+        "type": "object",
+        "required": [
+          "eventCount"
+        ],
+        "properties": {
+          "active": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/RRWebRecording"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "eventCount": {
+            "type": "integer",
+            "minimum": 0
+          }
+        }
+      },
+      "RRWebRecordingsOutput": {
+        "type": "object",
+        "required": [
+          "recordings"
+        ],
+        "properties": {
+          "recordings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/RRWebRecording"
+            }
+          }
+        }
+      },
+      "RRWebInspectionOutput": {
+        "type": "object",
+        "required": [
+          "recording"
+        ],
+        "properties": {
+          "recording": {
+            "$ref": "#/components/schemas/RRWebRecording"
+          },
+          "events": {
+            "type": "array",
+            "description": "Bounded rrweb events, present only when includeEvents is true.",
+            "items": {
+            }
+          },
+          "eventsTruncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "CallResponse": {
+        "type": "object",
+        "required": [
+          "id"
+        ],
+        "properties": {
+          "id": {
+            "type": "string",
+            "format": "uuid",
+            "description": "Server-generated call identifier."
+          },
+          "result": {
+            "$ref": "#/components/schemas/ControlResult"
+          },
+          "error": {
+            "type": "string"
+          }
+        }
+      },
+      "ControlResult": {
+        "type": "object",
+        "required": [
+          "state",
+          "applicationIDs",
+          "elapsedNanoseconds"
+        ],
+        "properties": {
+          "state": {
+            "type": "string"
+          },
+          "scopeName": {
+            "type": "string"
+          },
+          "applicationIDs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "recordingPath": {
+            "type": "string"
+          },
+          "elapsedNanoseconds": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "annotation": {
+            "type": "object"
+          },
+          "output": {
+            "description": "Pretty-printed structured JSON for live inspection, or a string for live action output. Safari and rrweb operations use the documented output object schemas.",
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/SafariTabsOutput"
+              },
+              {
+                "$ref": "#/components/schemas/RRWebStatusOutput"
+              },
+              {
+                "$ref": "#/components/schemas/RRWebRecordingsOutput"
+              },
+              {
+                "$ref": "#/components/schemas/RRWebInspectionOutput"
+              },
+              {
+                "type": "object"
+              },
+              {
+                "type": "array"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          }
+        }
+      },
+      "HTTPError": {
+        "type": "object",
+        "required": [
+          "error"
+        ],
+        "properties": {
+          "error": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

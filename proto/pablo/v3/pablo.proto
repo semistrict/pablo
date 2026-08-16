@@ -19,12 +19,6 @@ message Rect {
   double height = 4;
 }
 
-enum RecordingScopeKind {
-  RECORDING_SCOPE_KIND_UNSPECIFIED = 0;
-  RECORDING_SCOPE_KIND_APPLICATION = 1;
-  RECORDING_SCOPE_KIND_DISPLAY = 2;
-}
-
 message ApplicationDescriptor {
   string id = 1;
   int32 pid = 2;
@@ -106,31 +100,47 @@ enum KeyModifier {
   KEY_MODIFIER_FUNCTION = 5;
 }
 
-message LiveActionRequest {
-  LiveActionKind kind = 1;
-  LiveApplicationTarget target = 2;
-  optional string node_id = 3;
-  optional Point point = 4;
-  optional string from_node_id = 5;
-  optional Point from_point = 6;
-  optional string to_node_id = 7;
-  optional Point to_point = 8;
-  MouseButton mouse_button = 9;
-  int64 click_count = 10;
-  double duration = 11;
-  optional ScrollDirection scroll_direction = 12;
-  int64 scroll_amount = 13;
-  optional string text = 14;
-  optional string key = 15;
-  repeated KeyModifier modifiers = 16;
-  optional string accessibility_action = 17;
-}
-
 enum AutomationActionPhase {
   AUTOMATION_ACTION_PHASE_UNSPECIFIED = 0;
   AUTOMATION_ACTION_PHASE_REQUESTED = 1;
   AUTOMATION_ACTION_PHASE_SUCCEEDED = 2;
   AUTOMATION_ACTION_PHASE_FAILED = 3;
+}
+
+enum SafariDOMCommandKind {
+  SAFARI_DOM_COMMAND_KIND_UNSPECIFIED = 0;
+  SAFARI_DOM_COMMAND_KIND_DUMP_DOM = 1;
+  SAFARI_DOM_COMMAND_KIND_DUMP_ACCESSIBILITY_TREE = 2;
+  SAFARI_DOM_COMMAND_KIND_CLICK = 3;
+  SAFARI_DOM_COMMAND_KIND_FOCUS = 4;
+  SAFARI_DOM_COMMAND_KIND_SET_VALUE = 5;
+  SAFARI_DOM_COMMAND_KIND_SCROLL_INTO_VIEW = 6;
+  SAFARI_DOM_COMMAND_KIND_LIST_TABS = 7;
+  SAFARI_DOM_COMMAND_KIND_START_RRWEB_RECORDING = 8;
+  SAFARI_DOM_COMMAND_KIND_PAUSE_RRWEB_RECORDING = 9;
+  SAFARI_DOM_COMMAND_KIND_RESUME_RRWEB_RECORDING = 10;
+  SAFARI_DOM_COMMAND_KIND_STOP_RRWEB_RECORDING = 11;
+  SAFARI_DOM_COMMAND_KIND_RRWEB_RECORDING_STATUS = 12;
+}
+
+message SafariDOMCommand {
+  string id = 1;
+  SafariDOMCommandKind kind = 2;
+  optional string selector = 3;
+  optional string node_id = 4;
+  optional string value = 5;
+  bool include_hidden = 6;
+  uint32 max_nodes = 7;
+  uint32 max_depth = 8;
+  optional int64 tab_id = 9;
+  optional string recording_id = 10;
+}
+
+message SafariDOMResponse {
+  string id = 1;
+  bool success = 2;
+  optional bytes json_payload = 3;
+  optional string error = 4;
 }
 
 message AutomationCaller {
@@ -165,6 +175,7 @@ message AutomationActionTrace {
   string transport = 21;
   bool recording_was_paused = 22;
   optional string resolved_application_id = 23;
+  bool foreground_actions_unlocked = 24;
 }
 
 message InputEventRecord {
@@ -253,17 +264,6 @@ message AnnotationTrace {
   double line_width = 2;
 }
 
-message AnnotationDraft {
-  AnnotationKind kind = 1;
-  string text = 2;
-  optional uint64 start_timestamp_ns = 3;
-  optional uint64 end_timestamp_ns = 4;
-  repeated string application_ids = 5;
-  repeated string accessibility_references = 6;
-  repeated string accessibility_node_ids = 7;
-  optional AnnotationTrace trace = 8;
-}
-
 message RecordingAnnotation {
   string id = 1;
   int64 sequence = 2;
@@ -280,84 +280,4 @@ message RecordingAnnotation {
   repeated string accessibility_references = 13;
   repeated string accessibility_node_ids = 14;
   optional AnnotationTrace trace = 15;
-}
-
-enum LiveInspectionKind {
-  LIVE_INSPECTION_KIND_UNSPECIFIED = 0;
-  LIVE_INSPECTION_KIND_INSPECT = 1;
-  LIVE_INSPECTION_KIND_FRAMES = 2;
-  LIVE_INSPECTION_KIND_FRAME = 3;
-  LIVE_INSPECTION_KIND_EVENTS = 4;
-  LIVE_INSPECTION_KIND_ANNOTATIONS = 5;
-}
-
-message LiveInspectionRequest {
-  LiveInspectionKind kind = 1;
-  LiveApplicationTarget target = 2;
-  optional string reference = 3;
-  bool changed_only = 4;
-  int64 limit = 5;
-  bool json = 6;
-}
-
-message RecordOptions {
-  RecordingScopeKind scope = 1;
-  optional int32 pid = 2;
-  optional string bundle_identifier = 3;
-  optional string app_name = 4;
-  optional uint32 display_id = 5;
-  optional string output_path = 6;
-  optional double duration = 7;
-  double snapshot_interval = 8;
-  bool capture_text = 9;
-  int64 frames_per_second = 10;
-}
-
-message AnnotationRequest {
-  string recording_path = 1;
-  optional AnnotationDraft draft = 2;
-  optional string reference = 3;
-}
-
-enum ControlMethod {
-  CONTROL_METHOD_UNSPECIFIED = 0;
-  CONTROL_METHOD_RECORD_START = 1;
-  CONTROL_METHOD_RECORD_PAUSE = 2;
-  CONTROL_METHOD_RECORD_RESUME = 3;
-  CONTROL_METHOD_RECORD_STOP = 4;
-  CONTROL_METHOD_RECORD_STATUS = 5;
-  CONTROL_METHOD_ANNOTATION_ADD = 6;
-  CONTROL_METHOD_ANNOTATION_RESOLVE = 7;
-  CONTROL_METHOD_INSPECT_LIVE = 8;
-  CONTROL_METHOD_ACTION_LIVE = 9;
-}
-
-message CallRequest {
-  uint32 protocol_version = 1;
-  string id = 2;
-  ControlMethod method = 3;
-  optional RecordOptions record_options = 4;
-  optional AnnotationRequest annotation_request = 5;
-  optional LiveInspectionRequest live_inspection_request = 6;
-  optional LiveActionRequest live_action_request = 7;
-}
-
-message ControlResult {
-  string state = 1;
-  optional string scope_name = 2;
-  optional string recording_path = 3;
-  uint64 elapsed_nanoseconds = 4;
-  optional RecordingAnnotation annotation = 5;
-  optional string output = 6;
-  repeated string application_ids = 7;
-}
-
-message CallResponse {
-  string id = 1;
-  optional ControlResult result = 2;
-  optional string error = 3;
-}
-
-service PabloControlService {
-  rpc Call(CallRequest) returns (CallResponse);
 }

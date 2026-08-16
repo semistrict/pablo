@@ -36,29 +36,6 @@ enum PabloProtobufCodec {
             .map(RecordingAnnotation.init)
     }
 
-    static func encode(_ value: PabloControlRequest) throws -> Data {
-        try ProtobufStream.frame(value.protobuf)
-    }
-
-    static func decodeControlRequest(from data: Data) throws -> PabloControlRequest {
-        let messages = try ProtobufStream.decode(PabloV3CallRequest.self, from: data)
-        guard messages.count == 1 else {
-            throw RecordingError.capture("A control connection must contain exactly one request.")
-        }
-        return try PabloControlRequest(messages[0])
-    }
-
-    static func encode(_ value: PabloControlResponse) throws -> Data {
-        try ProtobufStream.frame(value.protobuf)
-    }
-
-    static func decodeControlResponse(from data: Data) throws -> PabloControlResponse {
-        let messages = try ProtobufStream.decode(PabloV3CallResponse.self, from: data)
-        guard messages.count == 1 else {
-            throw RecordingError.capture("A control connection must contain exactly one response.")
-        }
-        return try PabloControlResponse(messages[0])
-    }
 }
 
 private func requiredUUID(_ value: String, field: String) throws -> UUID {
@@ -181,52 +158,6 @@ private extension PabloLiveKeyModifier {
     }
 }
 
-private extension PabloLiveActionRequest {
-    var protobuf: PabloV3LiveActionRequest {
-        .with {
-            $0.kind = kind.protobuf
-            $0.target = target.protobuf
-            if let nodeID { $0.nodeID = nodeID }
-            if let point { $0.point = point.protobuf }
-            if let fromNodeID { $0.fromNodeID = fromNodeID }
-            if let fromPoint { $0.fromPoint = fromPoint.protobuf }
-            if let toNodeID { $0.toNodeID = toNodeID }
-            if let toPoint { $0.toPoint = toPoint.protobuf }
-            $0.mouseButton = mouseButton.protobuf
-            $0.clickCount = Int64(clickCount)
-            $0.duration = duration
-            if let scrollDirection { $0.scrollDirection = scrollDirection.protobuf }
-            $0.scrollAmount = Int64(scrollAmount)
-            if let text { $0.text = text }
-            if let key { $0.key = key }
-            $0.modifiers = modifiers.map(\.protobuf)
-            if let accessibilityAction { $0.accessibilityAction = accessibilityAction }
-        }
-    }
-
-    init(_ value: PabloV3LiveActionRequest) throws {
-        self.init(
-            kind: try PabloLiveActionKind(value.kind),
-            target: PabloLiveApplicationTarget(value.target),
-            nodeID: value.hasNodeID ? value.nodeID : nil,
-            point: value.hasPoint ? PabloLivePoint(value.point) : nil,
-            fromNodeID: value.hasFromNodeID ? value.fromNodeID : nil,
-            fromPoint: value.hasFromPoint ? PabloLivePoint(value.fromPoint) : nil,
-            toNodeID: value.hasToNodeID ? value.toNodeID : nil,
-            toPoint: value.hasToPoint ? PabloLivePoint(value.toPoint) : nil,
-            mouseButton: try PabloLiveMouseButton(value.mouseButton),
-            clickCount: Int(value.clickCount),
-            duration: value.duration,
-            scrollDirection: value.hasScrollDirection ? try PabloLiveScrollDirection(value.scrollDirection) : nil,
-            scrollAmount: Int(value.scrollAmount),
-            text: value.hasText ? value.text : nil,
-            key: value.hasKey ? value.key : nil,
-            modifiers: try value.modifiers.map(PabloLiveKeyModifier.init),
-            accessibilityAction: value.hasAccessibilityAction ? value.accessibilityAction : nil
-        )
-    }
-}
-
 private extension PabloAutomationActionPhase {
     var protobuf: PabloV3AutomationActionPhase {
         switch self { case .requested: .requested; case .succeeded: .succeeded; case .failed: .failed }
@@ -287,6 +218,7 @@ private extension PabloAutomationActionTrace {
             if let key { $0.key = key }
             $0.modifiers = modifiers.map(\.protobuf)
             if let accessibilityAction { $0.accessibilityAction = accessibilityAction }
+            $0.foregroundActionsUnlocked = foregroundActionsUnlocked
             $0.caller = caller.protobuf
             $0.transport = transport
             $0.recordingWasPaused = recordingWasPaused
@@ -315,6 +247,7 @@ private extension PabloAutomationActionTrace {
             key: value.hasKey ? value.key : nil,
             modifiers: try value.modifiers.map(PabloLiveKeyModifier.init),
             accessibilityAction: value.hasAccessibilityAction ? value.accessibilityAction : nil,
+            foregroundActionsUnlocked: value.foregroundActionsUnlocked,
             caller: PabloAutomationCaller(value.caller),
             transport: value.transport,
             recordingWasPaused: value.recordingWasPaused,
@@ -635,34 +568,6 @@ private extension RecordingAnnotationTrace {
     }
 }
 
-private extension RecordingAnnotationDraft {
-    var protobuf: PabloV3AnnotationDraft {
-        .with {
-            $0.kind = kind.protobuf
-            $0.text = text
-            if let startTimestampNs { $0.startTimestampNs = startTimestampNs }
-            if let endTimestampNs { $0.endTimestampNs = endTimestampNs }
-            $0.applicationIds = applicationIDs
-            $0.accessibilityReferences = accessibilityReferences
-            $0.accessibilityNodeIds = accessibilityNodeIDs
-            if let trace { $0.trace = trace.protobuf }
-        }
-    }
-
-    init(_ value: PabloV3AnnotationDraft) throws {
-        self.init(
-            kind: try RecordingAnnotationKind(value.kind),
-            text: value.text,
-            startTimestampNs: value.hasStartTimestampNs ? value.startTimestampNs : nil,
-            endTimestampNs: value.hasEndTimestampNs ? value.endTimestampNs : nil,
-            applicationIDs: value.applicationIds,
-            accessibilityReferences: value.accessibilityReferences,
-            accessibilityNodeIDs: value.accessibilityNodeIds,
-            trace: value.hasTrace ? RecordingAnnotationTrace(value.trace) : nil
-        )
-    }
-}
-
 extension RecordingAnnotation {
     var protobuf: PabloV3RecordingAnnotation {
         .with {
@@ -702,210 +607,5 @@ extension RecordingAnnotation {
             accessibilityNodeIDs: value.accessibilityNodeIds,
             trace: value.hasTrace ? RecordingAnnotationTrace(value.trace) : nil
         )
-    }
-}
-
-private extension PabloLiveInspectionKind {
-    var protobuf: PabloV3LiveInspectionKind {
-        switch self {
-        case .inspect: .inspect
-        case .frames: .frames
-        case .frame: .frame
-        case .events: .events
-        case .annotations: .annotations
-        }
-    }
-
-    init(_ value: PabloV3LiveInspectionKind) throws {
-        switch value {
-        case .inspect: self = .inspect
-        case .frames: self = .frames
-        case .frame: self = .frame
-        case .events: self = .events
-        case .annotations: self = .annotations
-        case .unspecified, .UNRECOGNIZED:
-            throw RecordingError.capture("A protobuf live inspection request has an unknown kind.")
-        }
-    }
-}
-
-private extension PabloLiveInspectionRequest {
-    var protobuf: PabloV3LiveInspectionRequest {
-        .with {
-            $0.kind = kind.protobuf
-            $0.target = target.protobuf
-            if let reference { $0.reference = reference }
-            $0.changedOnly = changedOnly
-            $0.limit = Int64(limit)
-            $0.json = json
-        }
-    }
-
-    init(_ value: PabloV3LiveInspectionRequest) throws {
-        self.init(
-            kind: try PabloLiveInspectionKind(value.kind),
-            target: PabloLiveApplicationTarget(value.target),
-            reference: value.hasReference ? value.reference : nil,
-            changedOnly: value.changedOnly,
-            limit: Int(value.limit),
-            json: value.json
-        )
-    }
-}
-
-private extension PabloControlRecordOptions {
-    var protobuf: PabloV3RecordOptions {
-        .with {
-            $0.scope = scope == .display ? .display : .application
-            if let pid { $0.pid = pid }
-            if let bundleIdentifier { $0.bundleIdentifier = bundleIdentifier }
-            if let appName { $0.appName = appName }
-            if let displayID { $0.displayID = displayID }
-            if let outputPath { $0.outputPath = outputPath }
-            if let duration { $0.duration = duration }
-            $0.snapshotInterval = snapshotInterval
-            $0.captureText = captureText
-            $0.framesPerSecond = Int64(framesPerSecond)
-        }
-    }
-
-    init(_ value: PabloV3RecordOptions) {
-        self.init(
-            scope: value.scope == .display ? .display : .application,
-            pid: value.hasPid ? value.pid : nil,
-            bundleIdentifier: value.hasBundleIdentifier ? value.bundleIdentifier : nil,
-            appName: value.hasAppName ? value.appName : nil,
-            displayID: value.hasDisplayID ? value.displayID : nil,
-            outputPath: value.hasOutputPath ? value.outputPath : nil,
-            duration: value.hasDuration ? value.duration : nil,
-            snapshotInterval: value.snapshotInterval,
-            captureText: value.captureText,
-            framesPerSecond: Int(value.framesPerSecond)
-        )
-    }
-}
-
-private extension PabloControlAnnotationRequest {
-    var protobuf: PabloV3AnnotationRequest {
-        .with {
-            $0.recordingPath = recordingPath
-            if let draft { $0.draft = draft.protobuf }
-            if let reference { $0.reference = reference }
-        }
-    }
-
-    init(_ value: PabloV3AnnotationRequest) throws {
-        if value.hasDraft {
-            self.init(recordingPath: value.recordingPath, draft: try RecordingAnnotationDraft(value.draft))
-        } else if value.hasReference {
-            self.init(recordingPath: value.recordingPath, reference: value.reference)
-        } else {
-            throw RecordingError.capture("A protobuf annotation request has no operation.")
-        }
-    }
-}
-
-private extension PabloControlMethod {
-    var protobuf: PabloV3ControlMethod {
-        switch self {
-        case .startRecording: .recordStart
-        case .pauseRecording: .recordPause
-        case .resumeRecording: .recordResume
-        case .stopRecording: .recordStop
-        case .status: .recordStatus
-        case .addAnnotation: .annotationAdd
-        case .resolveAnnotation: .annotationResolve
-        case .inspectLive: .inspectLive
-        case .actLive: .actionLive
-        }
-    }
-
-    init(_ value: PabloV3ControlMethod) throws {
-        switch value {
-        case .recordStart: self = .startRecording
-        case .recordPause: self = .pauseRecording
-        case .recordResume: self = .resumeRecording
-        case .recordStop: self = .stopRecording
-        case .recordStatus: self = .status
-        case .annotationAdd: self = .addAnnotation
-        case .annotationResolve: self = .resolveAnnotation
-        case .inspectLive: self = .inspectLive
-        case .actionLive: self = .actLive
-        case .unspecified, .UNRECOGNIZED:
-            throw RecordingError.capture("A protobuf control request has an unknown method.")
-        }
-    }
-}
-
-private extension PabloControlRequest {
-    var protobuf: PabloV3CallRequest {
-        .with {
-            $0.protocolVersion = UInt32(protocolVersion)
-            $0.id = id.uuidString
-            $0.method = method.protobuf
-            if let recordOptions { $0.recordOptions = recordOptions.protobuf }
-            if let annotationRequest { $0.annotationRequest = annotationRequest.protobuf }
-            if let liveInspectionRequest { $0.liveInspectionRequest = liveInspectionRequest.protobuf }
-            if let liveActionRequest { $0.liveActionRequest = liveActionRequest.protobuf }
-        }
-    }
-
-    init(_ value: PabloV3CallRequest) throws {
-        self.init(
-            protocolVersion: Int(value.protocolVersion),
-            id: try requiredUUID(value.id, field: "control request ID"),
-            method: try PabloControlMethod(value.method),
-            recordOptions: value.hasRecordOptions ? PabloControlRecordOptions(value.recordOptions) : nil,
-            annotationRequest: value.hasAnnotationRequest ? try PabloControlAnnotationRequest(value.annotationRequest) : nil,
-            liveInspectionRequest: value.hasLiveInspectionRequest ? try PabloLiveInspectionRequest(value.liveInspectionRequest) : nil,
-            liveActionRequest: value.hasLiveActionRequest ? try PabloLiveActionRequest(value.liveActionRequest) : nil
-        )
-    }
-}
-
-private extension PabloControlResult {
-    var protobuf: PabloV3ControlResult {
-        .with {
-            $0.state = state
-            if let scopeName { $0.scopeName = scopeName }
-            $0.applicationIds = applicationIDs
-            if let recordingPath { $0.recordingPath = recordingPath }
-            $0.elapsedNanoseconds = elapsedNanoseconds
-            if let annotation { $0.annotation = annotation.protobuf }
-            if let output { $0.output = output }
-        }
-    }
-
-    init(_ value: PabloV3ControlResult) throws {
-        self.init(
-            state: value.state,
-            scopeName: value.hasScopeName ? value.scopeName : nil,
-            applicationIDs: value.applicationIds,
-            recordingPath: value.hasRecordingPath ? value.recordingPath : nil,
-            elapsedNanoseconds: value.elapsedNanoseconds,
-            annotation: value.hasAnnotation ? try RecordingAnnotation(value.annotation) : nil,
-            output: value.hasOutput ? value.output : nil
-        )
-    }
-}
-
-private extension PabloControlResponse {
-    var protobuf: PabloV3CallResponse {
-        .with {
-            $0.id = id.uuidString
-            if let result { $0.result = result.protobuf }
-            if let error { $0.error = error }
-        }
-    }
-
-    init(_ value: PabloV3CallResponse) throws {
-        let id = try requiredUUID(value.id, field: "control response ID")
-        if value.hasResult {
-            self.init(id: id, result: try PabloControlResult(value.result))
-        } else if value.hasError {
-            self.init(id: id, error: value.error)
-        } else {
-            throw RecordingError.capture("A protobuf control response has neither a result nor an error.")
-        }
     }
 }

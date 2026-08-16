@@ -43,7 +43,7 @@ Feature: Control a live Mac application through the approved Pablo bridge
   @automated
   # LiveActionTests.liveActionValidationFailsClosedAtTheAppBoundary
   Scenario: The app revalidates action payloads received over the socket
-    Given a caller bypasses the bundled CLI and constructs a control request directly
+    Given a caller constructs an HTTP JSON control request directly
     When the request has coordinates outside zero through one
     Or has multiple target selectors
     Or has an out-of-range drag duration
@@ -95,8 +95,20 @@ Feature: Control a live Mac application through the approved Pablo bridge
     When `click --node <id>` targets a node exposing `AXPress`
     Then Pablo performs `AXPress` on that exact node
     When the node does not expose `AXPress` or `--point X,Y` is used
-    Then Pablo posts the requested mouse button and click count at the resolved point
+    Then Pablo rejects the action while foreground actions remain locked
+    When the user explicitly accepts a focus change and `--unlock-foreground-actions` is supplied
+    Then Pablo activates the target and posts the requested mouse button and click count at the resolved point
     And the point remains inside the target window
+
+  @automated
+  # LiveActionTests.liveActionForegroundPolicyFailsClosed
+  Scenario: Foreground actions fail closed by default
+    Given a live action would require Pablo to activate the target application
+    When the request omits `unlockForegroundActions` or sets it to false
+    Then Pablo rejects the action without changing the foreground application
+    And the error identifies the unlock as NOT RECOMMENDED
+    When the request explicitly sets `unlockForegroundActions` to true
+    Then the foreground policy permits the action to continue
 
   @signed-app @manual
   Scenario: Drag between points or accessibility nodes
@@ -121,7 +133,7 @@ Feature: Control a live Mac application through the approved Pablo bridge
     Then Pablo focuses that exact accessibility element before posting Unicode keyboard events
     When no node is supplied
     Then Pablo types into the target's current focused control
-    And the CLI result reports only the character count, not the text
+    And the control result reports only the character count, not the text
     And the synthetic key events pass through the HID event tap
     And recording and live-event observation can see those key events
 

@@ -167,6 +167,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
     public let key: String?
     public let modifiers: [PabloLiveKeyModifier]
     public let accessibilityAction: String?
+    public let foregroundActionsUnlocked: Bool
     public let caller: PabloAutomationCaller
     public let transport: String
     public let recordingWasPaused: Bool
@@ -200,6 +201,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         key = request.key
         modifiers = request.modifiers
         accessibilityAction = request.accessibilityAction
+        foregroundActionsUnlocked = request.unlockForegroundActions
         self.caller = caller
         self.transport = transport
         self.recordingWasPaused = recordingWasPaused
@@ -226,6 +228,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         key: String?,
         modifiers: [PabloLiveKeyModifier],
         accessibilityAction: String?,
+        foregroundActionsUnlocked: Bool,
         caller: PabloAutomationCaller,
         transport: String,
         recordingWasPaused: Bool,
@@ -250,6 +253,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         self.key = key
         self.modifiers = modifiers
         self.accessibilityAction = accessibilityAction
+        self.foregroundActionsUnlocked = foregroundActionsUnlocked
         self.caller = caller
         self.transport = transport
         self.recordingWasPaused = recordingWasPaused
@@ -279,6 +283,7 @@ extension PabloAutomationActionTrace {
             key: key,
             modifiers: modifiers,
             accessibilityAction: accessibilityAction,
+            foregroundActionsUnlocked: foregroundActionsUnlocked,
             caller: caller,
             transport: transport,
             recordingWasPaused: recordingWasPaused,

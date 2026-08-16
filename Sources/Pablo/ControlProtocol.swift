@@ -11,6 +11,15 @@ public enum PabloControlMethod: String, Codable, Sendable {
     case resolveAnnotation = "annotation.resolve"
     case inspectLive = "inspect.live"
     case actLive = "action.live"
+    case safariDOM = "safari.dom"
+    case safariTabs = "safari.tabs"
+    case rrwebStart = "rrweb.start"
+    case rrwebPause = "rrweb.pause"
+    case rrwebResume = "rrweb.resume"
+    case rrwebStop = "rrweb.stop"
+    case rrwebStatus = "rrweb.status"
+    case rrwebRecordings = "rrweb.recordings"
+    case rrwebInspect = "rrweb.inspect"
 
     public var approvalDescription: String {
         switch self {
@@ -23,6 +32,15 @@ public enum PabloControlMethod: String, Codable, Sendable {
         case .resolveAnnotation: return "resolve markup in a recording"
         case .inspectLive: return "inspect a live application"
         case .actLive: return "control a live application"
+        case .safariDOM: return "inspect or control an unlocked Safari tab"
+        case .safariTabs: return "list unlocked active Safari tabs"
+        case .rrwebStart: return "start an rrweb recording of an unlocked Safari tab"
+        case .rrwebPause: return "pause the current rrweb recording"
+        case .rrwebResume: return "resume the current rrweb recording"
+        case .rrwebStop: return "stop the current rrweb recording"
+        case .rrwebStatus: return "read the current rrweb recording status"
+        case .rrwebRecordings: return "list saved rrweb recordings"
+        case .rrwebInspect: return "inspect a saved rrweb recording"
         }
     }
 }
@@ -53,22 +71,34 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
     public let reference: String?
     public let changedOnly: Bool
     public let limit: Int
-    public let json: Bool
 
     public init(
         kind: PabloLiveInspectionKind,
         target: PabloLiveApplicationTarget,
         reference: String? = nil,
         changedOnly: Bool = false,
-        limit: Int = 100,
-        json: Bool = false
+        limit: Int = 100
     ) {
         self.kind = kind
         self.target = target
         self.reference = reference
         self.changedOnly = changedOnly
         self.limit = limit
-        self.json = json
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, target, reference, changedOnly, limit
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            kind: try container.decode(PabloLiveInspectionKind.self, forKey: .kind),
+            target: try container.decode(PabloLiveApplicationTarget.self, forKey: .target),
+            reference: try container.decodeIfPresent(String.self, forKey: .reference),
+            changedOnly: try container.decodeIfPresent(Bool.self, forKey: .changedOnly) ?? false,
+            limit: try container.decodeIfPresent(Int.self, forKey: .limit) ?? 100
+        )
     }
 }
 
@@ -130,6 +160,7 @@ public struct PabloLiveActionRequest: Codable, Sendable {
     public let key: String?
     public let modifiers: [PabloLiveKeyModifier]
     public let accessibilityAction: String?
+    public let unlockForegroundActions: Bool
 
     public init(
         kind: PabloLiveActionKind,
@@ -148,7 +179,8 @@ public struct PabloLiveActionRequest: Codable, Sendable {
         text: String? = nil,
         key: String? = nil,
         modifiers: [PabloLiveKeyModifier] = [],
-        accessibilityAction: String? = nil
+        accessibilityAction: String? = nil,
+        unlockForegroundActions: Bool = false
     ) {
         self.kind = kind
         self.target = target
@@ -167,6 +199,126 @@ public struct PabloLiveActionRequest: Codable, Sendable {
         self.key = key
         self.modifiers = modifiers
         self.accessibilityAction = accessibilityAction
+        self.unlockForegroundActions = unlockForegroundActions
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, target, nodeID, point, fromNodeID, fromPoint, toNodeID, toPoint
+        case mouseButton, clickCount, duration, scrollDirection, scrollAmount
+        case text, key, modifiers, accessibilityAction, unlockForegroundActions
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            kind: try container.decode(PabloLiveActionKind.self, forKey: .kind),
+            target: try container.decode(PabloLiveApplicationTarget.self, forKey: .target),
+            nodeID: try container.decodeIfPresent(String.self, forKey: .nodeID),
+            point: try container.decodeIfPresent(PabloLivePoint.self, forKey: .point),
+            fromNodeID: try container.decodeIfPresent(String.self, forKey: .fromNodeID),
+            fromPoint: try container.decodeIfPresent(PabloLivePoint.self, forKey: .fromPoint),
+            toNodeID: try container.decodeIfPresent(String.self, forKey: .toNodeID),
+            toPoint: try container.decodeIfPresent(PabloLivePoint.self, forKey: .toPoint),
+            mouseButton: try container.decodeIfPresent(PabloLiveMouseButton.self, forKey: .mouseButton) ?? .left,
+            clickCount: try container.decodeIfPresent(Int.self, forKey: .clickCount) ?? 1,
+            duration: try container.decodeIfPresent(TimeInterval.self, forKey: .duration) ?? 0.5,
+            scrollDirection: try container.decodeIfPresent(PabloLiveScrollDirection.self, forKey: .scrollDirection),
+            scrollAmount: try container.decodeIfPresent(Int.self, forKey: .scrollAmount) ?? 3,
+            text: try container.decodeIfPresent(String.self, forKey: .text),
+            key: try container.decodeIfPresent(String.self, forKey: .key),
+            modifiers: try container.decodeIfPresent([PabloLiveKeyModifier].self, forKey: .modifiers) ?? [],
+            accessibilityAction: try container.decodeIfPresent(String.self, forKey: .accessibilityAction),
+            unlockForegroundActions: try container.decodeIfPresent(
+                Bool.self,
+                forKey: .unlockForegroundActions
+            ) ?? false
+        )
+    }
+}
+
+public enum PabloSafariDOMCommandKind: String, Codable, Sendable {
+    case listTabs
+    case startRRWebRecording
+    case pauseRRWebRecording
+    case resumeRRWebRecording
+    case stopRRWebRecording
+    case rrwebRecordingStatus
+    case dumpDOM
+    case dumpAccessibilityTree
+    case click
+    case focus
+    case setValue
+    case scrollIntoView
+
+    public var isMutation: Bool {
+        switch self {
+        case .listTabs, .startRRWebRecording, .pauseRRWebRecording,
+             .resumeRRWebRecording, .stopRRWebRecording, .rrwebRecordingStatus,
+             .dumpDOM, .dumpAccessibilityTree: false
+        case .click, .focus, .setValue, .scrollIntoView: true
+        }
+    }
+
+    public var isRRWebCommand: Bool {
+        switch self {
+        case .startRRWebRecording, .pauseRRWebRecording, .resumeRRWebRecording,
+             .stopRRWebRecording, .rrwebRecordingStatus: true
+        case .listTabs, .dumpDOM, .dumpAccessibilityTree, .click, .focus, .setValue,
+             .scrollIntoView: false
+        }
+    }
+}
+
+public struct PabloSafariDOMRequest: Codable, Sendable {
+    public let kind: PabloSafariDOMCommandKind
+    public let selector: String?
+    public let nodeID: String?
+    public let value: String?
+    public let includeHidden: Bool
+    public let maxNodes: Int
+    public let maxDepth: Int
+    public let tabID: Int64?
+    public let recordingID: UUID?
+
+    public init(
+        kind: PabloSafariDOMCommandKind,
+        selector: String? = nil,
+        nodeID: String? = nil,
+        value: String? = nil,
+        includeHidden: Bool = false,
+        maxNodes: Int = 2_000,
+        maxDepth: Int = 20,
+        tabID: Int64? = nil,
+        recordingID: UUID? = nil
+    ) {
+        self.kind = kind
+        self.selector = selector
+        self.nodeID = nodeID
+        self.value = value
+        self.includeHidden = includeHidden
+        self.maxNodes = maxNodes
+        self.maxDepth = maxDepth
+        self.tabID = tabID
+        self.recordingID = recordingID
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case kind, selector, nodeID, value, includeHidden, maxNodes, maxDepth, tabID, recordingID
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            kind: try container.decode(PabloSafariDOMCommandKind.self, forKey: .kind),
+            selector: try container.decodeIfPresent(String.self, forKey: .selector),
+            nodeID: try container.decodeIfPresent(String.self, forKey: .nodeID),
+            value: try container.decodeIfPresent(String.self, forKey: .value),
+            includeHidden: try container.decodeIfPresent(Bool.self, forKey: .includeHidden) ?? false,
+            maxNodes: try container.decodeIfPresent(Int.self, forKey: .maxNodes) ?? 2_000,
+            maxDepth: try container.decodeIfPresent(Int.self, forKey: .maxDepth) ?? 20,
+            tabID: try container.decodeIfPresent(Int64.self, forKey: .tabID),
+            recordingID: try container.decodeIfPresent(UUID.self, forKey: .recordingID)
+        )
     }
 }
 
@@ -219,6 +371,27 @@ public struct PabloControlRecordOptions: Codable, Sendable {
         self.framesPerSecond = framesPerSecond
     }
 
+    private enum CodingKeys: String, CodingKey {
+        case scope, pid, bundleIdentifier, appName, displayID, outputPath, duration
+        case snapshotInterval, captureText, framesPerSecond
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            scope: try container.decode(RecordingScopeKind.self, forKey: .scope),
+            pid: try container.decodeIfPresent(Int32.self, forKey: .pid),
+            bundleIdentifier: try container.decodeIfPresent(String.self, forKey: .bundleIdentifier),
+            appName: try container.decodeIfPresent(String.self, forKey: .appName),
+            displayID: try container.decodeIfPresent(UInt32.self, forKey: .displayID),
+            outputPath: try container.decodeIfPresent(String.self, forKey: .outputPath),
+            duration: try container.decodeIfPresent(TimeInterval.self, forKey: .duration),
+            snapshotInterval: try container.decodeIfPresent(TimeInterval.self, forKey: .snapshotInterval) ?? 1,
+            captureText: try container.decodeIfPresent(Bool.self, forKey: .captureText) ?? true,
+            framesPerSecond: try container.decodeIfPresent(Int.self, forKey: .framesPerSecond) ?? 30
+        )
+    }
+
     public func recordOptions() -> RecordOptions {
         var options = RecordOptions()
         options.scope = scope
@@ -253,47 +426,159 @@ public struct PabloControlAnnotationRequest: Codable, Sendable {
     }
 }
 
-public struct PabloControlRequest: Codable, Sendable {
-    public let protocolVersion: Int
+public struct PabloRRWebControlRequest: Codable, Sendable {
+    public let tabID: Int64?
+    public let recordingPath: String?
+    public let recordingID: UUID?
+    public let includeEvents: Bool
+    public let eventLimit: Int
+
+    public init(
+        tabID: Int64? = nil,
+        recordingPath: String? = nil,
+        recordingID: UUID? = nil,
+        includeEvents: Bool = false,
+        eventLimit: Int = 1_000
+    ) {
+        self.tabID = tabID
+        self.recordingPath = recordingPath
+        self.recordingID = recordingID
+        self.includeEvents = includeEvents
+        self.eventLimit = eventLimit
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case tabID, recordingPath, recordingID, includeEvents, eventLimit
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.init(
+            tabID: try container.decodeIfPresent(Int64.self, forKey: .tabID),
+            recordingPath: try container.decodeIfPresent(String.self, forKey: .recordingPath),
+            recordingID: try container.decodeIfPresent(UUID.self, forKey: .recordingID),
+            includeEvents: try container.decodeIfPresent(Bool.self, forKey: .includeEvents) ?? false,
+            eventLimit: try container.decodeIfPresent(Int.self, forKey: .eventLimit) ?? 1_000
+        )
+    }
+
+    public func validate(for method: PabloControlMethod) throws {
+        switch method {
+        case .rrwebStart:
+            guard tabID.map({ $0 > 0 }) == true,
+                  recordingPath == nil, recordingID == nil,
+                  includeEvents == false, eventLimit == 1_000 else {
+                throw RecordingError.usage("rrweb.start accepts only a positive tabID.")
+            }
+        case .rrwebInspect:
+            guard tabID == nil else {
+                throw RecordingError.usage("rrweb.inspect does not accept tabID.")
+            }
+            guard [recordingPath != nil, recordingID != nil].filter({ $0 }).count == 1 else {
+                throw RecordingError.usage(
+                    "rrweb.inspect requires exactly one recordingPath or recordingID."
+                )
+            }
+            guard (1...10_000).contains(eventLimit) else {
+                throw RecordingError.usage("eventLimit must be from 1 to 10000.")
+            }
+        default:
+            throw RecordingError.usage("This endpoint does not accept an rrweb request body.")
+        }
+    }
+}
+
+public struct PabloControlRequest: Sendable {
     public let id: UUID
     public let method: PabloControlMethod
     public let recordOptions: PabloControlRecordOptions?
     public let annotationRequest: PabloControlAnnotationRequest?
     public let liveInspectionRequest: PabloLiveInspectionRequest?
     public let liveActionRequest: PabloLiveActionRequest?
+    public let safariDOMRequest: PabloSafariDOMRequest?
+    public let rrwebRequest: PabloRRWebControlRequest?
 
     public init(
         method: PabloControlMethod,
         recordOptions: PabloControlRecordOptions? = nil,
         annotationRequest: PabloControlAnnotationRequest? = nil,
         liveInspectionRequest: PabloLiveInspectionRequest? = nil,
-        liveActionRequest: PabloLiveActionRequest? = nil
+        liveActionRequest: PabloLiveActionRequest? = nil,
+        safariDOMRequest: PabloSafariDOMRequest? = nil,
+        rrwebRequest: PabloRRWebControlRequest? = nil
     ) {
-        protocolVersion = 3
         id = UUID()
         self.method = method
         self.recordOptions = recordOptions
         self.annotationRequest = annotationRequest
         self.liveInspectionRequest = liveInspectionRequest
         self.liveActionRequest = liveActionRequest
+        self.safariDOMRequest = safariDOMRequest
+        self.rrwebRequest = rrwebRequest
     }
 
-    init(
-        protocolVersion: Int,
-        id: UUID,
-        method: PabloControlMethod,
-        recordOptions: PabloControlRecordOptions?,
-        annotationRequest: PabloControlAnnotationRequest?,
-        liveInspectionRequest: PabloLiveInspectionRequest?,
-        liveActionRequest: PabloLiveActionRequest?
-    ) {
-        self.protocolVersion = protocolVersion
-        self.id = id
-        self.method = method
-        self.recordOptions = recordOptions
-        self.annotationRequest = annotationRequest
-        self.liveInspectionRequest = liveInspectionRequest
-        self.liveActionRequest = liveActionRequest
+}
+
+public indirect enum PabloControlOutput: Codable, Equatable, Sendable {
+    case object([String: PabloControlOutput])
+    case array([PabloControlOutput])
+    case string(String)
+    case integer(Int64)
+    case unsignedInteger(UInt64)
+    case number(Double)
+    case boolean(Bool)
+    case null
+
+    public init(json: String) throws {
+        self = try JSONDecoder().decode(Self.self, from: Data(json.utf8))
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.singleValueContainer()
+        if container.decodeNil() {
+            self = .null
+        } else if let value = try? container.decode([String: Self].self) {
+            self = .object(value)
+        } else if let value = try? container.decode([Self].self) {
+            self = .array(value)
+        } else if let value = try? container.decode(Bool.self) {
+            self = .boolean(value)
+        } else if let value = try? container.decode(Int64.self) {
+            self = .integer(value)
+        } else if let value = try? container.decode(UInt64.self) {
+            self = .unsignedInteger(value)
+        } else if let value = try? container.decode(Double.self) {
+            self = .number(value)
+        } else if let value = try? container.decode(String.self) {
+            self = .string(value)
+        } else {
+            throw DecodingError.dataCorruptedError(
+                in: container,
+                debugDescription: "The Pablo control output contained an unsupported JSON value."
+            )
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.singleValueContainer()
+        switch self {
+        case .object(let value): try container.encode(value)
+        case .array(let value): try container.encode(value)
+        case .string(let value): try container.encode(value)
+        case .integer(let value): try container.encode(value)
+        case .unsignedInteger(let value): try container.encode(value)
+        case .number(let value): try container.encode(value)
+        case .boolean(let value): try container.encode(value)
+        case .null: try container.encodeNil()
+        }
+    }
+
+    public func formattedString() -> String {
+        if case .string(let value) = self { return value }
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        guard let data = try? encoder.encode(self) else { return "null" }
+        return String(decoding: data, as: UTF8.self)
     }
 }
 
@@ -304,7 +589,7 @@ public struct PabloControlResult: Codable, Sendable {
     public let recordingPath: String?
     public let elapsedNanoseconds: UInt64
     public let annotation: RecordingAnnotation?
-    public let output: String?
+    public let output: PabloControlOutput?
 
     public init(
         state: String,
@@ -313,7 +598,7 @@ public struct PabloControlResult: Codable, Sendable {
         recordingPath: String?,
         elapsedNanoseconds: UInt64,
         annotation: RecordingAnnotation? = nil,
-        output: String? = nil
+        output: PabloControlOutput? = nil
     ) {
         self.state = state
         self.scopeName = scopeName
@@ -393,6 +678,17 @@ public final class PabloDailyApprovalStore: @unchecked Sendable {
 }
 
 public enum PabloControlSocket {
+    public static let openAPIEndpoint = "/openapi.json"
+
+    public static func endpoint(for method: PabloControlMethod) -> String {
+        "/\(method.rawValue)"
+    }
+
+    static func method(for endpoint: String) -> PabloControlMethod? {
+        guard endpoint.first == "/" else { return nil }
+        return PabloControlMethod(rawValue: String(endpoint.dropFirst()))
+    }
+
     public static var path: String {
         let directory = FileManager.default.urls(
             for: .applicationSupportDirectory,
@@ -402,7 +698,62 @@ public enum PabloControlSocket {
     }
 }
 
+enum PabloControlJSONCodec {
+    static func encode<Value: Encodable>(_ value: Value) throws -> Data {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        encoder.outputFormatting = [.prettyPrinted, .sortedKeys, .withoutEscapingSlashes]
+        return try encoder.encode(value)
+    }
+
+    static func decode<Value: Decodable>(_ type: Value.Type, from data: Data) throws -> Value {
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        return try decoder.decode(type, from: data)
+    }
+}
+
+enum PabloControlOpenAPI {
+    static func document() throws -> Data {
+        guard let url = Bundle.module.url(
+            forResource: "control-api.openapi",
+            withExtension: "json"
+        ) else {
+            throw RecordingError.capture("Pablo's OpenAPI document is missing.")
+        }
+        return try Data(contentsOf: url)
+    }
+}
+
 public enum PabloProcessChain {
+    public static func parentProcessIdentifier(of pid: pid_t) -> pid_t? {
+        var information = proc_bsdinfo()
+        let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
+        let actualSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &information, expectedSize)
+        if actualSize == expectedSize, information.pbi_ppid > 0 {
+            return pid_t(information.pbi_ppid)
+        }
+        return kernelParentProcessIdentifier(of: pid)
+    }
+
+    static func kernelParentProcessIdentifier(of pid: pid_t) -> pid_t? {
+        var managementInformationBase = [CTL_KERN, KERN_PROC, KERN_PROC_PID, pid]
+        var information = kinfo_proc()
+        var size = MemoryLayout<kinfo_proc>.size
+        let result = sysctl(
+            &managementInformationBase,
+            u_int(managementInformationBase.count),
+            &information,
+            &size,
+            nil,
+            0
+        )
+        guard result == 0,
+              size == MemoryLayout<kinfo_proc>.size,
+              information.kp_eproc.e_ppid > 0 else { return nil }
+        return pid_t(information.kp_eproc.e_ppid)
+    }
+
     public static func nearestApplication<Identity>(
         invokedBy childProcessIdentifier: pid_t,
         maximumDepth: Int = 64,
@@ -417,6 +768,18 @@ public enum PabloProcessChain {
             current = parentProcessIdentifier(pid)
         }
         return nil
+    }
+
+    public static func owningApplicationBundleURL(forExecutablePath path: String) -> URL? {
+        var current = URL(fileURLWithPath: path).deletingLastPathComponent()
+        var outermostApplication: URL?
+        while current.path != "/" {
+            if current.pathExtension.caseInsensitiveCompare("app") == .orderedSame {
+                outermostApplication = current
+            }
+            current.deleteLastPathComponent()
+        }
+        return outermostApplication
     }
 }
 
@@ -445,15 +808,26 @@ public enum PabloControlClient {
             throw socketError("Could not connect to the Pablo app")
         }
 
-        let requestData = try PabloProtobufCodec.encode(request)
-        try writeAll(requestData, to: descriptor)
-        Darwin.shutdown(descriptor, SHUT_WR)
-
-        let responseData = try readToEnd(from: descriptor, maximumBytes: 16 * 1_024 * 1_024)
-        guard !responseData.isEmpty else {
-            throw RecordingError.capture("The Pablo app closed the control connection without responding.")
+        let body = try controlRequestBody(request)
+        guard body.count <= controlRequestMaximumBytes else {
+            throw RecordingError.capture("The Pablo control request was too large.")
         }
-        return try PabloProtobufCodec.decodeControlResponse(from: responseData)
+        try writeHTTPRequest(
+            endpoint: PabloControlSocket.endpoint(for: request.method),
+            body: body,
+            to: descriptor
+        )
+
+        let response = try readHTTPMessage(
+            from: descriptor,
+            maximumBodyBytes: controlResponseMaximumBytes
+        )
+        guard response.startLine == "HTTP/1.1 200 OK" else {
+            let detail = (try? PabloControlJSONCodec.decode(ControlHTTPError.self, from: response.body).error)
+                ?? "The Pablo app returned an invalid HTTP response."
+            throw RecordingError.capture(detail)
+        }
+        return try PabloControlJSONCodec.decode(PabloControlResponse.self, from: response.body)
     }
 }
 
@@ -564,16 +938,33 @@ public final class PabloControlServer: @unchecked Sendable {
 
         let request: PabloControlRequest
         do {
-            let data = try readToEnd(from: descriptor, maximumBytes: 64 * 1_024)
-            request = try PabloProtobufCodec.decodeControlRequest(from: data)
-            guard request.protocolVersion == 3 else {
-                try writeResponse(
-                    PabloControlResponse(id: request.id, error: "Unsupported control protocol version."),
+            let message = try readHTTPMessage(
+                from: descriptor,
+                maximumBodyBytes: controlRequestMaximumBytes
+            )
+            let startLine = message.startLine.split(separator: " ")
+            guard startLine.count == 3, startLine[2] == "HTTP/1.1" else {
+                throw RecordingError.capture("The control request requires an HTTP/1.1 method and URL.")
+            }
+            let endpoint = String(startLine[1])
+            if endpoint == PabloControlSocket.openAPIEndpoint {
+                guard message.body.isEmpty else {
+                    throw RecordingError.capture("The OpenAPI endpoint does not accept a request body.")
+                }
+                try writeHTTPResponse(
+                    body: PabloControlOpenAPI.document(),
+                    status: "200 OK",
+                    contentType: "application/vnd.oai.openapi+json",
                     to: descriptor
                 )
                 return
             }
+            guard let method = PabloControlSocket.method(for: endpoint) else {
+                throw RecordingError.capture("The control endpoint requires a supported method URL.")
+            }
+            request = try decodeControlRequest(method: method, body: message.body)
         } catch {
+            try? writeHTTPError(error.localizedDescription, status: "400 Bad Request", to: descriptor)
             return
         }
 
@@ -613,8 +1004,230 @@ public final class PabloControlServer: @unchecked Sendable {
     }
 
     private func writeResponse(_ response: PabloControlResponse, to descriptor: Int32) throws {
-        try writeAll(try PabloProtobufCodec.encode(response), to: descriptor)
+        let body = try PabloControlJSONCodec.encode(response)
+        guard body.count <= controlResponseMaximumBytes else {
+            try writeHTTPError("The Pablo control response was too large.", status: "500 Internal Server Error", to: descriptor)
+            return
+        }
+        try writeHTTPResponse(body: body, status: "200 OK", to: descriptor)
     }
+}
+
+private let controlHeaderMaximumBytes = 16 * 1_024
+private let controlRequestMaximumBytes = 64 * 1_024
+private let controlResponseMaximumBytes = 16 * 1_024 * 1_024
+
+private struct ControlHTTPMessage {
+    let startLine: String
+    let headers: [String: String]
+    let body: Data
+}
+
+private struct ControlHTTPError: Codable {
+    let error: String
+}
+
+private func writeHTTPRequest(endpoint: String, body: Data, to descriptor: Int32) throws {
+    let header = """
+    POST \(endpoint) HTTP/1.1\r
+    Host: localhost\r
+    Content-Type: application/json\r
+    Accept: application/json\r
+    Content-Length: \(body.count)\r
+    Connection: close\r
+    \r
+
+    """
+    try writeAll(Data(header.utf8), to: descriptor)
+    try writeAll(body, to: descriptor)
+}
+
+private func controlRequestBody(_ request: PabloControlRequest) throws -> Data {
+    switch request.method {
+    case .startRecording:
+        guard let value = request.recordOptions else {
+            throw RecordingError.usage("The start command did not include recording options.")
+        }
+        return try PabloControlJSONCodec.encode(value)
+    case .addAnnotation, .resolveAnnotation:
+        guard let value = request.annotationRequest else {
+            throw RecordingError.usage("The annotation command did not include a request.")
+        }
+        return try PabloControlJSONCodec.encode(value)
+    case .inspectLive:
+        guard let value = request.liveInspectionRequest else {
+            throw RecordingError.usage("The live inspection command did not include a request.")
+        }
+        return try PabloControlJSONCodec.encode(value)
+    case .actLive:
+        guard let value = request.liveActionRequest else {
+            throw RecordingError.usage("The live action command did not include a request.")
+        }
+        return try PabloControlJSONCodec.encode(value)
+    case .safariDOM:
+        guard let value = request.safariDOMRequest else {
+            throw RecordingError.usage("The Safari DOM command did not include a request.")
+        }
+        return try PabloControlJSONCodec.encode(value)
+    case .rrwebStart, .rrwebInspect:
+        guard let value = request.rrwebRequest else {
+            throw RecordingError.usage("The rrweb command did not include a request.")
+        }
+        try value.validate(for: request.method)
+        return try PabloControlJSONCodec.encode(value)
+    case .pauseRecording, .resumeRecording, .stopRecording, .status,
+         .safariTabs, .rrwebPause, .rrwebResume, .rrwebStop, .rrwebStatus, .rrwebRecordings:
+        return Data()
+    }
+}
+
+private func decodeControlRequest(method: PabloControlMethod, body: Data) throws -> PabloControlRequest {
+    switch method {
+    case .startRecording:
+        return PabloControlRequest(
+            method: method,
+            recordOptions: try PabloControlJSONCodec.decode(PabloControlRecordOptions.self, from: body)
+        )
+    case .addAnnotation, .resolveAnnotation:
+        return PabloControlRequest(
+            method: method,
+            annotationRequest: try PabloControlJSONCodec.decode(PabloControlAnnotationRequest.self, from: body)
+        )
+    case .inspectLive:
+        return PabloControlRequest(
+            method: method,
+            liveInspectionRequest: try PabloControlJSONCodec.decode(PabloLiveInspectionRequest.self, from: body)
+        )
+    case .actLive:
+        return PabloControlRequest(
+            method: method,
+            liveActionRequest: try PabloControlJSONCodec.decode(PabloLiveActionRequest.self, from: body)
+        )
+    case .safariDOM:
+        return PabloControlRequest(
+            method: method,
+            safariDOMRequest: try PabloControlJSONCodec.decode(PabloSafariDOMRequest.self, from: body)
+        )
+    case .rrwebStart, .rrwebInspect:
+        let value = try PabloControlJSONCodec.decode(PabloRRWebControlRequest.self, from: body)
+        try value.validate(for: method)
+        return PabloControlRequest(
+            method: method,
+            rrwebRequest: value
+        )
+    case .pauseRecording, .resumeRecording, .stopRecording, .status,
+         .safariTabs, .rrwebPause, .rrwebResume, .rrwebStop, .rrwebStatus, .rrwebRecordings:
+        guard body.isEmpty || body == Data("{}".utf8) else {
+            throw RecordingError.usage("This control method does not accept a request body.")
+        }
+        return PabloControlRequest(method: method)
+    }
+}
+
+private func writeHTTPResponse(
+    body: Data,
+    status: String,
+    contentType: String = "application/json",
+    to descriptor: Int32
+) throws {
+    let header = """
+    HTTP/1.1 \(status)\r
+    Content-Type: \(contentType)\r
+    Content-Length: \(body.count)\r
+    Connection: close\r
+    \r
+
+    """
+    try writeAll(Data(header.utf8), to: descriptor)
+    try writeAll(body, to: descriptor)
+}
+
+private func writeHTTPError(_ message: String, status: String, to descriptor: Int32) throws {
+    try writeHTTPResponse(
+        body: try PabloControlJSONCodec.encode(ControlHTTPError(error: message)),
+        status: status,
+        to: descriptor
+    )
+}
+
+private func readHTTPMessage(from descriptor: Int32, maximumBodyBytes: Int) throws -> ControlHTTPMessage {
+    let separator = Data("\r\n\r\n".utf8)
+    var received = Data()
+    var headerRange: Range<Data.Index>?
+
+    while headerRange == nil {
+        guard received.count < controlHeaderMaximumBytes else {
+            throw RecordingError.capture("The Pablo control HTTP headers were too large.")
+        }
+        received.append(try readChunk(
+            from: descriptor,
+            maximumBytes: min(4_096, controlHeaderMaximumBytes - received.count)
+        ))
+        headerRange = received.range(of: separator)
+    }
+
+    guard let headerRange,
+          let headerText = String(data: received[..<headerRange.lowerBound], encoding: .utf8) else {
+        throw RecordingError.capture("The Pablo control HTTP headers were invalid.")
+    }
+    let lines = headerText.components(separatedBy: "\r\n")
+    guard let startLine = lines.first, !startLine.isEmpty else {
+        throw RecordingError.capture("The Pablo control HTTP start line was missing.")
+    }
+
+    var headers: [String: String] = [:]
+    for line in lines.dropFirst() {
+        guard let separatorIndex = line.firstIndex(of: ":") else {
+            throw RecordingError.capture("A Pablo control HTTP header was malformed.")
+        }
+        let name = line[..<separatorIndex].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let value = line[line.index(after: separatorIndex)...].trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !name.isEmpty, headers[name] == nil else {
+            throw RecordingError.capture("A Pablo control HTTP header was duplicated or empty.")
+        }
+        headers[name] = value
+    }
+
+    guard headers["transfer-encoding"] == nil else {
+        throw RecordingError.capture("The Pablo control endpoint does not accept transfer encoding.")
+    }
+    let contentLength: Int
+    if let contentLengthText = headers["content-length"] {
+        guard let parsed = Int(contentLengthText), parsed >= 0 else {
+            throw RecordingError.capture("The Pablo control HTTP Content-Length was invalid.")
+        }
+        contentLength = parsed
+    } else {
+        contentLength = 0
+    }
+    guard contentLength <= maximumBodyBytes else {
+        throw RecordingError.capture("The Pablo control HTTP body was too large.")
+    }
+
+    var body = Data(received[headerRange.upperBound...])
+    guard body.count <= contentLength else {
+        throw RecordingError.capture("A Pablo control connection contained more than one request.")
+    }
+    while body.count < contentLength {
+        body.append(try readChunk(
+            from: descriptor,
+            maximumBytes: min(4_096, contentLength - body.count)
+        ))
+    }
+    return ControlHTTPMessage(startLine: startLine, headers: headers, body: body)
+}
+
+private func readChunk(from descriptor: Int32, maximumBytes: Int) throws -> Data {
+    guard maximumBytes > 0 else { return Data() }
+    var buffer = [UInt8](repeating: 0, count: maximumBytes)
+    let count = Darwin.read(descriptor, &buffer, maximumBytes)
+    guard count > 0 else {
+        if count == 0 {
+            throw RecordingError.capture("The Pablo control connection closed before the HTTP message was complete.")
+        }
+        throw socketError("Could not read Pablo's control socket")
+    }
+    return Data(buffer.prefix(count))
 }
 
 private func withUnixSocketAddress<Result>(
@@ -652,18 +1265,6 @@ private func writeAll(_ data: Data, to descriptor: Int32) throws {
             base = base.advanced(by: written)
         }
     }
-}
-
-private func readToEnd(from descriptor: Int32, maximumBytes: Int) throws -> Data {
-    var data = Data()
-    var buffer = [UInt8](repeating: 0, count: 4_096)
-    while data.count < maximumBytes {
-        let count = Darwin.read(descriptor, &buffer, min(buffer.count, maximumBytes - data.count))
-        if count == 0 { return data }
-        guard count > 0 else { throw socketError("Could not read Pablo's control response") }
-        data.append(buffer, count: count)
-    }
-    throw RecordingError.capture("The Pablo control response was too large.")
 }
 
 private func socketError(_ context: String) -> RecordingError {

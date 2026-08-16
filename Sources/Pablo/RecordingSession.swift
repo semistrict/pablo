@@ -33,12 +33,15 @@ public final class RecordingSession {
 
     public init(options: RecordOptions) throws {
         self.options = options
-        selectedApplication = options.scope == .application ? try TargetApplication.resolve(
+        let selectedApplication = options.scope == .application ? try TargetApplication.resolve(
             pid: options.pid,
             bundleIdentifier: options.bundleIdentifier,
             appName: options.appName
         ) : nil
-        packageURL = options.outputURL ?? Self.defaultOutputURL()
+        self.selectedApplication = selectedApplication
+        packageURL = options.outputURL ?? PabloRecordingStorage.defaultRecordingURL(
+            applicationName: selectedApplication?.name
+        )
     }
 
     public func start() async throws {
@@ -302,13 +305,6 @@ public final class RecordingSession {
                 continuation.resume()
             }
         }
-    }
-
-    private static func defaultOutputURL() -> URL {
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyyMMdd-HHmmss"
-        let name = "Recording-\(formatter.string(from: Date())).pablo"
-        return URL(fileURLWithPath: FileManager.default.currentDirectoryPath).appendingPathComponent(name)
     }
 
     private static func writeError(_ message: String) {

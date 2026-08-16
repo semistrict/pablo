@@ -69,6 +69,15 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         didFinishLaunching = true
+        do {
+            try PabloRecordingStorage.migrateLegacyRecordings()
+        } catch {
+            RecorderModel.shared.errorMessage =
+                "Could not move existing recordings to Documents: \(error.localizedDescription)"
+        }
+        RecorderModel.shared.recordingDidFinish = { [weak self] recordingURL in
+            self?.showReviewWindow(preferredURL: recordingURL)
+        }
         showRecorderWindow()
         let recordingURLs = pendingRecordingURLs
         pendingRecordingURLs.removeAll()
@@ -79,7 +88,10 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
 
     func application(_ application: NSApplication, open urls: [URL]) {
         let recordingURLs = urls
-            .filter { $0.pathExtension.caseInsensitiveCompare("pablo") == .orderedSame }
+            .filter {
+                $0.pathExtension.caseInsensitiveCompare("pablo") == .orderedSame ||
+                    $0.pathExtension.caseInsensitiveCompare(PabloRRWebRecordingStorage.packageExtension) == .orderedSame
+            }
         guard !recordingURLs.isEmpty else { return }
         if didFinishLaunching {
             for recordingURL in recordingURLs {
@@ -91,6 +103,12 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
     }
 
     func showReviewWindow(preferredURL: URL? = nil) {
+        if preferredURL?.pathExtension.caseInsensitiveCompare(
+            PabloRRWebRecordingStorage.packageExtension
+        ) == .orderedSame {
+            showRRWebReviewWindow(preferredURL: preferredURL)
+            return
+        }
         let replayModel = ReplayModel()
         _ = replayModel.loadLatest(preferredURL: preferredURL)
         let content = NSHostingController(rootView: ReplayView(
@@ -108,6 +126,33 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         if reviewWindowControllers.isEmpty {
             window.setFrameAutosaveName("PabloReviewWindow")
         }
+        window.isReleasedWhenClosed = false
+        window.delegate = self
+        positionNewReviewWindow(window)
+        let controller = NSWindowController(window: window)
+        reviewWindowControllers.append(controller)
+        noteReviewWindowActivated(window)
+        controller.showWindow(nil)
+        window.makeKeyAndOrderFront(nil)
+        NSApplication.shared.setWindowsNeedUpdate(true)
+        NSApplication.shared.activate(ignoringOtherApps: true)
+    }
+
+    private func showRRWebReviewWindow(preferredURL: URL?) {
+        let replayModel = RRWebReplayModel()
+        replayModel.load(preferredURL: preferredURL)
+        let content = NSHostingController(rootView: RRWebReplayView(
+            model: replayModel,
+            recorderModel: RecorderModel.shared,
+            openRecordings: { [weak self] in self?.chooseRecordingsAndOpen() }
+        ))
+        let window = PabloReviewWindow(contentViewController: content)
+        window.title = preferredURL?.deletingPathExtension().lastPathComponent ?? "Safari Web Recordings"
+        window.representedURL = preferredURL
+        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
+        window.minSize = NSSize(width: 900, height: 600)
+        window.setContentSize(NSSize(width: 1_180, height: 760))
+        window.isExcludedFromWindowsMenu = false
         window.isReleasedWhenClosed = false
         window.delegate = self
         positionNewReviewWindow(window)
@@ -140,8 +185,8 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         let window = PabloReviewWindow(contentViewController: content)
         window.title = "Pablo Recorder"
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.minSize = NSSize(width: 580, height: 350)
-        window.setContentSize(NSSize(width: 680, height: 340))
+        window.minSize = NSSize(width: 640, height: 520)
+        window.setContentSize(NSSize(width: 760, height: 620))
         window.setFrameAutosaveName("PabloRecorderWindow")
         window.isExcludedFromWindowsMenu = false
         window.isReleasedWhenClosed = false
@@ -218,14 +263,19 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         panel.directoryURL = ReplayModel.recordingsDirectory
         panel.allowedContentTypes = [
             UTType(exportedAs: "com.ramon.pablo.recording", conformingTo: .package),
+            UTType(exportedAs: "com.ramon.pablo.web-recording", conformingTo: .package),
         ]
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
         panel.allowsMultipleSelection = true
         panel.begin { [weak self] response in
             guard response == .OK else { return }
-            for recordingURL in panel.urls where
-                recordingURL.pathExtension.caseInsensitiveCompare("pablo") == .orderedSame {
+            for recordingURL in panel.urls {
+                let pathExtension = recordingURL.pathExtension
+                guard pathExtension.caseInsensitiveCompare("pablo") == .orderedSame ||
+                        pathExtension.caseInsensitiveCompare(
+                            PabloRRWebRecordingStorage.packageExtension
+                        ) == .orderedSame else { continue }
                 self?.showReviewWindow(preferredURL: recordingURL)
             }
         }
@@ -332,14 +382,25 @@ final class RecorderModel: ObservableObject {
     @Published var errorMessage: String?
     @Published var lastRecordingURL: URL?
     @Published var captureText = true
+    @Published var safariTabs: [PabloSafariTab] = []
+    @Published var rrwebRecordings: [PabloRRWebRecording] = []
+    @Published var activeRRWebRecording: PabloRRWebRecording?
+    @Published var rrwebEventCount = 0
+    @Published var refreshingSafariTabs = false
+
+    var recordingDidFinish: ((URL) -> Void)?
 
     private var session: RecordingSession?
     private var automaticStopTask: Task<Void, Never>?
+    private var rrwebStatusRefreshInFlight = false
+    private var lastRRWebStatusRefresh = Date.distantPast
+    private var rrwebStatusFailureCount = 0
     private let dailyApprovalStore = PabloDailyApprovalStore()
     private let liveInspectionManager = PabloLiveInspectionManager()
     private lazy var liveActionController = PabloLiveActionController(
         inspectionManager: liveInspectionManager
     )
+    private let safariDOMBridge = PabloSafariDOMBridge()
     private lazy var controlServer = PabloControlServer { [weak self] request, peer in
         guard let self else {
             return PabloControlResponse(id: request.id, error: "Pablo is shutting down.")
@@ -348,10 +409,21 @@ final class RecorderModel: ObservableObject {
     }
 
     init() {
-        Task { @MainActor [weak self] in self?.startControlServer() }
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            self.startControlServer()
+            await self.recoverRRWebRecordingIfNeeded()
+        }
     }
 
     var statusTitle: String {
+        if status == .idle, let rrwebState = activeRRWebRecording?.manifest.state {
+            switch rrwebState {
+            case .recording: return "Recording Safari"
+            case .paused: return "Safari Paused"
+            case .complete, .interrupted, .failed: break
+            }
+        }
         switch status {
         case .idle: return "Ready"
         case .starting: return "Starting…"
@@ -362,6 +434,13 @@ final class RecorderModel: ObservableObject {
     }
 
     var menuBarSymbol: String {
+        if status == .idle, let rrwebState = activeRRWebRecording?.manifest.state {
+            switch rrwebState {
+            case .recording: return "record.circle.fill"
+            case .paused: return "pause.circle.fill"
+            case .complete, .interrupted, .failed: break
+            }
+        }
         switch status {
         case .recording: return "record.circle.fill"
         case .paused: return "pause.circle.fill"
@@ -374,6 +453,10 @@ final class RecorderModel: ObservableObject {
     var canStartScreen: Bool { status == .idle }
     var isActive: Bool { status == .recording || status == .paused }
     var activeScopeName: String? { session?.scopeName }
+    var rrwebIsActive: Bool {
+        guard let state = activeRRWebRecording?.manifest.state else { return false }
+        return state == .recording || state == .paused
+    }
 
     func refreshApplications() {
         let ownPID = ProcessInfo.processInfo.processIdentifier
@@ -398,6 +481,321 @@ final class RecorderModel: ObservableObject {
         }
     }
 
+    func refreshSafariTabs() async {
+        refreshingSafariTabs = true
+        defer { refreshingSafariTabs = false }
+        do {
+            async let tabs = safariDOMBridge.listTabs()
+            async let recordings = Task.detached { try PabloRRWebRecordingStorage.recordings() }.value
+            safariTabs = try await tabs
+            rrwebRecordings = try await recordings
+        } catch {
+            safariTabs = []
+            rrwebRecordings = (try? PabloRRWebRecordingStorage.recordings()) ?? []
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func startRRWebRecording(tab: PabloSafariTab) async {
+        guard !rrwebIsActive else {
+            errorMessage = "Stop the current rrweb recording before starting another."
+            return
+        }
+        errorMessage = nil
+        let recordingID = UUID()
+        do {
+            try safariDOMBridge.prepareSpool(recordingID: recordingID)
+            let recording = try PabloRRWebRecordingStorage.create(recordingID: recordingID, tab: tab)
+            do {
+                _ = try await safariDOMBridge.perform(PabloSafariDOMRequest(
+                    kind: .startRRWebRecording,
+                    tabID: tab.id,
+                    recordingID: recordingID
+                ))
+            } catch {
+                try? FileManager.default.removeItem(at: recording.packageURL)
+                throw error
+            }
+            activeRRWebRecording = recording
+            rrwebEventCount = 0
+            rrwebStatusFailureCount = 0
+            rrwebRecordings = try PabloRRWebRecordingStorage.recordings()
+        } catch {
+            activeRRWebRecording = nil
+            try? safariDOMBridge.removeSpool(recordingID: recordingID)
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func refreshRRWebStatusIfNeeded(now: Date = Date()) {
+        guard rrwebIsActive, !rrwebStatusRefreshInFlight,
+              now.timeIntervalSince(lastRRWebStatusRefresh) >= 1 else { return }
+        rrwebStatusRefreshInFlight = true
+        lastRRWebStatusRefresh = now
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            defer { self.rrwebStatusRefreshInFlight = false }
+            await self.refreshActiveRRWebStatus(reportErrors: false)
+        }
+    }
+
+    func pauseRRWebRecording() async {
+        guard let recording = activeRRWebRecording,
+              recording.manifest.state == .recording else { return }
+        do {
+            let output = try await safariDOMBridge.perform(PabloSafariDOMRequest(
+                kind: .pauseRRWebRecording,
+                tabID: recording.manifest.tab.id,
+                recordingID: recording.manifest.recordingID
+            ))
+            rrwebEventCount = rrwebEventCount(from: output) ?? rrwebEventCount
+            activeRRWebRecording = try PabloRRWebRecordingStorage.updateState(
+                .paused,
+                packageURL: recording.packageURL
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func resumeRRWebRecording() async {
+        guard let recording = activeRRWebRecording,
+              recording.manifest.state == .paused else { return }
+        do {
+            let output = try await safariDOMBridge.perform(PabloSafariDOMRequest(
+                kind: .resumeRRWebRecording,
+                tabID: recording.manifest.tab.id,
+                recordingID: recording.manifest.recordingID
+            ))
+            rrwebEventCount = rrwebEventCount(from: output) ?? rrwebEventCount
+            activeRRWebRecording = try PabloRRWebRecordingStorage.updateState(
+                .recording,
+                packageURL: recording.packageURL
+            )
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    func stopRRWebRecording() async {
+        guard let recording = activeRRWebRecording else { return }
+        var stopError: Error?
+        var finalizedSuccessfully = false
+        do {
+            let output = try await safariDOMBridge.perform(PabloSafariDOMRequest(
+                kind: .stopRRWebRecording,
+                tabID: recording.manifest.tab.id,
+                recordingID: recording.manifest.recordingID
+            ))
+            rrwebEventCount = rrwebEventCount(from: output) ?? rrwebEventCount
+        } catch {
+            stopError = error
+        }
+
+        do {
+            let extensionError = (try? safariDOMBridge.recordingError(
+                recordingID: recording.manifest.recordingID
+            )) ?? recording.manifest.error
+            let batches: [Data]
+            do {
+                batches = try safariDOMBridge.eventBatches(
+                    recordingID: recording.manifest.recordingID
+                )
+            } catch {
+                batches = []
+                stopError = stopError ?? error
+            }
+            let finalized = try PabloRRWebRecordingStorage.finalize(
+                packageURL: recording.packageURL,
+                batches: batches,
+                state: stopError == nil && extensionError == nil ? .complete : .interrupted,
+                error: extensionError ?? stopError?.localizedDescription
+            )
+            activeRRWebRecording = nil
+            rrwebStatusFailureCount = 0
+            rrwebEventCount = finalized.manifest.eventCount
+            lastRecordingURL = finalized.packageURL
+            rrwebRecordings = try PabloRRWebRecordingStorage.recordings()
+            recordingDidFinish?(finalized.packageURL)
+            finalizedSuccessfully = true
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+        if finalizedSuccessfully {
+            try? safariDOMBridge.removeSpool(recordingID: recording.manifest.recordingID)
+        }
+        if let stopError { errorMessage = stopError.localizedDescription }
+    }
+
+    private func refreshActiveRRWebStatus(reportErrors: Bool) async {
+        guard let recording = activeRRWebRecording else { return }
+        do {
+            let output = try await safariDOMBridge.perform(PabloSafariDOMRequest(
+                kind: .rrwebRecordingStatus,
+                tabID: recording.manifest.tab.id,
+                recordingID: recording.manifest.recordingID
+            ))
+            rrwebEventCount = rrwebEventCount(from: output) ?? rrwebEventCount
+            rrwebStatusFailureCount = 0
+            if let bridgeError = rrwebError(from: output) {
+                errorMessage = bridgeError
+                activeRRWebRecording = try PabloRRWebRecordingStorage.updateState(
+                    recording.manifest.state,
+                    packageURL: recording.packageURL,
+                    error: bridgeError
+                )
+            }
+        } catch {
+            rrwebStatusFailureCount += 1
+            let storedError = try? safariDOMBridge.recordingError(
+                recordingID: recording.manifest.recordingID
+            )
+            if storedError != nil || rrwebStatusFailureCount >= 3 {
+                do {
+                    let reason = storedError ?? "The Safari recorder stopped responding: \(error.localizedDescription)"
+                    let finalized = try finalizeInterruptedRRWebRecording(recording, reason: reason)
+                    activeRRWebRecording = nil
+                    rrwebStatusFailureCount = 0
+                    rrwebEventCount = finalized.manifest.eventCount
+                    lastRecordingURL = finalized.packageURL
+                    rrwebRecordings = try PabloRRWebRecordingStorage.recordings()
+                    errorMessage = reason
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            } else if reportErrors {
+                errorMessage = error.localizedDescription
+            }
+        }
+    }
+
+    private func recoverRRWebRecordingIfNeeded() async {
+        do {
+            let candidates = try PabloRRWebRecordingStorage.recordings().filter {
+                $0.manifest.state == .recording || $0.manifest.state == .paused
+            }
+            guard let newest = candidates.first else {
+                rrwebRecordings = try PabloRRWebRecordingStorage.recordings()
+                return
+            }
+            for stale in candidates.dropFirst() {
+                _ = try finalizeInterruptedRRWebRecording(
+                    stale,
+                    reason: "Pablo restarted while a newer Safari recording was active."
+                )
+            }
+            activeRRWebRecording = newest
+            rrwebStatusFailureCount = 0
+            let output = try await safariDOMBridge.perform(PabloSafariDOMRequest(
+                kind: .rrwebRecordingStatus,
+                tabID: newest.manifest.tab.id,
+                recordingID: newest.manifest.recordingID
+            ))
+            rrwebEventCount = rrwebEventCount(from: output) ?? 0
+            rrwebRecordings = try PabloRRWebRecordingStorage.recordings()
+        } catch {
+            if let recording = activeRRWebRecording {
+                do {
+                    let finalized = try finalizeInterruptedRRWebRecording(
+                        recording,
+                        reason: "Pablo could not reconnect to the Safari recorder: \(error.localizedDescription)"
+                    )
+                    activeRRWebRecording = nil
+                    rrwebStatusFailureCount = 0
+                    rrwebEventCount = finalized.manifest.eventCount
+                    rrwebRecordings = try PabloRRWebRecordingStorage.recordings()
+                } catch {
+                    errorMessage = error.localizedDescription
+                }
+            }
+        }
+    }
+
+    private func finalizeInterruptedRRWebRecording(
+        _ recording: PabloRRWebRecording,
+        reason: String
+    ) throws -> PabloRRWebRecording {
+        let extensionError = try? safariDOMBridge.recordingError(
+            recordingID: recording.manifest.recordingID
+        )
+        let finalized = try PabloRRWebRecordingStorage.finalize(
+            packageURL: recording.packageURL,
+            batches: (try? safariDOMBridge.eventBatches(
+                recordingID: recording.manifest.recordingID
+            )) ?? [],
+            state: .interrupted,
+            error: extensionError ?? reason
+        )
+        try? safariDOMBridge.removeSpool(recordingID: recording.manifest.recordingID)
+        return finalized
+    }
+
+    private func rrwebEventCount(from output: PabloControlOutput) -> Int? {
+        guard case .object(let object) = output,
+              case .integer(let count)? = object["eventCount"] else { return nil }
+        return Int(count)
+    }
+
+    private func rrwebError(from output: PabloControlOutput) -> String? {
+        guard case .object(let object) = output,
+              case .string(let error)? = object["error"],
+              !error.isEmpty else { return nil }
+        return error
+    }
+
+    private func rrwebStatusOutput() throws -> PabloControlOutput {
+        let active = activeRRWebRecording.map { RRWebAPIRecording(recording: $0) }
+        return try controlOutput(RRWebAPIStatus(active: active, eventCount: rrwebEventCount))
+    }
+
+    private func rrwebRecordingsOutput() throws -> PabloControlOutput {
+        let recordings = try PabloRRWebRecordingStorage.recordings().map(RRWebAPIRecording.init)
+        return try controlOutput(["recordings": recordings])
+    }
+
+    private func rrwebInspectOutput(_ request: PabloRRWebControlRequest) throws -> PabloControlOutput {
+        guard request.tabID == nil else {
+            throw RecordingError.usage("rrweb.inspect does not accept tabID.")
+        }
+        let selectorCount = [request.recordingPath != nil, request.recordingID != nil]
+            .filter { $0 }.count
+        guard selectorCount == 1 else {
+            throw RecordingError.usage("rrweb.inspect requires exactly one recordingPath or recordingID.")
+        }
+        guard (1...10_000).contains(request.eventLimit) else {
+            throw RecordingError.usage("eventLimit must be from 1 to 10000.")
+        }
+        let recording: PabloRRWebRecording
+        if let path = request.recordingPath {
+            recording = try PabloRRWebRecordingStorage.load(URL(fileURLWithPath: path))
+        } else if let recordingID = request.recordingID,
+                  let match = try PabloRRWebRecordingStorage.recordings().first(where: {
+                      $0.manifest.recordingID == recordingID
+                  }) {
+            recording = match
+        } else {
+            throw RecordingError.usage("rrweb.inspect requires recordingPath or recordingID.")
+        }
+        var object: [String: PabloControlOutput] = [
+            "recording": try controlOutput(RRWebAPIRecording(recording: recording)),
+        ]
+        if request.includeEvents {
+            let decoded = try JSONDecoder().decode(
+                [PabloControlOutput].self,
+                from: Data(contentsOf: recording.eventsURL)
+            )
+            object["events"] = .array(Array(decoded.prefix(request.eventLimit)))
+            object["eventsTruncated"] = .boolean(decoded.count > request.eventLimit)
+        }
+        return .object(object)
+    }
+
+    private func controlOutput<Value: Encodable>(_ value: Value) throws -> PabloControlOutput {
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        return try JSONDecoder().decode(PabloControlOutput.self, from: encoder.encode(value))
+    }
+
     func startApplicationRecording(pid: pid_t? = nil) async {
         let pid = pid ?? selectedPID
         guard status == .idle, let pid else { return }
@@ -407,7 +805,6 @@ final class RecorderModel: ObservableObject {
             var options = RecordOptions()
             options.scope = .application
             options.pid = pid
-            options.outputURL = try nextRecordingURL()
             options.captureText = captureText
             try await beginRecording(options)
         } catch {
@@ -424,7 +821,6 @@ final class RecorderModel: ObservableObject {
         do {
             var options = RecordOptions()
             options.scope = .display
-            options.outputURL = try nextRecordingURL()
             options.captureText = captureText
             try await beginRecording(options)
         } catch {
@@ -449,19 +845,24 @@ final class RecorderModel: ObservableObject {
     }
 
     func stopRecording() async {
-        guard isActive else { return }
+        guard isActive, let activeSession = session else { return }
         automaticStopTask?.cancel()
         automaticStopTask = nil
         status = .stopping
+        var completedRecordingURL: URL?
         do {
-            try await session?.stop()
+            try await activeSession.stop()
+            completedRecordingURL = activeSession.packageURL
         } catch {
             errorMessage = error.localizedDescription
         }
-        elapsedNanoseconds = session?.durationNs ?? elapsedNanoseconds
+        elapsedNanoseconds = activeSession.durationNs
         session = nil
         status = .idle
         refreshApplications()
+        if let completedRecordingURL {
+            recordingDidFinish?(completedRecordingURL)
+        }
     }
 
     private func beginRecording(_ options: RecordOptions) async throws {
@@ -510,7 +911,7 @@ final class RecorderModel: ObservableObject {
 
         do {
             var annotation: RecordingAnnotation?
-            var output: String?
+            var output: PabloControlOutput?
             switch request.method {
             case .startRecording:
                 guard status == .idle else {
@@ -519,8 +920,7 @@ final class RecorderModel: ObservableObject {
                 guard let remoteOptions = request.recordOptions else {
                     throw RecordingError.usage("The start command did not include recording options.")
                 }
-                var options = remoteOptions.recordOptions()
-                if options.outputURL == nil { options.outputURL = try nextRecordingURL() }
+                let options = remoteOptions.recordOptions()
                 try await beginRecording(options)
             case .pauseRecording:
                 guard status == .recording else {
@@ -571,7 +971,7 @@ final class RecorderModel: ObservableObject {
                 guard let inspection = request.liveInspectionRequest else {
                     throw RecordingError.usage("The live inspection command did not include a request.")
                 }
-                output = try liveInspectionManager.perform(inspection)
+                output = try PabloControlOutput(json: liveInspectionManager.perform(inspection))
             case .actLive:
                 guard let action = request.liveActionRequest else {
                     throw RecordingError.usage("The live action command did not include an action.")
@@ -586,7 +986,7 @@ final class RecorderModel: ObservableObject {
                     recordingWasPaused: recordingWasPaused
                 )
                 do {
-                    output = try await liveActionController.perform(action)
+                    output = .string(try await liveActionController.perform(action))
                     try recordAutomationActionIfApplicable(
                         action,
                         actionID: actionID,
@@ -603,6 +1003,101 @@ final class RecorderModel: ObservableObject {
                         recordingWasPaused: recordingWasPaused
                     )
                     throw error
+                }
+            case .safariTabs:
+                output = try controlOutput(["tabs": try await safariDOMBridge.listTabs()])
+            case .rrwebStart:
+                guard let rrwebRequest = request.rrwebRequest,
+                      let tabID = rrwebRequest.tabID, tabID > 0,
+                      rrwebRequest.recordingPath == nil,
+                      rrwebRequest.recordingID == nil,
+                      rrwebRequest.includeEvents == false,
+                      rrwebRequest.eventLimit == 1_000 else {
+                    throw RecordingError.usage("rrweb.start requires a positive tabID.")
+                }
+                guard let tab = try await safariDOMBridge.listTabs().first(where: { $0.id == tabID }) else {
+                    throw RecordingError.capture(
+                        "That Safari tab is not currently active and unlocked. Refresh safari.tabs and retry."
+                    )
+                }
+                await startRRWebRecording(tab: tab)
+                guard activeRRWebRecording?.manifest.tab.id == tabID else {
+                    throw RecordingError.capture(errorMessage ?? "The rrweb recording did not start.")
+                }
+                output = try rrwebStatusOutput()
+            case .rrwebPause:
+                guard activeRRWebRecording?.manifest.state == .recording else {
+                    throw RecordingError.capture("There is no recording rrweb session to pause.")
+                }
+                await pauseRRWebRecording()
+                guard activeRRWebRecording?.manifest.state == .paused else {
+                    throw RecordingError.capture(errorMessage ?? "The rrweb recording did not pause.")
+                }
+                output = try rrwebStatusOutput()
+            case .rrwebResume:
+                guard activeRRWebRecording?.manifest.state == .paused else {
+                    throw RecordingError.capture("There is no paused rrweb session to resume.")
+                }
+                await resumeRRWebRecording()
+                guard activeRRWebRecording?.manifest.state == .recording else {
+                    throw RecordingError.capture(errorMessage ?? "The rrweb recording did not resume.")
+                }
+                output = try rrwebStatusOutput()
+            case .rrwebStop:
+                guard activeRRWebRecording != nil else {
+                    throw RecordingError.capture("There is no active rrweb recording to stop.")
+                }
+                await stopRRWebRecording()
+                output = try rrwebStatusOutput()
+            case .rrwebStatus:
+                await refreshActiveRRWebStatus(reportErrors: false)
+                output = try rrwebStatusOutput()
+            case .rrwebRecordings:
+                output = try rrwebRecordingsOutput()
+            case .rrwebInspect:
+                guard let rrwebRequest = request.rrwebRequest else {
+                    throw RecordingError.usage("rrweb.inspect did not include a request.")
+                }
+                output = try rrwebInspectOutput(rrwebRequest)
+            case .safariDOM:
+                guard let safariRequest = request.safariDOMRequest else {
+                    throw RecordingError.usage("The Safari DOM command did not include a request.")
+                }
+                guard !safariRequest.kind.isRRWebCommand else {
+                    throw RecordingError.usage("Use the rrweb.* endpoints for rrweb recording control.")
+                }
+                if safariRequest.kind.isMutation {
+                    let action = safariAutomationAction(for: safariRequest)
+                    let actionID = UUID()
+                    let recordingWasPaused = status == .paused
+                    try recordAutomationActionIfApplicable(
+                        action,
+                        actionID: actionID,
+                        phase: .requested,
+                        caller: caller,
+                        recordingWasPaused: recordingWasPaused
+                    )
+                    do {
+                        output = try await safariDOMBridge.perform(safariRequest)
+                        try recordAutomationActionIfApplicable(
+                            action,
+                            actionID: actionID,
+                            phase: .succeeded,
+                            caller: caller,
+                            recordingWasPaused: recordingWasPaused
+                        )
+                    } catch {
+                        try? recordAutomationActionIfApplicable(
+                            action,
+                            actionID: actionID,
+                            phase: .failed,
+                            caller: caller,
+                            recordingWasPaused: recordingWasPaused
+                        )
+                        throw error
+                    }
+                } else {
+                    output = try await safariDOMBridge.perform(safariRequest)
                 }
             }
             return PabloControlResponse(
@@ -628,9 +1123,19 @@ final class RecorderModel: ObservableObject {
             phase: phase,
             request: action,
             caller: caller.automationCaller,
-            transport: "pabloCLI",
+            transport: "http+unix",
             recordingWasPaused: recordingWasPaused
         ), actionTargetPID: actionTargetPID)
+    }
+
+    private func safariAutomationAction(for request: PabloSafariDOMRequest) -> PabloLiveActionRequest {
+        PabloLiveActionRequest(
+            kind: .perform,
+            target: PabloLiveApplicationTarget(bundleIdentifier: "com.apple.Safari"),
+            nodeID: request.nodeID ?? request.selector,
+            text: request.kind == .setValue ? request.value : nil,
+            accessibilityAction: "safari.dom.\(request.kind.rawValue)"
+        )
     }
 
     private func resolvedTargetPID(for target: PabloLiveApplicationTarget) -> pid_t? {
@@ -735,22 +1240,35 @@ final class RecorderModel: ObservableObject {
     private func invokingApplication(forChildProcess childPID: pid_t) -> NSRunningApplication? {
         PabloProcessChain.nearestApplication(
             invokedBy: childPID,
-            parentProcessIdentifier: parentProcessIdentifier(of:),
+            parentProcessIdentifier: PabloProcessChain.parentProcessIdentifier(of:),
             applicationIdentity: { pid in
-                guard let application = NSRunningApplication(processIdentifier: pid),
-                      application.bundleIdentifier != nil,
-                      application.activationPolicy != .prohibited else { return nil }
-                return application
+                if let application = NSRunningApplication(processIdentifier: pid),
+                   application.bundleIdentifier != nil,
+                   application.activationPolicy != .prohibited {
+                    return application
+                }
+                return owningApplication(forHelperProcess: pid)
             }
         )
     }
 
-    private func parentProcessIdentifier(of pid: pid_t) -> pid_t? {
-        var information = proc_bsdinfo()
-        let expectedSize = Int32(MemoryLayout<proc_bsdinfo>.size)
-        let actualSize = proc_pidinfo(pid, PROC_PIDTBSDINFO, 0, &information, expectedSize)
-        guard actualSize == expectedSize, information.pbi_ppid > 0 else { return nil }
-        return pid_t(information.pbi_ppid)
+    private func owningApplication(forHelperProcess pid: pid_t) -> NSRunningApplication? {
+        guard let executablePath = executablePath(for: pid),
+              let bundleURL = PabloProcessChain.owningApplicationBundleURL(
+                  forExecutablePath: executablePath
+              ),
+              let bundleIdentifier = Bundle(url: bundleURL)?.bundleIdentifier,
+              let helperIdentity = codeSigningIdentity(for: pid) else { return nil }
+
+        return NSRunningApplication.runningApplications(withBundleIdentifier: bundleIdentifier)
+            .first { application in
+                guard !application.isTerminated,
+                      application.activationPolicy != .prohibited,
+                      let ownerIdentity = codeSigningIdentity(for: application.processIdentifier) else {
+                    return false
+                }
+                return ownerIdentity.teamIdentifier == helperIdentity.teamIdentifier
+            }
     }
 
     private func codeSigningIdentity(for pid: pid_t) -> CodeSigningIdentity? {
@@ -832,8 +1350,44 @@ final class RecorderModel: ObservableObject {
             case .key: detail = "send a key to"
             case .perform: detail = "perform an accessibility action in"
             }
+            let foregroundDetail = action.unlockForegroundActions
+                ? " This request unlocks foreground actions, so Pablo may switch focus to that application. " +
+                    "Unlocking foreground actions is NOT RECOMMENDED."
+                : " Pablo will keep that application in the background or reject the action."
             return "This app wants to \(detail) \(target). " +
-                "The action will control that application through Pablo."
+                "The action will control that application through Pablo." + foregroundDetail
+        }
+        if request.method == .safariDOM,
+           let safariRequest = request.safariDOMRequest {
+            switch safariRequest.kind {
+            case .listTabs:
+                return "This app wants to list active Safari tabs you explicitly unlocked."
+            case .startRRWebRecording, .pauseRRWebRecording, .resumeRRWebRecording,
+                 .stopRRWebRecording, .rrwebRecordingStatus:
+                return "This app wants to control an rrweb recording in an unlocked Safari tab."
+            case .dumpDOM:
+                return "This app wants to dump the DOM of the Safari tab you explicitly unlocked. " +
+                    "Safari will remain in the background."
+            case .dumpAccessibilityTree:
+                return "This app wants to inspect a DOM-derived accessibility tree for the Safari tab " +
+                    "you explicitly unlocked. Safari will remain in the background."
+            case .click, .focus, .setValue, .scrollIntoView:
+                return "This app wants to perform a \(safariRequest.kind.rawValue) DOM action in the Safari tab " +
+                    "you explicitly unlocked. Safari will remain in the background."
+            }
+        }
+        switch request.method {
+        case .safariTabs:
+            return "This app wants to list active Safari tabs you explicitly unlocked."
+        case .rrwebStart:
+            return "This app wants to start an rrweb recording of an unlocked Safari tab. " +
+                "Input values will be masked and Safari will remain in the background."
+        case .rrwebPause, .rrwebResume, .rrwebStop:
+            return "This app wants to \(request.method.approvalDescription)."
+        case .rrwebStatus, .rrwebRecordings, .rrwebInspect:
+            return "This app wants to \(request.method.approvalDescription)."
+        default:
+            break
         }
         guard request.method == .startRecording, let options = request.recordOptions else {
             return "This app wants to \(request.method.approvalDescription)."
@@ -851,11 +1405,18 @@ final class RecorderModel: ObservableObject {
 
     private func controlResult(
         annotation: RecordingAnnotation? = nil,
-        output: String? = nil
+        output: PabloControlOutput? = nil
     ) -> PabloControlResult {
         let state: String
         switch status {
-        case .idle: state = "idle"
+        case .idle:
+            if activeRRWebRecording?.manifest.state == .recording {
+                state = "rrweb-recording"
+            } else if activeRRWebRecording?.manifest.state == .paused {
+                state = "rrweb-paused"
+            } else {
+                state = "idle"
+            }
         case .starting: state = "starting"
         case .recording: state = "recording"
         case .paused: state = "paused"
@@ -899,19 +1460,24 @@ final class RecorderModel: ObservableObject {
         NSWorkspace.shared.open(url)
     }
 
-    private func nextRecordingURL() throws -> URL {
-        let directory = Self.recordingsDirectory
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let formatter = DateFormatter()
-        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        let name = "Recording \(formatter.string(from: Date())).pablo"
-        return directory.appendingPathComponent(name, isDirectory: true)
-    }
-
     private static var recordingsDirectory: URL {
-        let movies = FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
-        return movies.appendingPathComponent("Pablo Recordings", isDirectory: true)
+        PabloRecordingStorage.localRecordingsDirectory
     }
+}
+
+private struct RRWebAPIRecording: Encodable {
+    let path: String
+    let manifest: PabloRRWebRecordingManifest
+
+    init(recording: PabloRRWebRecording) {
+        path = recording.packageURL.path
+        manifest = recording.manifest
+    }
+}
+
+private struct RRWebAPIStatus: Encodable {
+    let active: RRWebAPIRecording?
+    let eventCount: Int
 }
 
 enum PrivacyPane: String, CaseIterable, Identifiable {
@@ -937,6 +1503,8 @@ struct RecorderWindowView: View {
     @ObservedObject var model: RecorderModel
     let showReview: @MainActor (URL?) -> Void
     let openRecordings: @MainActor () -> Void
+    @State private var copiedAgentInstructions = false
+    @State private var copyFeedbackTask: Task<Void, Never>?
     private let timer = Timer.publish(every: 0.25, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -978,8 +1546,31 @@ struct RecorderWindowView: View {
 
             controlRow
 
+            rrwebSection
+
             if let error = model.errorMessage {
                 errorCard(error)
+            }
+
+            HStack(spacing: 12) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Working with an agent?")
+                        .font(.subheadline.weight(.medium))
+                    Text("Copy the local API, safety rules, and discovery command.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Button {
+                    copyAgentInstructions()
+                } label: {
+                    Label(
+                        copiedAgentInstructions ? "Copied" : "Copy Agent Instructions",
+                        systemImage: copiedAgentInstructions ? "checkmark" : "doc.on.doc"
+                    )
+                }
+                .buttonStyle(.bordered)
+                .help("Copy instructions for controlling Pablo with an agent")
             }
 
             Spacer(minLength: 0)
@@ -995,10 +1586,115 @@ struct RecorderWindowView: View {
             }
         }
         .padding(22)
-        .frame(minWidth: 520, minHeight: 270, alignment: .topLeading)
+        .frame(minWidth: 620, minHeight: 500, alignment: .topLeading)
         .background(Color(nsColor: .windowBackgroundColor))
-        .onAppear { model.refreshApplications() }
-        .onReceive(timer) { _ in model.updateElapsedTime() }
+        .onAppear {
+            model.refreshApplications()
+            Task { await model.refreshSafariTabs() }
+        }
+        .onReceive(timer) { _ in
+            model.updateElapsedTime()
+            model.refreshRRWebStatusIfNeeded()
+        }
+        .onDisappear {
+            copyFeedbackTask?.cancel()
+            copyFeedbackTask = nil
+        }
+    }
+
+    private var rrwebSection: some View {
+        GroupBox {
+            VStack(alignment: .leading, spacing: 10) {
+                if let recording = model.activeRRWebRecording {
+                    HStack(spacing: 10) {
+                        Image(systemName: "safari")
+                            .foregroundStyle(.blue)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(recording.manifest.tab.title)
+                                .font(.subheadline.weight(.medium))
+                                .lineLimit(1)
+                            Text("\(recording.manifest.state.rawValue.capitalized) · \(model.rrwebEventCount) rrweb events · inputs masked")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        Button {
+                            Task {
+                                if recording.manifest.state == .paused {
+                                    await model.resumeRRWebRecording()
+                                } else {
+                                    await model.pauseRRWebRecording()
+                                }
+                            }
+                        } label: {
+                            Label(
+                                recording.manifest.state == .paused ? "Resume" : "Pause",
+                                systemImage: recording.manifest.state == .paused ? "play.fill" : "pause.fill"
+                            )
+                        }
+                        Button(role: .destructive) {
+                            Task { await model.stopRRWebRecording() }
+                        } label: {
+                            Label("Stop", systemImage: "stop.fill")
+                        }
+                    }
+                } else if model.safariTabs.isEmpty {
+                    HStack {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("No unlocked active Safari tabs")
+                                .font(.subheadline.weight(.medium))
+                            Text("Enable Pablo Safari, then click its toolbar button in each tab you want listed.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                        if model.refreshingSafariTabs { ProgressView().controlSize(.small) }
+                        Button("Refresh") { Task { await model.refreshSafariTabs() } }
+                    }
+                } else {
+                    ForEach(model.safariTabs) { tab in
+                        HStack(spacing: 10) {
+                            Image(systemName: "safari")
+                                .foregroundStyle(.blue)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(tab.title).font(.subheadline.weight(.medium)).lineLimit(1)
+                                Text(tab.url).font(.caption).foregroundStyle(.secondary).lineLimit(1)
+                            }
+                            Spacer()
+                            Button("Record") { Task { await model.startRRWebRecording(tab: tab) } }
+                                .buttonStyle(.borderedProminent)
+                        }
+                    }
+                    HStack {
+                        Text("Only active tabs explicitly unlocked from Safari are shown. Input values are masked.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Button("Refresh") { Task { await model.refreshSafariTabs() } }
+                    }
+                }
+                if !model.rrwebRecordings.isEmpty {
+                    Divider()
+                    HStack {
+                        Text("\(model.rrwebRecordings.count) saved Safari web recording\(model.rrwebRecordings.count == 1 ? "" : "s")")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                        Spacer()
+                        Menu("Review Saved Recording") {
+                            ForEach(model.rrwebRecordings.prefix(20), id: \.manifest.recordingID) { recording in
+                                Button(recording.manifest.tab.title) {
+                                    showReview(recording.packageURL)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(.vertical, 2)
+        } label: {
+            Label("Safari rrweb", systemImage: "globe")
+                .font(.subheadline.weight(.semibold))
+        }
     }
 
     @ViewBuilder
@@ -1109,6 +1805,10 @@ struct RecorderWindowView: View {
     }
 
     private var statusColor: Color {
+        if model.status == .idle, let state = model.activeRRWebRecording?.manifest.state {
+            if state == .recording { return .red }
+            if state == .paused { return .orange }
+        }
         switch model.status {
         case .recording: return .red
         case .paused: return .orange
@@ -1120,6 +1820,62 @@ struct RecorderWindowView: View {
     private var formattedDuration: String {
         let seconds = model.elapsedNanoseconds / 1_000_000_000
         return String(format: "%02d:%02d", seconds / 60, seconds % 60)
+    }
+
+    private func copyAgentInstructions() {
+        let pasteboard = NSPasteboard.general
+        pasteboard.clearContents()
+        guard pasteboard.setString(agentInstructions, forType: .string) else { return }
+
+        copiedAgentInstructions = true
+        copyFeedbackTask?.cancel()
+        copyFeedbackTask = Task { @MainActor in
+            try? await Task.sleep(for: .seconds(2))
+            guard !Task.isCancelled else { return }
+            copiedAgentInstructions = false
+        }
+    }
+
+    private var agentInstructions: String {
+        let escapedSocketPath = PabloControlSocket.path
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+
+        return """
+        Use Pablo to record, inspect, and control Mac apps on this computer.
+
+        Pablo is running. Set its Unix-domain socket once in your shell:
+        export PABLO_SOCKET="\(escapedSocketPath)"
+
+        Start by fetching the self-describing OpenAPI contract:
+        curl -fsS --unix-socket "$PABLO_SOCKET" http://localhost/openapi.json
+
+        Put the method in the URL and pass only its JSON payload:
+        curl -fsS --unix-socket "$PABLO_SOCKET" -d '{"kind":"frames","target":{"appName":"Notes"}}' http://localhost/inspect.live
+
+        Bodyless calls need only the method URL, for example:
+        curl -fsS --unix-socket "$PABLO_SOCKET" http://localhost/record.status
+
+        Safari web recording starts with explicit tab discovery:
+        curl -fsS --unix-socket "$PABLO_SOCKET" http://localhost/safari.tabs
+        curl -fsS --unix-socket "$PABLO_SOCKET" -d '{"tabID":42}' http://localhost/rrweb.start
+
+        Rules:
+        - Only start a recording when I explicitly ask.
+        - Never approve Pablo's consent dialog; leave approval to me.
+        - Inspect a fresh accessibility frame before taking live actions.
+        - Safari DOM access requires enabling Pablo Safari and clicking its toolbar button on the active tab. Use `/safari.dom`; the grant ends when that tab navigates.
+        - Safari DOM commands run through the extension without bringing Safari to the foreground. Dump a fresh DOM-derived accessibility tree before using its `nodeID` as an action target.
+        - Use `/safari.tabs` and `/rrweb.start`, `/rrweb.pause`, `/rrweb.resume`, `/rrweb.stop`, `/rrweb.status`, `/rrweb.recordings`, or `/rrweb.inspect` for masked Safari web recordings. The server generates recording IDs.
+        - rrweb masks input values, but page text, titles, URLs, and other rendered content remain sensitive.
+        - Foreground actions are locked by default. Prefer `perform` or a single left click on a node that exposes `AXPress`; these do not activate the target app.
+        - `unlockForegroundActions: true` (CLI: `--unlock-foreground-actions`) allows focus-changing pointer, scroll, drag, typing, and key actions. This is NOT RECOMMENDED. Never use it unless I explicitly accept the focus change.
+        - Honor action-time confirmation requirements for consequential operations.
+        - Treat recordings as sensitive because they can contain visible and typed text.
+        - Do not add protocol-version, request-ID, or method fields to request bodies.
+        - Live inspection output is always pretty-printed structured JSON.
+        - Any HTTP verb works; curl's `-d` uses POST automatically.
+        """
     }
 }
 
@@ -1136,9 +1892,15 @@ private struct StatusPanel: View {
             Divider()
             footer
         }
-        .frame(width: 340)
-        .onReceive(timer) { _ in model.updateElapsedTime() }
-        .onAppear { model.refreshApplications() }
+        .frame(width: 380)
+        .onReceive(timer) { _ in
+            model.updateElapsedTime()
+            model.refreshRRWebStatusIfNeeded()
+        }
+        .onAppear {
+            model.refreshApplications()
+            Task { await model.refreshSafariTabs() }
+        }
     }
 
     private var header: some View {
@@ -1184,11 +1946,86 @@ private struct StatusPanel: View {
                 idleControls
             }
 
+            Divider()
+            rrwebMenuControls
+
             if let error = model.errorMessage {
                 errorCard(error)
             }
         }
         .padding(14)
+    }
+
+    private var rrwebMenuControls: some View {
+        VStack(alignment: .leading, spacing: 9) {
+            Label("Safari rrweb", systemImage: "safari")
+                .font(.caption.weight(.semibold))
+            if let recording = model.activeRRWebRecording {
+                Text(recording.manifest.tab.title)
+                    .font(.subheadline.weight(.medium))
+                    .lineLimit(1)
+                Text("\(recording.manifest.state.rawValue.capitalized) · \(model.rrwebEventCount) events · inputs masked")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 10) {
+                    Button {
+                        Task {
+                            if recording.manifest.state == .paused {
+                                await model.resumeRRWebRecording()
+                            } else {
+                                await model.pauseRRWebRecording()
+                            }
+                        }
+                    } label: {
+                        Label(
+                            recording.manifest.state == .paused ? "Resume" : "Pause",
+                            systemImage: recording.manifest.state == .paused ? "play.fill" : "pause.fill"
+                        )
+                        .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.bordered)
+
+                    Button(role: .destructive) {
+                        Task { await model.stopRRWebRecording() }
+                    } label: {
+                        Label("Stop", systemImage: "stop.fill")
+                            .frame(maxWidth: .infinity)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .tint(.red)
+                }
+            } else {
+                Menu {
+                    if model.safariTabs.isEmpty {
+                        Text("No unlocked active tabs")
+                    } else {
+                        ForEach(model.safariTabs) { tab in
+                            Button(tab.title) { Task { await model.startRRWebRecording(tab: tab) } }
+                        }
+                    }
+                    Divider()
+                    Button("Refresh Tabs") { Task { await model.refreshSafariTabs() } }
+                } label: {
+                    Label("Record an Unlocked Safari Tab", systemImage: "record.circle")
+                        .frame(maxWidth: .infinity)
+                }
+                .menuStyle(.borderlessButton)
+                Text("Click Pablo Safari in a tab first. rrweb masks input values and stops at navigation.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            if !model.rrwebRecordings.isEmpty {
+                Menu("Review Saved Recording") {
+                    ForEach(model.rrwebRecordings.prefix(20), id: \.manifest.recordingID) { recording in
+                        Button(recording.manifest.tab.title) {
+                            showReview(recording.packageURL)
+                        }
+                    }
+                }
+                .menuStyle(.borderlessButton)
+            }
+        }
     }
 
     private var idleControls: some View {
@@ -1316,6 +2153,10 @@ private struct StatusPanel: View {
     }
 
     private var statusColor: Color {
+        if model.status == .idle, let state = model.activeRRWebRecording?.manifest.state {
+            if state == .recording { return .red }
+            if state == .paused { return .orange }
+        }
         switch model.status {
         case .recording: return .red
         case .paused: return .orange

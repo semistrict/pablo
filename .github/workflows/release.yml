@@ -23,6 +23,11 @@ jobs:
         with:
           fetch-depth: 0
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "10.34.0"
+
       - name: Require the version tag at current main
         run: |
           version=$(plutil -extract CFBundleShortVersionString raw Resources/Pablo-Info.plist)
@@ -54,6 +59,16 @@ jobs:
             exit 1
           fi
 
+      - name: Validate rrweb assets
+        run: |
+          pnpm --dir SafariExtension/JavaScript install --frozen-lockfile
+          ./scripts/build-rrweb-assets.sh
+          if [[ -n "$(git status --porcelain -- SafariExtension/Generated Sources/PabloApp/Resources/RRWebPlayer)" ]]; then
+            git diff -- SafariExtension/Generated Sources/PabloApp/Resources/RRWebPlayer
+            echo "Generated rrweb assets are not current." >&2
+            exit 1
+          fi
+
       - name: Run tests
         run: swift test
 
@@ -71,11 +86,21 @@ jobs:
       - name: Check out source
         uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
 
+      - name: Install pnpm
+        uses: pnpm/action-setup@b906affcce14559ad1aafd4ab0e942779e9f58b1 # v4
+        with:
+          version: "10.34.0"
+
+      - name: Install rrweb dependencies
+        run: pnpm --dir SafariExtension/JavaScript install --frozen-lockfile
+
       - name: Check release credentials
         id: credentials
         env:
           DEVELOPER_ID_CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}
           DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          PABLO_APP_PROVISIONING_PROFILE_BASE64: ${{ secrets.PABLO_APP_PROVISIONING_PROFILE_BASE64 }}
+          PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE_BASE64: ${{ secrets.PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
           NOTARY_API_KEY_P8_BASE64: ${{ secrets.NOTARY_API_KEY_P8_BASE64 }}
           NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
           NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
@@ -83,6 +108,8 @@ jobs:
           missing=()
           [[ -z "$DEVELOPER_ID_CERTIFICATE_P12_BASE64" ]] && missing+=(DEVELOPER_ID_CERTIFICATE_P12_BASE64)
           [[ -z "$DEVELOPER_ID_CERTIFICATE_PASSWORD" ]] && missing+=(DEVELOPER_ID_CERTIFICATE_PASSWORD)
+          [[ -z "$PABLO_APP_PROVISIONING_PROFILE_BASE64" ]] && missing+=(PABLO_APP_PROVISIONING_PROFILE_BASE64)
+          [[ -z "$PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE_BASE64" ]] && missing+=(PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE_BASE64)
           [[ -z "$NOTARY_API_KEY_P8_BASE64" ]] && missing+=(NOTARY_API_KEY_P8_BASE64)
           [[ -z "$NOTARY_API_KEY_ID" ]] && missing+=(NOTARY_API_KEY_ID)
           [[ -z "$NOTARY_API_ISSUER_ID" ]] && missing+=(NOTARY_API_ISSUER_ID)
@@ -100,19 +127,25 @@ jobs:
         env:
           DEVELOPER_ID_CERTIFICATE_P12_BASE64: ${{ secrets.DEVELOPER_ID_CERTIFICATE_P12_BASE64 }}
           DEVELOPER_ID_CERTIFICATE_PASSWORD: ${{ secrets.DEVELOPER_ID_CERTIFICATE_PASSWORD }}
+          PABLO_APP_PROVISIONING_PROFILE_BASE64: ${{ secrets.PABLO_APP_PROVISIONING_PROFILE_BASE64 }}
+          PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE_BASE64: ${{ secrets.PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE_BASE64 }}
           NOTARY_API_KEY_P8_BASE64: ${{ secrets.NOTARY_API_KEY_P8_BASE64 }}
           NOTARY_API_KEY_ID: ${{ secrets.NOTARY_API_KEY_ID }}
           NOTARY_API_ISSUER_ID: ${{ secrets.NOTARY_API_ISSUER_ID }}
         run: |
           certificate_path="$RUNNER_TEMP/developer-id.p12"
+          app_profile_path="$RUNNER_TEMP/pablo-app.provisionprofile"
+          safari_profile_path="$RUNNER_TEMP/pablo-safari-extension.provisionprofile"
           api_key_path="$RUNNER_TEMP/AuthKey_${NOTARY_API_KEY_ID}.p8"
           keychain_path="$RUNNER_TEMP/pablo-release.keychain-db"
           keychain_password=$(openssl rand -hex 32)
           echo "::add-mask::$keychain_password"
 
           printf '%s' "$DEVELOPER_ID_CERTIFICATE_P12_BASE64" | base64 --decode > "$certificate_path"
+          printf '%s' "$PABLO_APP_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$app_profile_path"
+          printf '%s' "$PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE_BASE64" | base64 --decode > "$safari_profile_path"
           printf '%s' "$NOTARY_API_KEY_P8_BASE64" | base64 --decode > "$api_key_path"
-          chmod 600 "$certificate_path" "$api_key_path"
+          chmod 600 "$certificate_path" "$app_profile_path" "$safari_profile_path" "$api_key_path"
 
           security create-keychain -p "$keychain_password" "$keychain_path"
           security set-keychain-settings -lut 2700 "$keychain_path"
@@ -139,6 +172,8 @@ jobs:
           {
             echo "PABLO_RELEASE_KEYCHAIN=$keychain_path"
             echo "PABLO_NOTARY_KEYCHAIN=$keychain_path"
+            echo "PABLO_APP_PROVISIONING_PROFILE=$app_profile_path"
+            echo "PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE=$safari_profile_path"
           } >> "$GITHUB_ENV"
 
       - name: Build signed and notarized arm64 release
@@ -200,4 +235,6 @@ jobs:
           fi
           rm -f \
             "$RUNNER_TEMP/developer-id.p12" \
+            "$RUNNER_TEMP/pablo-app.provisionprofile" \
+            "$RUNNER_TEMP/pablo-safari-extension.provisionprofile" \
             "$RUNNER_TEMP"/AuthKey_*.p8

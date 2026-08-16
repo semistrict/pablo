@@ -116,14 +116,3 @@ func invalidProtobufFramingFailsClosed() throws {
         try ProtobufStream.count(in: Data(repeating: 0x80, count: 10))
     }
 }
-
-@Test("The control bridge uses protobuf protocol version three")
-func controlBridgeUsesProtobufV3() throws {
-    let request = PabloControlRequest(method: .status)
-    let encoded = try PabloProtobufCodec.encode(request)
-    #expect(encoded.first != Character("{").asciiValue)
-    let decoded = try PabloProtobufCodec.decodeControlRequest(from: encoded)
-    #expect(decoded.id == request.id)
-    #expect(decoded.protocolVersion == 3)
-    #expect(decoded.method == .status)
-}

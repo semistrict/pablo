@@ -94,18 +94,18 @@ public final class PabloLiveInspectionManager {
             return try session.inspectOutput()
         case .frames:
             try session.capture(reason: "live:frames")
-            return try session.framesOutput(json: request.json)
+            return try session.framesOutput()
         case .frame:
             guard let reference = request.reference else {
                 throw RecordingError.usage("The live frame request did not include a frame reference.")
             }
             let step = try session.step(reference: reference)
-            return try session.frameOutput(step, changedOnly: request.changedOnly, json: request.json)
+            return try session.frameOutput(step, changedOnly: request.changedOnly)
         case .events:
             try session.startEventObservation()
-            return try session.eventsOutput(limit: request.limit, json: request.json)
+            return try session.eventsOutput(limit: request.limit)
         case .annotations:
-            return try session.annotationsOutput(json: request.json)
+            return try session.annotationsOutput()
         }
     }
 
@@ -282,69 +282,42 @@ private final class LiveInspectionSession {
         ))
     }
 
-    func framesOutput(json: Bool) throws -> String {
-        if json { return try jsonString(accessibilityHistory.steps) }
-        guard !accessibilityHistory.steps.isEmpty else { return "No accessibility frames found." }
-        return accessibilityHistory.steps.map { step in
-            let truncated = step.truncated ? " truncated" : ""
-            return "\(step.reference)  \(formatTimeNs(step.timestampNs))  \(step.kind)  \(step.reason)  " +
-                "changed=\(step.changedNodes.count) removed=\(step.removedNodeIDs.count) " +
-                "nodes=\(step.totalNodeCount)\(truncated)"
-        }.joined(separator: "\n")
+    func framesOutput() throws -> String {
+        try jsonString(accessibilityHistory.steps)
     }
 
     func frameOutput(
         _ step: ReplayAccessibilityStep,
-        changedOnly: Bool,
-        json: Bool
+        changedOnly: Bool
     ) throws -> String {
-        if json { return try jsonString(step) }
-        let nodes = changedOnly ? step.changedNodes : step.nodes
-        var lines = [
-            "\(step.reference)  \(formatTimeNs(step.timestampNs))  \(step.kind)  \(step.reason)",
-            "nodes=\(step.totalNodeCount) changed=\(step.changedNodes.count) " +
-                "removed=\(step.removedNodeIDs.count) truncated=\(step.truncated)",
-            changedOnly ? "Changed accessibility nodes:" : "Accessibility tree:",
-        ]
-        lines.append(contentsOf: nodes.map(formatNode))
-        if !step.removedNodeIDs.isEmpty {
-            lines.append("Removed nodes:")
-            lines.append(contentsOf: step.removedNodeIDs.map { "- \($0)" })
-        }
-        return lines.joined(separator: "\n")
+        guard changedOnly else { return try jsonString(step) }
+        return try jsonString(ReplayAccessibilityStep(
+            id: step.id,
+            timestampNs: step.timestampNs,
+            reason: step.reason,
+            kind: step.kind,
+            applicationID: step.applicationID,
+            applicationName: step.applicationName,
+            applicationBundleIdentifier: step.applicationBundleIdentifier,
+            applicationPID: step.applicationPID,
+            rootID: step.rootID,
+            nodes: step.changedNodes,
+            changedNodes: step.changedNodes,
+            changedNodeIDs: step.changedNodeIDs,
+            removedNodeIDs: step.removedNodeIDs,
+            totalNodeCount: step.totalNodeCount,
+            truncated: step.truncated
+        ))
     }
 
-    func eventsOutput(limit: Int, json: Bool) throws -> String {
+    func eventsOutput(limit: Int) throws -> String {
         let allEvents = eventLock.withLock { indexedEvents }
         let limited = Array(allEvents.prefix(limit))
-        if json { return try jsonString(limited.map(\.record)) }
-        guard !limited.isEmpty else {
-            return "No input events observed yet. Live event observation is now active for \(target.name)."
-        }
-        var lines = limited.map { event in
-            var details: [String] = []
-            if let text = event.record.text { details.append("text=\(quoted(text))") }
-            if let keyCode = event.record.keyCode { details.append("key=\(keyCode)") }
-            if let x = event.record.x, let y = event.record.y {
-                details.append(String(format: "at=(%.1f,%.1f)", x, y))
-            }
-            return String(
-                format: "EVT-%04d  %@  %@%@",
-                event.index,
-                formatTimeNs(event.record.timestampNs),
-                event.record.type,
-                details.isEmpty ? "" : "  " + details.joined(separator: " ")
-            )
-        }
-        if allEvents.count > limited.count {
-            lines.append("… \(allEvents.count - limited.count) more events; use --limit \(allEvents.count) to show all")
-        }
-        return lines.joined(separator: "\n")
+        return try jsonString(limited.map(\.record))
     }
 
-    func annotationsOutput(json: Bool) throws -> String {
-        if json { return try jsonString([RecordingAnnotation]()) }
-        return "No annotations found. Live inspection is read-only and memory-only."
+    func annotationsOutput() throws -> String {
+        try jsonString([RecordingAnnotation]())
     }
 
     private func appendEvent(_ record: InputEventRecord) {
@@ -376,30 +349,6 @@ private final class LiveInspectionSession {
         }
         return number - 1
     }
-}
-
-private func formatNode(_ node: ReplayAccessibilityNode) -> String {
-    let indentation = String(repeating: "  ", count: min(node.depth, 20))
-    let role = node.role ?? "UnknownRole"
-    let value = [node.title, node.label, node.value]
-        .compactMap { $0 }
-        .first { !$0.isEmpty }
-        .map { " \(quoted($0))" } ?? ""
-    let focused = node.focused == true ? " focused" : ""
-    return "\(indentation)- \(role)\(value) [\(node.id)]\(focused)"
-}
-
-private func quoted(_ value: String) -> String {
-    String(reflecting: value)
-}
-
-private func formatTimeNs(_ nanoseconds: UInt64) -> String {
-    let seconds = TimeInterval(nanoseconds) / 1_000_000_000
-    return String(
-        format: "%02d:%06.3f",
-        Int(seconds) / 60,
-        seconds.truncatingRemainder(dividingBy: 60)
-    )
 }
 
 private func jsonString<Value: Encodable>(_ value: Value) throws -> String {

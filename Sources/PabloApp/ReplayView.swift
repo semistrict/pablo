@@ -377,8 +377,7 @@ final class ReplayModel: ObservableObject {
     }
 
     static var recordingsDirectory: URL {
-        FileManager.default.urls(for: .moviesDirectory, in: .userDomainMask).first!
-            .appendingPathComponent("Pablo Recordings", isDirectory: true)
+        PabloRecordingStorage.localRecordingsDirectory
     }
 }
 

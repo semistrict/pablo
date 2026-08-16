@@ -102,16 +102,16 @@ func automationRecordsPairByActionID() throws {
     let succeeded = [
         PabloAutomationActionTrace(
             actionID: actionID, phase: .requested, request: request, caller: caller,
-            transport: "pabloCLI", recordingWasPaused: false
+            transport: "http+unix", recordingWasPaused: false
         ),
         PabloAutomationActionTrace(
             actionID: actionID, phase: .succeeded, request: request, caller: caller,
-            transport: "pabloCLI", recordingWasPaused: false
+            transport: "http+unix", recordingWasPaused: false
         ),
     ]
     let failed = PabloAutomationActionTrace(
         actionID: failedActionID, phase: .requested, request: request, caller: caller,
-        transport: "pabloCLI", recordingWasPaused: true
+        transport: "http+unix", recordingWasPaused: true
     )
     let events = [
         InputEventRecord.automationAction(
