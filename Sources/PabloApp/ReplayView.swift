@@ -61,6 +61,28 @@ final class ReplayModel: ObservableObject {
     @Published private(set) var videoIsLoading = false
     @Published private(set) var focusedWindowID: String?
 
+    private var inspectionKey: String?
+    private var cachedInspection: ReplayVideoInspection?
+
+    var videoInspection: ReplayVideoInspection {
+        guard let recording, let viewport = videoViewport else {
+            return ReplayVideoInspection(viewport: .init(x: 0, y: 0, width: 1, height: 1), steps: [], windows: [], recordedFrames: [])
+        }
+        let timestamp = recording.sessionTimestampNs(forVideoTime: currentVideoTime)
+        let workspace = recording.workspaceSteps.last { $0.timestampNs <= timestamp }
+        let steps = recording.accessibilitySteps(atVideoTime: currentVideoTime)
+        let tracks = recording.videoTracks.filter { $0.metadata.contains(timestampNs: timestamp) }
+        let key = "\(recording.packageURL.path)|\(workspace?.timestampNs ?? 0)|\(steps.map(\.id))|\(tracks.map(\.id))|\(viewport)"
+        if key != inspectionKey || cachedInspection == nil {
+            cachedInspection = ReplayVideoInspection(
+                viewport: viewport, steps: steps, windows: workspace?.windows ?? [],
+                recordedFrames: tracks.map(\.metadata.frame)
+            )
+            inspectionKey = key
+        }
+        return cachedInspection!
+    }
+
     var recording: ReplayRecording? {
         guard case .native(let recording) = source else { return nil }
         return recording
@@ -138,14 +160,14 @@ final class ReplayModel: ObservableObject {
 
     var selectedNodeVideoRegion: CGRect? {
         guard let node = selectedNode, let frame = node.frame,
-              frame.width > 0, frame.height > 0 else { return nil }
-        let referenceFrame = recording.map { capture in
-            ReplayAccessibilityFrame(
-                x: capture.captureFrame.x, y: capture.captureFrame.y,
-                width: capture.captureFrame.width, height: capture.captureFrame.height
-            )
-        }
-        guard let referenceFrame, referenceFrame.width > 0, referenceFrame.height > 0 else { return nil }
+              frame.width > 0, frame.height > 0, let recording else { return nil }
+        let timestamp = recording.sessionTimestampNs(forVideoTime: currentVideoTime)
+        let nodeBounds = CGRect(x: frame.x, y: frame.y, width: frame.width, height: frame.height)
+        guard recording.videoTracks.contains(where: {
+            $0.metadata.contains(timestampNs: timestamp) && $0.metadata.frame.cgRect.intersects(nodeBounds)
+        }) else { return nil }
+        let referenceFrame = recording.captureFrame
+        guard referenceFrame.width > 0, referenceFrame.height > 0 else { return nil }
         let region = CGRect(
             x: (frame.x - referenceFrame.x) / referenceFrame.width,
             y: (frame.y - referenceFrame.y) / referenceFrame.height,
@@ -232,6 +254,14 @@ final class ReplayModel: ObservableObject {
         }.sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
+    func pinVideoElement(_ element: ReplayVideoElement) {
+        seek(to: currentVideoTime, synchronizeEvidence: false)
+        selectedAnnotationID = nil
+        selectedTimelineItemID = nil
+        selectAccessibilityStep(element.step.id, seek: false)
+        selectedNodeID = element.node.id
+    }
+
     func selectAccessibilityStep(_ id: Int?, seek: Bool) {
         selectedStepID = id
         guard let step = selectedStep else { return }
@@ -267,6 +297,9 @@ final class ReplayModel: ObservableObject {
     }
 
     func togglePlayback() {
+        if !isPlaying && currentVideoTime >= duration - 0.01 {
+            seek(to: 0)
+        }
         if webRecording != nil {
             if isPlaying {
                 webPlaybackController?.pause()
@@ -506,6 +539,8 @@ final class ReplayModel: ObservableObject {
         videoLoadID = UUID()
         videoIsLoading = false
         focusedWindowID = nil
+        inspectionKey = nil
+        cachedInspection = nil
         do {
             if let webRecording = try? PabloRRWebRecordingStorage.load(url) {
                 let replayData = try PabloRRWebReplayData(recording: webRecording)
@@ -635,9 +670,15 @@ final class ReplayModel: ObservableObject {
     }
 
     private func synchronizeTimeDependentUI(to seconds: TimeInterval) {
-        guard let step = recording?.accessibilityStep(atVideoTime: seconds),
-              step.id != selectedStepID else { return }
-        selectAccessibilityStep(step.id, seek: false)
+        let pinnedApplication = selectedNodeID == nil ? nil : selectedStep?.applicationID
+        let step = pinnedApplication.flatMap { application in
+            recording?.accessibilitySteps(atVideoTime: seconds).first { $0.applicationID == application }
+        } ?? recording?.accessibilitySteps(atVideoTime: seconds).first {
+            $0.applicationID == currentWorkspace?.frontmostApplicationID
+        } ?? recording?.accessibilitySteps(atVideoTime: seconds).first
+        guard step?.id != selectedStepID else { return }
+        selectAccessibilityStep(step?.id, seek: false)
+        if step == nil { selectedNodeID = nil }
     }
 
     static var recordingsDirectory: URL {
@@ -645,8 +686,9 @@ final class ReplayModel: ObservableObject {
     }
 }
 
-private enum VideoReviewTool: String, CaseIterable, Identifiable {
-    case review = "Review"
+enum VideoReviewTool: String, CaseIterable, Identifiable {
+    case inspect = "Inspect"
+    case review = "Notes"
     case pen = "Pen"
     case comment = "Comment"
 
@@ -654,7 +696,8 @@ private enum VideoReviewTool: String, CaseIterable, Identifiable {
 
     var systemImage: String {
         switch self {
-        case .review: return "cursorarrow"
+        case .inspect: return "viewfinder"
+        case .review: return "text.bubble.fill"
         case .pen: return "pencil.tip"
         case .comment: return "text.bubble"
         }
@@ -662,7 +705,8 @@ private enum VideoReviewTool: String, CaseIterable, Identifiable {
 
     var guidance: String {
         switch self {
-        case .review: return "Select existing notes"
+        case .inspect: return "Hover to inspect · Click to pin an element"
+        case .review: return "Select an existing note"
         case .pen: return "Draw directly on the video"
         case .comment: return "Place a point comment"
         }
@@ -675,14 +719,17 @@ struct ReplayView: View {
     @State private var traceLineWidth = 0.008
     @State private var draftKind = RecordingAnnotationKind.observation
     @State private var attachEvidence = true
-    @State private var inspectorVisible = true
-    @State private var videoTool = VideoReviewTool.pen
+    @State private var inspectorVisible = false
+    @State private var videoTool = VideoReviewTool.inspect
+    @State private var libraryVisible = false
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         HSplitView {
-            RecordingBrowser(model: model, openRecordings: openRecordings)
-                .frame(minWidth: 220, idealWidth: 255, maxWidth: 310)
+            if libraryVisible {
+                RecordingBrowser(model: model, openRecordings: openRecordings)
+                    .frame(minWidth: 200, idealWidth: 220, maxWidth: 260)
+            }
 
             Group {
                 if let recording = model.recording {
@@ -706,6 +753,15 @@ struct ReplayView: View {
         )
         .background(ReplayWindowMetadata(packageURL: model.packageURL))
         .toolbar {
+            ToolbarItem(placement: .navigation) {
+                Button {
+                    withAnimation(.snappy) { libraryVisible.toggle() }
+                } label: {
+                    Label("Recordings", systemImage: "sidebar.leading")
+                }
+                .help("Show or hide recordings")
+            }
+            ToolbarItemGroup {
             Button("Open Recordings…", action: openRecordings)
             Button {
                 withAnimation(.snappy) { inspectorVisible.toggle() }
@@ -716,6 +772,7 @@ struct ReplayView: View {
                 )
             }
             .help(inspectorVisible ? "Hide Inspector" : "Show Inspector")
+            }
         }
         .onReceive(timer) { _ in model.updateCurrentVideoTime() }
         .onReceive(NotificationCenter.default.publisher(for: .pabloAnnotationsDidChange)) { note in
@@ -804,45 +861,20 @@ struct ReplayView: View {
     }
 
     private func review(_ recording: ReplayRecording) -> some View {
-        GeometryReader { geometry in
-            let compact = geometry.size.width < 1_080
-            ZStack(alignment: .trailing) {
-                HStack(spacing: 0) {
-                    reviewMain(recording)
-                        .frame(maxWidth: .infinity)
-                    if inspectorVisible && !compact {
-                        Divider()
-                        ReviewInspector(
-                            model: model,
-                            lineWidth: $traceLineWidth,
-                            kind: $draftKind,
-                            attachEvidence: $attachEvidence,
-                            close: { withAnimation(.snappy) { inspectorVisible = false } }
-                        )
-                        .frame(width: 410)
-                    }
-                }
-
-                if inspectorVisible && compact {
-                    ReviewInspector(
-                        model: model,
-                        lineWidth: $traceLineWidth,
-                        kind: $draftKind,
-                        attachEvidence: $attachEvidence,
-                        close: { withAnimation(.snappy) { inspectorVisible = false } }
-                    )
-                    .frame(width: min(430, geometry.size.width * 0.82))
-                    .background(.regularMaterial)
-                    .overlay(alignment: .leading) { Divider() }
-                    .shadow(color: .black.opacity(0.35), radius: 22, x: -8)
-                    .transition(.move(edge: .trailing).combined(with: .opacity))
-                }
-            }
-            .onAppear {
-                if compact { inspectorVisible = false }
-            }
-            .onChange(of: compact) { _, isCompact in
-                if isCompact { inspectorVisible = false }
+        HStack(spacing: 0) {
+            reviewMain(recording)
+                .frame(maxWidth: .infinity)
+            if inspectorVisible {
+                Divider()
+                ReviewInspector(
+                    model: model,
+                    lineWidth: $traceLineWidth,
+                    kind: $draftKind,
+                    attachEvidence: $attachEvidence,
+                    close: { withAnimation(.snappy) { inspectorVisible = false } }
+                )
+                .frame(width: 310)
+                .background(Color(nsColor: .controlBackgroundColor))
             }
         }
     }
@@ -850,46 +882,56 @@ struct ReplayView: View {
     private func reviewMain(_ recording: ReplayRecording) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             recordingHeader(recording)
-            Picker("View", selection: Binding(
-                get: { model.focusedWindowID },
-                set: { model.focusWindow($0) }
-            )) {
-                Text("All windows").tag(String?.none)
-                ForEach(recording.windows, id: \.id) { window in
-                    Text(window.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Window \(window.systemWindowID)")
-                        .tag(Optional(window.id))
+            HStack {
+                videoToolPicker
+                Spacer(minLength: 8)
+                ViewThatFits(in: .horizontal) {
+                    windowMenu(recording, compact: false)
+                    windowMenu(recording, compact: true)
                 }
             }
-            .pickerStyle(.menu)
-            .frame(maxWidth: 420, alignment: .leading)
-            videoToolPicker
-            VideoMarkupCanvas(
-                recording: recording,
-                viewport: model.videoViewport ?? recording.captureFrame,
-                windowUnavailable: model.focusedWindowID != nil && model.focusedWindowFrame == nil,
-                player: model.player,
-                annotations: model.annotations,
-                selectedAnnotationID: model.selectedAnnotationID,
-                currentVideoTime: model.currentVideoTime,
-                draftSamples: model.draftTraceSamples,
-                draftLineWidth: traceLineWidth,
-                selectedNodeRegion: model.selectedNodeVideoRegion,
-                selectedNodeName: model.selectedNode.map(accessibilityNodeName),
-                tool: videoTool,
-                beginTrace: model.beginTrace,
-                appendPoint: model.appendTracePoint,
-                annotationKind: $draftKind,
-                saveComment: { text in
-                    model.addHumanAnnotation(
-                        text: text,
-                        kind: draftKind,
-                        attachEvidence: attachEvidence,
-                        lineWidth: traceLineWidth
-                    )
-                },
-                cancelTrace: model.beginTrace,
-                selectAnnotation: model.selectAnnotation
-            )
+            // Focus cropping can extend the canvas's hit region past its visual clip.
+            .zIndex(1)
+            GeometryReader { stage in
+                VideoMarkupCanvas(
+                    recording: recording,
+                    viewport: model.videoViewport ?? recording.captureFrame,
+                    windowUnavailable: model.focusedWindowID != nil && model.focusedWindowFrame == nil,
+                    player: model.player,
+                    annotations: model.annotations,
+                    selectedAnnotationID: model.selectedAnnotationID,
+                    currentVideoTime: model.currentVideoTime,
+                    draftSamples: model.draftTraceSamples,
+                    draftLineWidth: traceLineWidth,
+                    selectedNodeRegion: model.selectedNodeVideoRegion,
+                    tool: videoTool,
+                    inspection: model.videoInspection,
+                    pinElement: { element in
+                        model.pinVideoElement(element)
+                        inspectorVisible = true
+                    },
+                    beginTrace: model.beginTrace,
+                    appendPoint: model.appendTracePoint,
+                    annotationKind: $draftKind,
+                    saveComment: { text in
+                        model.addHumanAnnotation(
+                            text: text,
+                            kind: draftKind,
+                            attachEvidence: attachEvidence,
+                            lineWidth: traceLineWidth
+                        )
+                    },
+                    cancelTrace: model.beginTrace,
+                    selectAnnotation: { id in
+                        model.selectAnnotation(id)
+                        inspectorVisible = true
+                    }
+                )
+                .id(recording.packageURL)
+                .frame(maxWidth: stage.size.width, maxHeight: stage.size.height)
+                .frame(width: stage.size.width, height: stage.size.height)
+            }
+            .background(Color.black.opacity(0.92), in: RoundedRectangle(cornerRadius: 8))
             .overlay {
                 if model.videoIsLoading {
                     ProgressView("Preparing recording…")
@@ -897,61 +939,76 @@ struct ReplayView: View {
                         .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
                 }
             }
+            HStack(spacing: 6) {
+                Image(systemName: videoTool.systemImage)
+                Text(videoTool.guidance)
+                Spacer()
+                if videoTool == .inspect { Text("Recorded accessibility").foregroundStyle(.tertiary) }
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
             UnifiedTimeline(model: model)
         }
-        .padding(16)
-        .frame(minWidth: 520, maxWidth: .infinity, alignment: .topLeading)
+        .padding(20)
+        .frame(minWidth: 440, maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .onChange(of: model.packageURL) { _, _ in videoTool = .inspect }
+    }
+
+    private func windowMenu(_ recording: ReplayRecording, compact: Bool) -> some View {
+        let title = recording.windows.first { $0.id == model.focusedWindowID }?.title ?? "All windows"
+        return Menu {
+            Button { model.focusWindow(nil) } label: {
+                Label("All windows", systemImage: model.focusedWindowID == nil ? "checkmark" : "macwindow.on.rectangle")
+            }
+            Divider()
+            ForEach(recording.windows, id: \.id) { window in
+                Button { model.focusWindow(window.id) } label: {
+                    Label(
+                        window.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Window \(window.systemWindowID)",
+                        systemImage: model.focusedWindowID == window.id ? "checkmark" : "macwindow"
+                    )
+                }
+            }
+        } label: {
+            if compact { Image(systemName: "macwindow.on.rectangle") }
+            else { Label(title, systemImage: "macwindow.on.rectangle").lineLimit(1) }
+        }
+        .menuStyle(.borderlessButton)
+        .frame(width: compact ? 32 : 180)
+        .help("Focus a recorded window")
+        .accessibilityLabel("Window: \(title)")
     }
 
     private var videoToolPicker: some View {
-        HStack(spacing: 10) {
-            Picker("Video tool", selection: $videoTool) {
-                ForEach(VideoReviewTool.allCases) { tool in
-                    Label(tool.rawValue, systemImage: tool.systemImage).tag(tool)
-                }
+        Picker("Video tool", selection: $videoTool) {
+            ForEach(VideoReviewTool.allCases) { tool in
+                Label(tool.rawValue, systemImage: tool.systemImage)
+                    .tag(tool)
+                    .help(tool.guidance)
             }
-            .pickerStyle(.segmented)
-            .labelsHidden()
-            .frame(width: 310)
-            .accessibilityLabel("Video interaction tool")
-
-            Text(videoTool.guidance)
-                .font(.caption)
-                .foregroundStyle(.secondary)
-            Spacer()
         }
+        .pickerStyle(.segmented)
+        .labelsHidden()
+        .frame(width: 340)
     }
 
     private func recordingHeader(_ recording: ReplayRecording) -> some View {
-        HStack(alignment: .firstTextBaseline) {
-            VStack(alignment: .leading, spacing: 2) {
-                Text(recording.scopeName).font(.title3.weight(.semibold))
-                Text(recording.packageURL.lastPathComponent)
+        HStack(alignment: .center) {
+            VStack(alignment: .leading, spacing: 4) {
+                Text(recording.scopeName)
+                    .font(.system(size: 20, weight: .semibold))
+                    .foregroundStyle(.primary)
+                Text("Screen recording · \(recording.accessibilitySteps.count) accessibility snapshots")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
             Spacer()
-            Label("\(recording.accessibilitySteps.count) frames", systemImage: "accessibility")
-            if let workspace = model.currentWorkspace {
-                if let frontmostID = workspace.frontmostApplicationID {
-                    let applicationName = model.applicationName(for: frontmostID)
-                    Label(applicationName, systemImage: "app.fill")
-                    if let windowTitle = workspace.windows
-                        .filter({ $0.applicationID == frontmostID && $0.isOnScreen })
-                        .min(by: { $0.zOrder < $1.zOrder })?.title,
-                       !windowTitle.isEmpty,
-                       windowTitle.caseInsensitiveCompare(applicationName) != .orderedSame {
-                        Text(windowTitle).lineLimit(1)
-                    }
-                }
-                Label("\(workspace.applications.count) apps", systemImage: "square.grid.2x2")
-                Label("\(workspace.windows.count) windows", systemImage: "macwindow.on.rectangle")
-            }
-            Label("\(model.annotations.count) notes", systemImage: "text.bubble")
+            Label("Local recording", systemImage: "internaldrive")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
         }
-        .font(.caption)
-        .foregroundStyle(.secondary)
     }
+
 }
 
 private struct ReplayWindowMetadata: NSViewRepresentable {
@@ -1041,8 +1098,9 @@ private struct VideoMarkupCanvas: View {
     let draftSamples: [RecordingAnnotationTraceSample]
     let draftLineWidth: Double
     let selectedNodeRegion: CGRect?
-    let selectedNodeName: String?
     let tool: VideoReviewTool
+    let inspection: ReplayVideoInspection
+    let pinElement: (ReplayVideoElement) -> Void
     let beginTrace: () -> Void
     let appendPoint: (Double, Double) -> Void
     @Binding var annotationKind: RecordingAnnotationKind
@@ -1054,10 +1112,12 @@ private struct VideoMarkupCanvas: View {
     @State private var annotationCandidateID: UUID?
     @State private var gestureStart: CGPoint?
     @State private var gestureTool: VideoReviewTool?
+    @State private var hoverPoint: CGPoint?
 
     var body: some View {
         ZStack {
             GeometryReader { geometry in
+                let hovered = tool == .inspect ? hoverPoint.flatMap { inspection.element(at: $0) } : nil
                 ReplayVideoSurface(player: player)
                     .frame(
                         width: geometry.size.width * recording.captureFrame.width / viewport.width,
@@ -1085,13 +1145,41 @@ private struct VideoMarkupCanvas: View {
                             width: selectedNodeRegion.width * recording.captureFrame.width,
                             height: selectedNodeRegion.height * recording.captureFrame.height
                         )),
-                        label: selectedNodeName,
+                        label: nil,
                         size: geometry.size
                     )
                 }
+                if let hovered {
+                    AccessibilityBoundsOverlay(region: hovered.region, label: nil, size: geometry.size)
+                }
                 Color.clear
                     .contentShape(Rectangle())
+                    .onContinuousHover { phase in
+                        switch phase {
+                        case .active(let point):
+                            guard geometry.size.width > 0, geometry.size.height > 0 else { return }
+                            hoverPoint = CGPoint(x: point.x / geometry.size.width, y: point.y / geometry.size.height)
+                        case .ended: hoverPoint = nil
+                        }
+                    }
                     .gesture(videoGesture(size: geometry.size))
+                    .onChange(of: geometry.size) { _, _ in hoverPoint = nil }
+                    .onChange(of: viewport) { _, _ in hoverPoint = nil }
+                    .accessibilityLabel("Recorded video. Hover to inspect an element; click to pin it.")
+                if let hovered, let hoverPoint {
+                    VideoElementPopover(
+                        element: hovered,
+                        age: max(0, currentVideoTime - recording.videoTime(for: hovered.step))
+                    )
+                    .frame(width: min(260, geometry.size.width - 24))
+                    .position(
+                        x: min(max(hoverPoint.x * geometry.size.width + (hoverPoint.x > 0.5 ? -148 : 148), 142), geometry.size.width - 142),
+                        y: hoverPoint.y * geometry.size.height > geometry.size.height / 2
+                            ? max(76, hoverPoint.y * geometry.size.height - 90)
+                            : min(geometry.size.height - 76, hoverPoint.y * geometry.size.height + 90)
+                    )
+                    .allowsHitTesting(false)
+                }
                 if showsCommentBox, let endpoint = draftSamples.last {
                     DraftCommentBubble(
                         kind: $annotationKind,
@@ -1122,7 +1210,11 @@ private struct VideoMarkupCanvas: View {
         .frame(maxWidth: .infinity, alignment: .center)
         .background(.black)
         .clipShape(RoundedRectangle(cornerRadius: 10))
-        .help(tool.guidance)
+        .onExitCommand {
+            showsCommentBox = false
+            hoverPoint = nil
+            cancelTrace()
+        }
         .onChange(of: tool) { _, _ in
             isInteracting = false
             gestureTool = nil
@@ -1146,6 +1238,7 @@ private struct VideoMarkupCanvas: View {
                     gestureStart = value.location
                     gestureTool = tool
                     switch tool {
+                    case .inspect: break
                     case .review:
                         annotationCandidateID = hitTestAnnotation(at: value.location, in: size)
                     case .pen:
@@ -1161,6 +1254,15 @@ private struct VideoMarkupCanvas: View {
                 let completedTool = gestureTool ?? tool
                 isInteracting = false
                 switch completedTool {
+                case .inspect:
+                    if let start = gestureStart,
+                       hypot(value.location.x - start.x, value.location.y - start.y) <= 5,
+                       let element = inspection.element(at: CGPoint(
+                        x: value.location.x / size.width, y: value.location.y / size.height
+                       )) {
+                        hoverPoint = nil
+                        pinElement(element)
+                    }
                 case .review:
                     if let gestureStart,
                        hypot(value.location.x - gestureStart.x, value.location.y - gestureStart.y) <= 5,
@@ -1238,6 +1340,43 @@ private struct VideoMarkupCanvas: View {
     }
 }
 
+private struct VideoElementPopover: View {
+    let element: ReplayVideoElement
+    let age: TimeInterval
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(spacing: 6) {
+                Image(systemName: "viewfinder").foregroundStyle(Color.accentColor)
+                Text((element.node.role ?? "Element").replacingOccurrences(of: "AX", with: ""))
+                    .fontWeight(.medium)
+                Spacer()
+                Text(element.step.applicationName).foregroundStyle(.white.opacity(0.7)).lineLimit(1)
+            }
+            .font(.caption)
+            Text(accessibilityNodeName(element.node))
+                .font(.system(size: 13, weight: .semibold))
+                .lineLimit(2)
+            if let value = element.node.value, !value.isEmpty, value != accessibilityNodeName(element.node) {
+                Text(value).font(.caption).foregroundStyle(.white.opacity(0.7)).lineLimit(2)
+            }
+            HStack {
+                Text(String(format: "Observed %.1fs ago", age))
+                Spacer()
+                Text("Click to pin")
+            }
+            .font(.system(size: 10, weight: .medium))
+            .foregroundStyle(.white.opacity(0.7))
+        }
+        .padding(12)
+        .foregroundStyle(.white)
+        .background(Color(red: 0.12, green: 0.14, blue: 0.16), in: RoundedRectangle(cornerRadius: 10))
+        .overlay(RoundedRectangle(cornerRadius: 10).strokeBorder(.white.opacity(0.12)))
+        .shadow(color: .black.opacity(0.25), radius: 12, y: 4)
+        .accessibilityElement(children: .combine)
+    }
+}
+
 private struct AccessibilityBoundsOverlay: View {
     let region: CGRect
     let label: String?
@@ -1251,10 +1390,10 @@ private struct AccessibilityBoundsOverlay: View {
             height: size.height * region.height
         )
         ZStack(alignment: .topLeading) {
-            RoundedRectangle(cornerRadius: 5)
-                .fill(Color.blue.opacity(0.12))
-            RoundedRectangle(cornerRadius: 5)
-                .stroke(Color.blue, style: StrokeStyle(lineWidth: 2, dash: [6, 3]))
+            RoundedRectangle(cornerRadius: 3)
+                .fill(Color.accentColor.opacity(0.04))
+            RoundedRectangle(cornerRadius: 3)
+                .stroke(Color.accentColor, lineWidth: 1.5)
             if let label, !label.isEmpty {
                 Text(label)
                     .font(.caption2.weight(.semibold))
@@ -1412,6 +1551,7 @@ private struct UnifiedTimeline: View {
     @State private var zoom = 1.0
     @State private var viewportCenter: TimeInterval?
     @State private var followsPlayhead = true
+    @State private var showsEvidence = false
 
     private var duration: TimeInterval {
         model.duration
@@ -1427,13 +1567,22 @@ private struct UnifiedTimeline: View {
 
     var body: some View {
         VStack(spacing: 7) {
-            HStack(spacing: 10) {
-                Button {
-                    model.togglePlayback()
-                } label: {
+                Slider(value: Binding(
+                    get: { model.currentVideoTime },
+                    set: { model.seek(to: $0) }
+                ), in: 0...duration)
+                .accessibilityLabel("Playback position")
+            HStack(spacing: 14) {
+                Button { model.togglePlayback() } label: {
                     Image(systemName: model.isPlaying ? "pause.fill" : "play.fill")
+                        .font(.system(size: 16, weight: .semibold))
+                        .frame(width: 34, height: 34)
+                        .background(Color.accentColor.opacity(0.14), in: Circle())
                 }
-                .buttonStyle(.borderless)
+                .buttonStyle(.plain)
+                .accessibilityLabel(model.isPlaying ? "Pause" : "Play")
+                .help("Play or pause recording (Space)")
+                .keyboardShortcut(.space, modifiers: [])
                 Button { model.moveToMeaningfulTimelineItem(-1) } label: {
                     Image(systemName: "backward.end.fill")
                 }
@@ -1448,7 +1597,34 @@ private struct UnifiedTimeline: View {
                 .keyboardShortcut(.rightArrow, modifiers: [.command, .option])
                 Text(formatTime(model.currentVideoTime))
                     .font(.system(.caption, design: .monospaced, weight: .semibold))
-                    .frame(width: 60, alignment: .leading)
+                Text("/ " + formatTime(duration))
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                Spacer()
+                Picker("Playback speed", selection: Binding(
+                    get: { model.playbackRate }, set: { model.setPlaybackRate($0) }
+                )) {
+                    ForEach(playbackRates, id: \.self) { rate in Text(formatPlaybackRate(rate)).tag(rate) }
+                }
+                .labelsHidden()
+                .pickerStyle(.menu)
+                .fixedSize()
+            }
+            HStack {
+                Button {
+                    withAnimation(.snappy) { showsEvidence.toggle() }
+                } label: {
+                    Label("Event timeline", systemImage: showsEvidence ? "chevron.down" : "chevron.right")
+                        .font(.caption.weight(.medium))
+                }
+                .buttonStyle(.plain)
+                Spacer()
+                Text("\(model.timelineItems.count) events")
+                    .font(.caption).foregroundStyle(.tertiary)
+            }
+            .padding(.top, 4)
+            if showsEvidence {
+            HStack(spacing: 10) {
                 Spacer()
                 Button { panViewport(-1) } label: {
                     Image(systemName: "chevron.left")
@@ -1474,7 +1650,8 @@ private struct UnifiedTimeline: View {
                 Image(systemName: "minus.magnifyingglass")
                     .foregroundStyle(.secondary)
                 Slider(value: $zoom, in: 1...12)
-                    .frame(width: 110)
+                    .frame(width: 80)
+                    .accessibilityLabel("Timeline zoom")
                     .help("Timeline zoom")
                 Text(zoom == 1 ? "Fit" : String(format: "%.1f×", zoom))
                     .font(.caption.monospacedDigit())
@@ -1489,24 +1666,6 @@ private struct UnifiedTimeline: View {
                 .buttonStyle(.borderless)
                 .disabled(zoom == 1)
                 .help("Fit entire recording")
-                Text(formatTime(duration))
-                    .font(.system(.caption, design: .monospaced))
-                    .foregroundStyle(.secondary)
-                Picker(
-                    "Playback speed",
-                    selection: Binding(
-                        get: { model.playbackRate },
-                        set: { model.setPlaybackRate($0) }
-                    )
-                ) {
-                    ForEach(playbackRates, id: \.self) { rate in
-                        Text(formatPlaybackRate(rate)).tag(rate)
-                    }
-                }
-                .labelsHidden()
-                .pickerStyle(.menu)
-                .fixedSize()
-                .help("Playback speed")
             }
             TimelineRuler(
                 range: visibleRange,
@@ -1526,8 +1685,9 @@ private struct UnifiedTimeline: View {
                     )
                 }
             }
+            }
         }
-        .padding(10)
+        .padding(12)
         .background(.quaternary.opacity(0.22), in: RoundedRectangle(cornerRadius: 10))
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Unified recording timeline")
@@ -1833,8 +1993,9 @@ private struct ReviewInspector: View {
     @Binding var kind: RecordingAnnotationKind
     @Binding var attachEvidence: Bool
     let close: () -> Void
-    @State private var evidenceMode = InspectorEvidenceMode.changes
+    @State private var evidenceMode = InspectorEvidenceMode.tree
     @State private var showsEvidenceDetails = false
+    @State private var section = "Elements"
     @State private var quickNoteText = ""
 
     private enum InspectorEvidenceMode: String, CaseIterable, Identifiable {
@@ -1855,67 +2016,91 @@ private struct ReviewInspector: View {
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
 
+            Picker("Inspector section", selection: $section) {
+                if model.recording != nil { Text("Elements").tag("Elements") }
+                Text("Activity").tag("Activity")
+                Text("Notes").tag("Notes")
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(12)
             Divider()
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    HStack {
-                        TextField("Note at playhead…", text: $quickNoteText)
-                            .textFieldStyle(.roundedBorder)
-                            .onSubmit(addQuickNote)
-                        Button("Add", action: addQuickNote)
-                            .buttonStyle(.borderedProminent)
-                            .disabled(quickNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    if section == "Notes" {
+                        HStack {
+                            TextField("Note at playhead…", text: $quickNoteText)
+                                .textFieldStyle(.roundedBorder)
+                                .onSubmit(addQuickNote)
+                            Button("Add", action: addQuickNote)
+                                .buttonStyle(.borderedProminent)
+                                .disabled(quickNoteText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                        }
+
+                        annotationSection
                     }
-
-                    if let item = model.selectedTimelineItem {
-                        SelectedTimelineContext(item: item, model: model)
+                    if section == "Activity" {
+                        if let item = model.selectedTimelineItem {
+                            SelectedTimelineContext(item: item, model: model)
+                        } else {
+                            Text("Select an event in the timeline to inspect what happened.")
+                                .font(.callout).foregroundStyle(.secondary)
+                        }
+                        if let event = model.selectedWebEvent { WebEventDetail(event: event) }
                     }
-
-                    if let event = model.selectedWebEvent {
-                        WebEventDetail(event: event)
-                    }
-
-                    annotationSection
-
-                    if let recording = model.recording, let step = model.selectedStep {
-                        Divider()
-                        EvidenceFrameHeader(recording: recording, step: step, model: model)
-                            .padding(.horizontal, -12)
-                        DisclosureGroup("Accessibility evidence", isExpanded: $showsEvidenceDetails) {
+                    if section == "Elements" {
+                        if let node = model.selectedNode {
+                            HStack {
+                                Label("Pinned element", systemImage: "pin.fill")
+                                    .font(.caption).foregroundStyle(.secondary)
+                                Spacer()
+                                Button("Clear") { model.selectedNodeID = nil }.buttonStyle(.borderless)
+                            }
+                            AccessibilityNodeDetail(node: node)
+                                .padding(12)
+                                .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+                        } else {
                             VStack(alignment: .leading, spacing: 8) {
-                                Picker("Evidence view", selection: $evidenceMode) {
-                                    ForEach(InspectorEvidenceMode.allCases) { value in
-                                        Text(value.rawValue).tag(value)
+                                Image(systemName: "viewfinder").font(.title2).foregroundStyle(Color.accentColor)
+                                Text("Explore the recording").font(.headline)
+                                Text("Hover over the video to reveal an element. Click to keep its details here.")
+                                    .font(.callout).foregroundStyle(.secondary)
+                            }.padding(.vertical, 12)
+                        }
+                        if let recording = model.recording, let step = model.selectedStep {
+                            Divider()
+                            EvidenceFrameHeader(recording: recording, step: step, model: model)
+                                .padding(.horizontal, -12)
+                            DisclosureGroup("Accessibility evidence", isExpanded: $showsEvidenceDetails) {
+                                VStack(alignment: .leading, spacing: 8) {
+                                    Picker("Evidence view", selection: $evidenceMode) {
+                                        ForEach(InspectorEvidenceMode.allCases) { value in
+                                            Text(value.rawValue).tag(value)
+                                        }
+                                    }
+                                    .pickerStyle(.segmented)
+                                    .labelsHidden()
+
+                                    switch evidenceMode {
+                                    case .changes:
+                                        AccessibilityChangesView(
+                                            step: step,
+                                            previousStep: model.previousStep,
+                                            selectedNodeID: $model.selectedNodeID
+                                        )
+                                        .frame(minHeight: 170, maxHeight: 300)
+                                    case .tree:
+                                        AccessibilityTreeView(
+                                            step: step,
+                                            selectedNodeID: $model.selectedNodeID
+                                        )
+                                        .frame(minHeight: 220, maxHeight: 360)
                                     }
                                 }
-                                .pickerStyle(.segmented)
-                                .labelsHidden()
-
-                                switch evidenceMode {
-                                case .changes:
-                                    AccessibilityChangesView(
-                                        step: step,
-                                        previousStep: model.previousStep,
-                                        selectedNodeID: $model.selectedNodeID
-                                    )
-                                    .frame(minHeight: 170, maxHeight: 300)
-                                case .tree:
-                                    AccessibilityTreeView(
-                                        step: step,
-                                        selectedNodeID: $model.selectedNodeID
-                                    )
-                                    .frame(minHeight: 220, maxHeight: 360)
-                                }
+                                .padding(.top, 8)
                             }
-                            .padding(.top, 8)
                         }
-                    }
-
-                    if let node = model.selectedNode {
-                        AccessibilityNodeDetail(node: node)
-                            .padding(10)
-                            .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
                     }
 
                     if let error = model.errorMessage {
@@ -1926,6 +2111,16 @@ private struct ReviewInspector: View {
                 }
                 .padding(12)
             }
+        }
+        .onAppear {
+            if model.selectedAnnotationID != nil { section = "Notes" }
+            else if model.selectedNodeID != nil { section = "Elements" }
+            else if model.selectedTimelineItemID != nil || model.webRecording != nil { section = "Activity" }
+        }
+        .onChange(of: model.selectedNodeID) { _, id in if id != nil { section = "Elements" } }
+        .onChange(of: model.selectedAnnotationID) { _, id in if id != nil { section = "Notes" } }
+        .onChange(of: model.selectedTimelineItemID) { _, id in
+            if id != nil { section = model.selectedAnnotationID == nil ? "Activity" : "Notes" }
         }
     }
 
@@ -1955,7 +2150,7 @@ private struct ReviewInspector: View {
             }
             if model.annotations.isEmpty {
                 Text(model.webRecording == nil
-                     ? "Click or draw on the video to add a spatial note."
+                     ? "Choose Comment or Pen above the video to add a spatial note."
                      : "Add a note at the current web replay time.")
                     .font(.caption)
                     .foregroundStyle(.secondary)

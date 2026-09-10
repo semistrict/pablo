@@ -81,13 +81,47 @@ Feature: Review recordings in one synchronized evidence workspace
       | compact | hidden    |
 
   @signed-app @manual
-  Scenario: Pen is the default direct-drawing tool
-    Given a recording has just opened
-    Then the explicit `Review`, `Pen`, and `Comment` video tools are visible
-    And `Pen` is selected by default
-    When the tester presses and drags directly on the video without choosing another tool
-    Then a freehand trace begins at mouse-down without requiring a separate Trace button
+  Scenario: Inspect is the default video interaction
+    Given a native recording has just opened
+    Then Inspect is selected above the video
+    And playback controls occupy a dedicated bar outside the video
+    When the tester hovers over a recorded element
+    Then its bounds and a compact accessibility summary appear
+    And the summary identifies the application and age of the observation
+    When the tester clicks the element
+    Then playback pauses at the current time and its details are pinned in the inspector
+    And no annotation or comment composer is created
+    When the tester uses Play, Pause, or the playback scrubber with any video tool selected
+    Then the requested playback operation occurs without creating markup
+
+  @signed-app @manual
+  Scenario: Tool buttons respond across their entire visible area
+    Given a recording is open with a recorded window focused
+    When the tester clicks the padding or text of the Notes, Pen, or Comment segment
+    Then the clicked tool becomes selected and its guidance appears
+    And the focused video does not intercept the toolbar click
+
+  @automated
+  # Expected: videoInspectionPicksSmallestElementAndMapsFocusedNegativeOrigin
+  # Expected: videoInspectionRespectsOcclusionAndMissingGeometry, videoInspectionDisambiguatesIdenticalWindowBounds
+  # Expected: videoInspectionRejectsCoveredWindowsWithinSameAppAndBreaksTiesByDepth
+  # Expected: videoInspectionUsesLastObservedStateAndActiveVideoOnly
+  Scenario: Video inspection identifies only recorded elements at the playhead
+    Given overlapping windows and independently sampled application accessibility trees
+    When a video point is inspected
+    Then the smallest enclosing element from the front recorded window is returned
+    And windows with identical bounds are distinguished by their recorded titles or left uninspected when ambiguous
+    And hidden windows, invalid bounds, unavailable video tracks, and future snapshots yield no element
+    And focus cropping and negative display origins preserve the same target
+
+  @signed-app @manual
+  Scenario: Drawing requires choosing the Pen tool
+    Given a recording is open with Inspect selected
+    When the tester selects Pen and drags over the video
+    Then a freehand trace begins at mouse-down
     And releasing the pointer opens an adjacent comment composer
+    When the tester presses Escape
+    Then the draft and composer disappear without writing an annotation
 
   @signed-app @manual
   Scenario: A click creates an exact point annotation with an adjacent composer
@@ -114,9 +148,9 @@ Feature: Review recordings in one synchronized evidence workspace
     Then a stable `NOTE-###` annotation is selected and represented in the annotation lane
 
   @signed-app @manual
-  Scenario: Review selects existing traces without creating markup
+  Scenario: Notes selects existing traces without creating markup
     Given a recording contains a visible trace at the current playhead time
-    And the tester selects the `Review` tool
+    And the tester selects the `Notes` tool
     When the tester clicks the visible trace
     Then its stable `NOTE-###` annotation is selected in the contextual inspector
     And no draft trace or comment composer appears
@@ -147,12 +181,13 @@ Feature: Review recordings in one synchronized evidence workspace
     And selecting the annotation seeks the shared playhead to the anchor before highlighting the node
 
   @signed-app @manual
-  Scenario: The contextual inspector adapts to narrow review windows
-    Given a review window shows the unified contextual inspector beside the video
-    When the tester narrows the window below the full-inspector layout threshold
-    Then the inspector collapses without obscuring the video or timeline
-    And a clear control reveals the same selected context on demand
-    And collapsing or expanding the inspector preserves playback time and selection
+  Scenario: Inspector and library panels never cover playback controls
+    Given a recording is open
+    When the tester toggles the inspector or recording library
+    Then the panels occupy their own columns and the video resizes to fit
+    And the video and playback controls remain unobstructed
+    And playback time and selection are preserved
+    And Elements, Activity, and Notes have separate inspector sections
 
   @automated
   # Expected: ReviewWindowPlacementTests.newRecordingWindowsCascadeWithinVisibleScreen

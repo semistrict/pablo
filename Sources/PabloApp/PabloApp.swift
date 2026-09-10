@@ -127,6 +127,7 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
             window.setFrameAutosaveName("PabloReviewWindow")
         }
         window.isReleasedWhenClosed = false
+        window.acceptsMouseMovedEvents = true
         window.delegate = self
         positionNewReviewWindow(window)
         let controller = NSWindowController(window: window)
