@@ -337,6 +337,7 @@ public enum ReplayTimelineLane: String, CaseIterable, Codable, Sendable {
     case input
     case automation
     case accessibility
+    case document
     case annotation
 }
 
@@ -353,6 +354,7 @@ public enum ReplayTimelineReference: Hashable, Codable, Sendable {
     case input(Int)
     case automation(UUID)
     case accessibility(Int)
+    case rrweb(Int)
     case annotation(UUID)
 }
 
@@ -373,6 +375,11 @@ public struct ReplayTimelineItem: Identifiable, Codable, Sendable {
 public struct ReplayTimelineCluster: Identifiable, Sendable {
     public let lane: ReplayTimelineLane
     public let items: [ReplayTimelineItem]
+
+    public init(lane: ReplayTimelineLane, items: [ReplayTimelineItem]) {
+        self.lane = lane
+        self.items = items
+    }
 
     public var id: String { "\(lane.rawValue):\(items.map(\.id).joined(separator: ","))" }
     public var timestampNs: UInt64 { items.map(\.timestampNs).min() ?? 0 }

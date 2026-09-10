@@ -314,6 +314,17 @@ public enum RecordingAnnotationStore {
         for applicationID in applicationIDs where !validApplicationIDs.contains(applicationID) {
             throw RecordingError.usage("Application \(applicationID) does not exist in this recording.")
         }
+        if manifest.dataSource == .rrweb {
+            guard draft.trace == nil else {
+                throw RecordingError.usage("Safari web annotations cannot contain spatial video traces.")
+            }
+            guard draft.accessibilityReferences.isEmpty, draft.accessibilityNodeIDs.isEmpty else {
+                throw RecordingError.usage(
+                    "Safari web annotations cannot reference native accessibility evidence."
+                )
+            }
+            return
+        }
         let records = try accessibilityRecords(in: packageURL, manifest: manifest)
         let frameCount = records.count
         for reference in normalizedReferences(draft.accessibilityReferences) {

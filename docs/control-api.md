@@ -157,11 +157,23 @@ curl -fsS --unix-socket "$PABLO_SOCKET" \
 ```
 
 Use `/rrweb.pause`, `/rrweb.resume`, `/rrweb.stop`, and `/rrweb.status` without
-a body. `/rrweb.recordings` discovers saved `.pabloweb` packages.
+a body. `/rrweb.recordings` discovers saved `.pablo` packages whose declared
+event source is rrweb.
 `/rrweb.inspect` accepts exactly one of `recordingPath` or `recordingID`, plus
 optional `includeEvents` and `eventLimit` fields. See
 [Safari web recordings](rrweb.md) for the complete UI, storage, playback,
 recovery, and privacy behavior.
+
+Open any supported evidence source in the same normal review player:
+
+```sh
+curl -fsS --unix-socket "$PABLO_SOCKET" \
+  -d '{"recordingPath":"/absolute/path/Recording.pablo"}' \
+  http://localhost/recording.open
+```
+
+Only schema-v3 `.pablo` packages are accepted. There is no alternate-extension
+or older-manifest compatibility path.
 
 ## Responses and errors
 

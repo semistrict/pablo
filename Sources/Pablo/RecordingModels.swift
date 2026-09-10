@@ -5,6 +5,11 @@ public enum RecordingScopeKind: String, Codable, Equatable, Sendable {
     case display
 }
 
+enum RecordingDataSourceKind: String, Codable {
+    case native
+    case rrweb
+}
+
 struct RecordingManifest: Codable {
     struct Scope: Codable, Equatable {
         let kind: RecordingScopeKind
@@ -21,7 +26,20 @@ struct RecordingManifest: Codable {
         var firstFrameTimestampNs: UInt64?
     }
 
+    struct Web: Codable {
+        let recordingID: UUID
+        let tab: PabloSafariTab
+        let startedAt: Date
+        var endedAt: Date?
+        var state: PabloRRWebRecordingState
+        var eventCount: Int
+        let inputsMasked: Bool
+        let rrwebVersion: String
+        var error: String?
+    }
+
     let schemaVersion: Int
+    let dataSource: RecordingDataSourceKind
     let startedAt: String
     var endedAt: String?
     var durationNs: UInt64?
@@ -30,6 +48,8 @@ struct RecordingManifest: Codable {
     var applications: [RecordingApplication]
     var capture: Capture
     let files: [String: String]
+    var web: Web?
+
 }
 
 extension RecordingManifest {
@@ -37,14 +57,22 @@ extension RecordingManifest {
 
     static func load(from packageURL: URL) throws -> RecordingManifest {
         let url = packageURL.appendingPathComponent("manifest.json")
-        let manifest = try JSONDecoder().decode(Self.self, from: Data(contentsOf: url))
+        let decoder = JSONDecoder()
+        decoder.dateDecodingStrategy = .iso8601
+        let manifest = try decoder.decode(Self.self, from: Data(contentsOf: url))
         guard manifest.schemaVersion == currentSchemaVersion else {
             throw RecordingError.capture(
                 "Unsupported recording format version \(manifest.schemaVersion); Pablo requires version \(currentSchemaVersion)."
             )
         }
-        for key in ["video", "events", "workspace", "accessibility"] {
+        let requiredFiles = manifest.dataSource == .rrweb
+            ? ["rrweb"]
+            : ["video", "events", "workspace", "accessibility"]
+        for key in requiredFiles {
             _ = try manifest.fileURL(for: key, in: packageURL)
+        }
+        if manifest.dataSource == .rrweb, manifest.web == nil {
+            throw RecordingError.capture("The Safari recording is missing its web metadata.")
         }
         return manifest
     }

@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Pablo Safari",
-  "version": "0.1.14",
+  "version": "0.1.16",
   "description": "Inspect and control only the Safari tab explicitly unlocked from the toolbar.",
   "icons": {
     "48": "icons/icon-48.png",
@@ -17,7 +17,10 @@
     "scripting"
   ],
   "background": {
-    "service_worker": "background.js"
+    "scripts": [
+      "native-message.js",
+      "background.js"
+    ]
   },
   "action": {
     "default_title": "Unlock this tab for Pablo",

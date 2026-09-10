@@ -199,8 +199,13 @@ skipping, and full-screen playback.
 
 Input values are always masked, but DOM text, titles, URLs, and rendered page
 content can remain sensitive. Canvas pixels, cross-origin iframe contents, and
-remote playback assets are absent. Treat a `.pabloweb` package as sensitive and
-preserve it as a directory package.
+remote playback assets are absent. Treat every `.pablo` package as sensitive and
+preserve it as a directory package, whether its evidence source is native capture
+or Safari rrweb events.
+
+Use `/recording.open` with an absolute `.pablo` path to open either evidence
+source in Pablo's one review player. Do not attempt older extensions or manifest
+shapes; Pablo has no compatibility decoder.
 
 ## Mark up findings
 

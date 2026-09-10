@@ -20,6 +20,7 @@ public enum PabloControlMethod: String, Codable, Sendable {
     case rrwebStatus = "rrweb.status"
     case rrwebRecordings = "rrweb.recordings"
     case rrwebInspect = "rrweb.inspect"
+    case openRecording = "recording.open"
 
     public var approvalDescription: String {
         switch self {
@@ -41,6 +42,7 @@ public enum PabloControlMethod: String, Codable, Sendable {
         case .rrwebStatus: return "read the current rrweb recording status"
         case .rrwebRecordings: return "list saved rrweb recordings"
         case .rrwebInspect: return "inspect a saved rrweb recording"
+        case .openRecording: return "open a saved recording in Pablo's player"
         }
     }
 }
@@ -426,6 +428,14 @@ public struct PabloControlAnnotationRequest: Codable, Sendable {
     }
 }
 
+public struct PabloRecordingOpenRequest: Codable, Sendable {
+    public let recordingPath: String
+
+    public init(recordingPath: String) {
+        self.recordingPath = recordingPath
+    }
+}
+
 public struct PabloRRWebControlRequest: Codable, Sendable {
     public let tabID: Int64?
     public let recordingPath: String?
@@ -497,6 +507,7 @@ public struct PabloControlRequest: Sendable {
     public let liveActionRequest: PabloLiveActionRequest?
     public let safariDOMRequest: PabloSafariDOMRequest?
     public let rrwebRequest: PabloRRWebControlRequest?
+    public let recordingOpenRequest: PabloRecordingOpenRequest?
 
     public init(
         method: PabloControlMethod,
@@ -505,7 +516,8 @@ public struct PabloControlRequest: Sendable {
         liveInspectionRequest: PabloLiveInspectionRequest? = nil,
         liveActionRequest: PabloLiveActionRequest? = nil,
         safariDOMRequest: PabloSafariDOMRequest? = nil,
-        rrwebRequest: PabloRRWebControlRequest? = nil
+        rrwebRequest: PabloRRWebControlRequest? = nil,
+        recordingOpenRequest: PabloRecordingOpenRequest? = nil
     ) {
         id = UUID()
         self.method = method
@@ -515,6 +527,7 @@ public struct PabloControlRequest: Sendable {
         self.liveActionRequest = liveActionRequest
         self.safariDOMRequest = safariDOMRequest
         self.rrwebRequest = rrwebRequest
+        self.recordingOpenRequest = recordingOpenRequest
     }
 
 }
@@ -1075,6 +1088,11 @@ private func controlRequestBody(_ request: PabloControlRequest) throws -> Data {
         }
         try value.validate(for: request.method)
         return try PabloControlJSONCodec.encode(value)
+    case .openRecording:
+        guard let value = request.recordingOpenRequest else {
+            throw RecordingError.usage("The recording.open command did not include a path.")
+        }
+        return try PabloControlJSONCodec.encode(value)
     case .pauseRecording, .resumeRecording, .stopRecording, .status,
          .safariTabs, .rrwebPause, .rrwebResume, .rrwebStop, .rrwebStatus, .rrwebRecordings:
         return Data()
@@ -1114,6 +1132,14 @@ private func decodeControlRequest(method: PabloControlMethod, body: Data) throws
         return PabloControlRequest(
             method: method,
             rrwebRequest: value
+        )
+    case .openRecording:
+        return PabloControlRequest(
+            method: method,
+            recordingOpenRequest: try PabloControlJSONCodec.decode(
+                PabloRecordingOpenRequest.self,
+                from: body
+            )
         )
     case .pauseRecording, .resumeRecording, .stopRecording, .status,
          .safariTabs, .rrwebPause, .rrwebResume, .rrwebStop, .rrwebStatus, .rrwebRecordings:

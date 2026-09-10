@@ -4,9 +4,12 @@ const RRWEB_MESSAGE = "pablo-rrweb";
 const activeRecordings = new Map();
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
+let nativePort;
+let nativeReconnectTimer;
 
 browser.action.onClicked.addListener(async (tab) => {
   if (!tab.id) return;
+  connectNativePort();
   try {
     await browser.scripting.executeScript({
       target: { tabId: tab.id },
@@ -46,17 +49,39 @@ function reportInterruptedRecording(tabID, error) {
 }
 
 function connectNativePort() {
-  const port = browser.runtime.connectNative(NATIVE_APPLICATION);
-  port.onMessage.addListener(async (message) => {
-    if (message?.name !== COMMAND_MESSAGE || typeof message.command !== "string") return;
-    const response = await handleSerializedCommand(message.command);
-    try {
-      await browser.runtime.sendNativeMessage(NATIVE_APPLICATION, response);
-    } catch (_) {
-      // The containing app times out and reports a closed bridge if delivery fails.
-    }
-  });
-  port.onDisconnect.addListener(() => setTimeout(connectNativePort, 500));
+  if (nativePort) return;
+  if (nativeReconnectTimer) {
+    clearTimeout(nativeReconnectTimer);
+    nativeReconnectTimer = undefined;
+  }
+  try {
+    const port = browser.runtime.connectNative(NATIVE_APPLICATION);
+    nativePort = port;
+    port.onMessage.addListener(async (message) => {
+      const command = globalThis.pabloNativeCommandMessage(message, COMMAND_MESSAGE);
+      if (!command) return;
+      const response = await handleSerializedCommand(command);
+      try {
+        await browser.runtime.sendNativeMessage(NATIVE_APPLICATION, response);
+      } catch (_) {
+        // The containing app times out and reports a closed bridge if delivery fails.
+      }
+    });
+    port.onDisconnect.addListener(() => {
+      if (nativePort === port) nativePort = undefined;
+      scheduleNativeReconnect();
+    });
+  } catch (_) {
+    scheduleNativeReconnect();
+  }
+}
+
+function scheduleNativeReconnect() {
+  if (nativeReconnectTimer) return;
+  nativeReconnectTimer = setTimeout(() => {
+    nativeReconnectTimer = undefined;
+    connectNativePort();
+  }, 1000);
 }
 
 connectNativePort();

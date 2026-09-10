@@ -26,7 +26,7 @@ The `.feature` files in this directory describe intended product behavior in a G
 | --- | --- |
 | `AutomationActionTraceTests` | `recording_lifecycle.feature` |
 | `SafariDOMProtocolTests`, `AppBundlePackagingTests`, `ControlProtocolTests` | `safari_extension.feature` |
-| `RRWebRecordingTests`, `RRWebSpoolStoreTests`, `RRWebReplayModelTests`, `SafariDOMProtocolTests`, `ControlProtocolTests`, `AppBundlePackagingTests` | `rrweb.feature` |
+| `RRWebRecordingTests`, `RRWebSpoolStoreTests`, `UnifiedReplayModelTests`, `SafariDOMProtocolTests`, `ControlProtocolTests`, `AppBundlePackagingTests` | `rrweb.feature` |
 | `AXTreeDifferTests` | `accessibility_replay.feature` |
 | `AppBundlePackagingTests` | `packaging.feature` |
 | `CLITests` | `cli.feature`, `annotations.feature`, and `live_actions.feature` |

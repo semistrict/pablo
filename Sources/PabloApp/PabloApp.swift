@@ -65,6 +65,7 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
     private var reviewWindowControllers: [NSWindowController] = []
     private var reviewWindowRecency: [ObjectIdentifier] = []
     private var pendingRecordingURLs: [URL] = []
+    private var notificationObservers: [NSObjectProtocol] = []
     private var didFinishLaunching = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -78,6 +79,14 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         RecorderModel.shared.recordingDidFinish = { [weak self] recordingURL in
             self?.showReviewWindow(preferredURL: recordingURL)
         }
+        notificationObservers.append(NotificationCenter.default.addObserver(
+            forName: .pabloOpenRecordingRequested,
+            object: nil,
+            queue: .main
+        ) { [weak self] note in
+            guard let url = note.object as? URL else { return }
+            Task { @MainActor in self?.showReviewWindow(preferredURL: url) }
+        })
         showRecorderWindow()
         let recordingURLs = pendingRecordingURLs
         pendingRecordingURLs.removeAll()
@@ -88,10 +97,7 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
 
     func application(_ application: NSApplication, open urls: [URL]) {
         let recordingURLs = urls
-            .filter {
-                $0.pathExtension.caseInsensitiveCompare("pablo") == .orderedSame ||
-                    $0.pathExtension.caseInsensitiveCompare(PabloRRWebRecordingStorage.packageExtension) == .orderedSame
-            }
+            .filter { $0.pathExtension.caseInsensitiveCompare("pablo") == .orderedSame }
         guard !recordingURLs.isEmpty else { return }
         if didFinishLaunching {
             for recordingURL in recordingURLs {
@@ -103,12 +109,6 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
     }
 
     func showReviewWindow(preferredURL: URL? = nil) {
-        if preferredURL?.pathExtension.caseInsensitiveCompare(
-            PabloRRWebRecordingStorage.packageExtension
-        ) == .orderedSame {
-            showRRWebReviewWindow(preferredURL: preferredURL)
-            return
-        }
         let replayModel = ReplayModel()
         _ = replayModel.loadLatest(preferredURL: preferredURL)
         let content = NSHostingController(rootView: ReplayView(
@@ -116,7 +116,7 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
             openRecordings: { [weak self] in self?.chooseRecordingsAndOpen() }
         ))
         let window = PabloReviewWindow(contentViewController: content)
-        let recordingURL = replayModel.recording?.packageURL
+        let recordingURL = replayModel.packageURL
         window.title = recordingURL?.deletingPathExtension().lastPathComponent ?? "Pablo"
         window.representedURL = recordingURL
         window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
@@ -126,33 +126,6 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         if reviewWindowControllers.isEmpty {
             window.setFrameAutosaveName("PabloReviewWindow")
         }
-        window.isReleasedWhenClosed = false
-        window.delegate = self
-        positionNewReviewWindow(window)
-        let controller = NSWindowController(window: window)
-        reviewWindowControllers.append(controller)
-        noteReviewWindowActivated(window)
-        controller.showWindow(nil)
-        window.makeKeyAndOrderFront(nil)
-        NSApplication.shared.setWindowsNeedUpdate(true)
-        NSApplication.shared.activate(ignoringOtherApps: true)
-    }
-
-    private func showRRWebReviewWindow(preferredURL: URL?) {
-        let replayModel = RRWebReplayModel()
-        replayModel.load(preferredURL: preferredURL)
-        let content = NSHostingController(rootView: RRWebReplayView(
-            model: replayModel,
-            recorderModel: RecorderModel.shared,
-            openRecordings: { [weak self] in self?.chooseRecordingsAndOpen() }
-        ))
-        let window = PabloReviewWindow(contentViewController: content)
-        window.title = preferredURL?.deletingPathExtension().lastPathComponent ?? "Safari Web Recordings"
-        window.representedURL = preferredURL
-        window.styleMask = [.titled, .closable, .miniaturizable, .resizable]
-        window.minSize = NSSize(width: 900, height: 600)
-        window.setContentSize(NSSize(width: 1_180, height: 760))
-        window.isExcludedFromWindowsMenu = false
         window.isReleasedWhenClosed = false
         window.delegate = self
         positionNewReviewWindow(window)
@@ -263,7 +236,6 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         panel.directoryURL = ReplayModel.recordingsDirectory
         panel.allowedContentTypes = [
             UTType(exportedAs: "com.ramon.pablo.recording", conformingTo: .package),
-            UTType(exportedAs: "com.ramon.pablo.web-recording", conformingTo: .package),
         ]
         panel.canChooseFiles = true
         panel.canChooseDirectories = false
@@ -272,10 +244,7 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
             guard response == .OK else { return }
             for recordingURL in panel.urls {
                 let pathExtension = recordingURL.pathExtension
-                guard pathExtension.caseInsensitiveCompare("pablo") == .orderedSame ||
-                        pathExtension.caseInsensitiveCompare(
-                            PabloRRWebRecordingStorage.packageExtension
-                        ) == .orderedSame else { continue }
+                guard pathExtension.caseInsensitiveCompare("pablo") == .orderedSame else { continue }
                 self?.showReviewWindow(preferredURL: recordingURL)
             }
         }
@@ -939,6 +908,29 @@ final class RecorderModel: ObservableObject {
                 await stopRecording()
             case .status:
                 updateElapsedTime()
+            case .openRecording:
+                guard let openRequest = request.recordingOpenRequest else {
+                    throw RecordingError.usage("recording.open requires recordingPath.")
+                }
+                let recordingURL = URL(fileURLWithPath: openRequest.recordingPath).standardizedFileURL
+                guard recordingURL.pathExtension.caseInsensitiveCompare("pablo") == .orderedSame else {
+                    throw RecordingError.usage("recording.open accepts only a .pablo package.")
+                }
+                let source: String
+                if (try? PabloRRWebRecordingStorage.load(recordingURL)) != nil {
+                    source = "rrweb"
+                } else {
+                    _ = try ReplayRecording.load(from: recordingURL)
+                    source = "native"
+                }
+                NotificationCenter.default.post(
+                    name: .pabloOpenRecordingRequested,
+                    object: recordingURL
+                )
+                output = .object([
+                    "recordingPath": .string(recordingURL.path),
+                    "dataSource": .string(source),
+                ])
             case .addAnnotation:
                 guard let annotationRequest = request.annotationRequest,
                       let draft = annotationRequest.draft else {
@@ -1386,6 +1378,8 @@ final class RecorderModel: ObservableObject {
             return "This app wants to \(request.method.approvalDescription)."
         case .rrwebStatus, .rrwebRecordings, .rrwebInspect:
             return "This app wants to \(request.method.approvalDescription)."
+        case .openRecording:
+            return "This app wants to open a saved recording and bring Pablo's player forward."
         default:
             break
         }
@@ -1860,6 +1854,9 @@ struct RecorderWindowView: View {
         curl -fsS --unix-socket "$PABLO_SOCKET" http://localhost/safari.tabs
         curl -fsS --unix-socket "$PABLO_SOCKET" -d '{"tabID":42}' http://localhost/rrweb.start
 
+        Open either native or Safari evidence in the same player:
+        curl -fsS --unix-socket "$PABLO_SOCKET" -d '{"recordingPath":"/absolute/path/Recording.pablo"}' http://localhost/recording.open
+
         Rules:
         - Only start a recording when I explicitly ask.
         - Never approve Pablo's consent dialog; leave approval to me.
@@ -1867,6 +1864,7 @@ struct RecorderWindowView: View {
         - Safari DOM access requires enabling Pablo Safari and clicking its toolbar button on the active tab. Use `/safari.dom`; the grant ends when that tab navigates.
         - Safari DOM commands run through the extension without bringing Safari to the foreground. Dump a fresh DOM-derived accessibility tree before using its `nodeID` as an action target.
         - Use `/safari.tabs` and `/rrweb.start`, `/rrweb.pause`, `/rrweb.resume`, `/rrweb.stop`, `/rrweb.status`, `/rrweb.recordings`, or `/rrweb.inspect` for masked Safari web recordings. The server generates recording IDs.
+        - All recordings are schema-v3 `.pablo` packages. `/recording.open` opens either native or rrweb evidence in the same player. There is no older-format fallback.
         - rrweb masks input values, but page text, titles, URLs, and other rendered content remain sensitive.
         - Foreground actions are locked by default. Prefer `perform` or a single left click on a node that exposes `AXPress`; these do not activate the target app.
         - `unlockForegroundActions: true` (CLI: `--unlock-foreground-actions`) allows focus-changing pointer, scroll, drag, typing, and key actions. This is NOT RECOMMENDED. Never use it unless I explicitly accept the focus change.

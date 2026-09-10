@@ -27,11 +27,19 @@ Feature: Record and replay an explicitly unlocked Safari tab
   # RRWebRecordingTests.rrwebPackageNamesRemainUnique
   Scenario: Web recording packages identify their tab and privacy policy
     Given an unlocked Safari tab has a title and URL
-    When Pablo creates a `.pabloweb` package
-    Then its filename contains a safe form of the tab title
+    When Pablo creates a `.pablo` package with an rrweb event source
+    Then its filename includes Safari and a safe form of the tab title
     And simultaneous names remain unique
     And its manifest identifies the tab, recording UUID, rrweb version, and start time
     And its manifest states that input values are masked
+
+  @automated
+  # RRWebRecordingTests.legacyWebFormatsAreRejected
+  Scenario: Pablo has one recording format and no compatibility decoder
+    Given a package uses an alternate extension or standalone legacy web manifest
+    When Pablo attempts to load it
+    Then loading fails closed
+    And only a schema-v3 `.pablo` manifest with an explicit data source is accepted
 
   @automated
   # RRWebSpoolStoreTests.rrwebSpoolOrdersBatches
@@ -40,6 +48,7 @@ Feature: Record and replay an explicitly unlocked Safari tab
   # RRWebSpoolStoreTests.rrwebSpoolLifecycle
   # RRWebRecordingTests.rrwebFinalizationPreservesEventOrder
   # RRWebRecordingTests.invalidRRWebBatchDoesNotReplaceEvents
+  # RRWebRecordingTests.invalidRRWebTimestampsPreserveEvidence
   # RRWebRecordingTests.rrwebDiscoveryIgnoresMalformedPackages
   Scenario: Streamed events finalize without corrupting evidence
     Given the native extension has persisted ordered event batches
@@ -47,6 +56,7 @@ Feature: Record and replay an explicitly unlocked Safari tab
     Then events are merged in batch and event order
     And the manifest records the final state, end time, count, and error
     And an invalid batch does not replace the previously valid event file
+    And out-of-range event timestamps fail without crashing or replacing saved evidence
     And discovery ignores malformed packages
 
   @automated
@@ -68,17 +78,35 @@ Feature: Record and replay an explicitly unlocked Safari tab
     When the tester starts, pauses, resumes, and stops its web recording
     Then the visible state and event count follow each transition
     And Safari never becomes frontmost
-    And a completed `.pabloweb` package opens in the review window
+    And the completed `.pablo` package opens in the normal review window
 
   @signed-app @manual
   Scenario: The review UI exposes full rrweb playback controls
-    Given a completed `.pabloweb` recording with replayable events
+    Given a completed `.pablo` recording with an rrweb event source and replayable events
     When it is opened in Pablo
-    Then the review window lists saved Safari web recordings
+    Then the normal recording browser lists native and Safari recordings together
     And it displays the tab title, URL, state, count, and masking disclosure
-    And the player supports play, pause, timeline scrubbing, elapsed time, speed selection, inactive-period skipping, and full screen
+    And the shared player supports play, pause, timeline scrubbing, elapsed time, speed selection, event selection, inspection, and annotations
     And playback starts paused
     And playback does not fetch original remote page assets
+
+  @automated
+  # RRWebPlaybackRendererTests.testPlayerReportsTimeAndStateThroughItsRealEventEnvelope
+  Scenario: The embedded renderer reports playback time and state
+    Given the official rrweb player is loaded with a local recording
+    When the player seeks, plays, and pauses
+    Then the shared transport receives numeric elapsed time and the matching playback state
+
+  @automated
+  # UnifiedReplayModelTests.unifiedRecordingBrowserSwitchesDataSources
+  # UnifiedReplayModelTests.sharedTransportDrivesRRWebRenderer
+  # UnifiedReplayModelTests.webRecordingsUseSharedAnnotations
+  # ControlProtocolTests.recordingOpenControlRoundTrip
+  Scenario: Native and rrweb evidence use one review model
+    Given native and rrweb `.pablo` packages exist
+    When either source is selected in the recording browser or opened through `/recording.open`
+    Then the same review model owns transport, time, speed, timeline selection, inspection, and annotations
+    And only the central evidence renderer changes with the manifest data source
 
   @signed-app @manual
   Scenario: Navigation interrupts capture without persistent access

@@ -1,9 +1,9 @@
 # Safari web recordings
 
 Pablo can record the DOM evolution of a Safari tab with rrweb while Safari
-remains in the background. This is separate from a `.pablo` video and
-accessibility recording. Safari web recordings use `.pabloweb` directory
-packages and play in Pablo's dedicated web-recording review window.
+remains in the background. Safari and native captures are both `.pablo`
+directory packages. The manifest selects the evidence source, and the normal
+review window presents both through one recording browser and player shell.
 
 ## Permission boundary
 
@@ -28,7 +28,7 @@ scroll state, viewport changes, and other standard rrweb events can be present.
 Each package contains:
 
 ```text
-Example Web Recording 2026-08-15 at 14.30.00.pabloweb/
+Safari Example Web Recording 2026-08-15 at 14.30.00.pablo/
 ├── manifest.json
 └── events.json
 ```
@@ -50,9 +50,11 @@ in the DOM, page URLs, document titles, or other visible page content.
 
 The recorder window and menu-bar panel both provide tab refresh, start, pause,
 resume, stop, live status, event count, and input-masking disclosure. The review
-window discovers `.pabloweb` packages and uses the official rrweb player for
-play/pause, timeline scrubbing, elapsed time, 0.5×–8× playback speed, inactive
-period skipping, and full-screen playback.
+window discovers all `.pablo` packages together. For an rrweb source, the
+official rrweb renderer sits behind the shared play/pause transport, timeline
+scrubbing, elapsed time, 0.5×–8× speed control, event lanes, selection,
+raw-event inspection, and time-anchored annotations used by the normal player.
+Source-specific rrweb controls are not presented as a second interface.
 
 Playback uses a non-persistent WebKit data store and a restrictive content
 security policy. It reads the saved package locally and does not fetch original

@@ -257,7 +257,7 @@
     "/rrweb.start": {
       "post": {
         "operationId": "startRRWebRecording",
-        "description": "Start masked rrweb event capture in one tab returned by safari.tabs. Pablo generates the recording identifier and writes a .pabloweb package; the caller supplies only the current tab ID.",
+        "description": "Start masked rrweb event capture in one tab returned by safari.tabs. Pablo generates the recording identifier and writes a .pablo package with an rrweb event source; the caller supplies only the current tab ID.",
         "requestBody": {
           "required": true,
           "content": {
@@ -354,6 +354,30 @@
             "application/json": {
               "schema": {
                 "$ref": "#/components/schemas/RRWebInspectRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "$ref": "#/components/responses/CallResponse"
+          },
+          "400": {
+            "$ref": "#/components/responses/BadRequest"
+          }
+        }
+      }
+    },
+    "/recording.open": {
+      "post": {
+        "operationId": "openRecording",
+        "description": "Open a schema-v3 .pablo package in the normal Pablo player. Native and rrweb event sources use the same review window and transport controls. Pablo has no fallback decoder for older or alternate package formats.",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordingOpenRequest"
               }
             }
           }
@@ -508,6 +532,19 @@
           "reference": {
             "type": "string",
             "pattern": "^NOTE-[0-9]{3,}$"
+          }
+        }
+      },
+      "RecordingOpenRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "recordingPath"
+        ],
+        "properties": {
+          "recordingPath": {
+            "type": "string",
+            "description": "Absolute path to a schema-v3 .pablo package."
           }
         }
       },
@@ -1019,7 +1056,7 @@
         "properties": {
           "recordingPath": {
             "type": "string",
-            "description": "Absolute path to a .pabloweb package."
+            "description": "Absolute path to a .pablo package whose event source is rrweb."
           },
           "recordingID": {
             "type": "string",

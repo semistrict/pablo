@@ -13,6 +13,7 @@ let testApplication = RecordingApplication(
 func testManifest(schemaVersion: Int = 3) -> RecordingManifest {
     RecordingManifest(
         schemaVersion: schemaVersion,
+        dataSource: .native,
         startedAt: "2026-08-11T16:20:09.844Z",
         endedAt: "2026-08-11T16:20:11.844Z",
         durationNs: 2_000_000_000,
@@ -36,7 +37,8 @@ func testManifest(schemaVersion: Int = 3) -> RecordingManifest {
             "events": "events.pb",
             "accessibility": "accessibility.pb",
             "workspace": "workspace.pb",
-        ]
+        ],
+        web: nil
     )
 }
 

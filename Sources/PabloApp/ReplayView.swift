@@ -7,11 +7,42 @@ import SwiftUI
 
 extension Notification.Name {
     static let pabloAnnotationsDidChange = Notification.Name("PabloAnnotationsDidChange")
+    static let pabloOpenRecordingRequested = Notification.Name("PabloOpenRecordingRequested")
+}
+
+@MainActor
+protocol RRWebPlaybackControlling: AnyObject {
+    func play()
+    func pause()
+    func seek(to seconds: TimeInterval)
+    func setPlaybackRate(_ rate: Float)
+}
+
+enum ReplaySourceKind: String, Sendable {
+    case native = "Screen recording"
+    case web = "Safari web recording"
+}
+
+struct ReplayLibraryItem: Identifiable, Hashable, Sendable {
+    let packageURL: URL
+    let kind: ReplaySourceKind
+    let title: String
+    let detail: String
+    let modifiedAt: Date
+
+    var id: String { packageURL.standardizedFileURL.path }
+}
+
+private enum ReplaySource {
+    case native(ReplayRecording)
+    case web(PabloRRWebRecording, PabloRRWebReplayData)
 }
 
 @MainActor
 final class ReplayModel: ObservableObject {
-    @Published private(set) var recording: ReplayRecording?
+    @Published private var source: ReplaySource?
+    @Published private(set) var libraryItems: [ReplayLibraryItem] = []
+    @Published private(set) var selectedLibraryItemID: String?
     @Published private(set) var selectedStepID: Int?
     @Published var selectedNodeID: String?
     @Published var selectedAnnotationID: UUID?
@@ -24,6 +55,40 @@ final class ReplayModel: ObservableObject {
     @Published var draftTraceSamples: [RecordingAnnotationTraceSample] = []
     @Published private(set) var errorMessage: String?
     let player = AVPlayer()
+    private weak var webPlaybackController: RRWebPlaybackControlling?
+
+    var recording: ReplayRecording? {
+        guard case .native(let recording) = source else { return nil }
+        return recording
+    }
+
+    var webRecording: PabloRRWebRecording? {
+        guard case .web(let recording, _) = source else { return nil }
+        return recording
+    }
+
+    var webReplayData: PabloRRWebReplayData? {
+        guard case .web(_, let replay) = source else { return nil }
+        return replay
+    }
+
+    var packageURL: URL? { recording?.packageURL ?? webRecording?.packageURL }
+    var sourceKind: ReplaySourceKind? { recording == nil ? (webRecording == nil ? nil : .web) : .native }
+    var duration: TimeInterval {
+        if let recording {
+            return max(0.001, TimeInterval(recording.durationNs ?? 0) / 1_000_000_000)
+        }
+        return webReplayData?.duration ?? 0.001
+    }
+    var availableTimelineLanes: [ReplayTimelineLane] {
+        let populated = Set(timelineItems.map(\.lane))
+        if recording != nil { return ReplayTimelineLane.allCases.filter { $0 != .document } }
+        return ReplayTimelineLane.allCases.filter { populated.contains($0) }
+    }
+    var selectedWebEvent: PabloRRWebReplayEvent? {
+        guard case .rrweb(let index) = selectedTimelineItem?.references.first else { return nil }
+        return webReplayData?.event(index: index)
+    }
 
     var selectedStep: ReplayAccessibilityStep? {
         guard let recording, let selectedStepID else { return nil }
@@ -94,25 +159,70 @@ final class ReplayModel: ObservableObject {
         return timelineItems.first { $0.id == selectedTimelineItemID }
     }
 
-    func loadLatest(preferredURL: URL?) -> Bool {
-        if let preferredURL { return load(preferredURL) }
+    func loadLatest(
+        preferredURL: URL?,
+        directory: URL? = nil
+    ) -> Bool {
         do {
-            let urls = try FileManager.default.contentsOfDirectory(
-                at: Self.recordingsDirectory,
-                includingPropertiesForKeys: [.contentModificationDateKey],
-                options: [.skipsHiddenFiles]
-            )
-            guard let latest = urls
-                .filter({ $0.pathExtension == "pablo" })
-                .max(by: { modificationDate($0) < modificationDate($1) }) else {
+            try loadLibrary(directory: directory ?? Self.recordingsDirectory, including: preferredURL)
+            guard let target = preferredURL ?? libraryItems.first?.packageURL else {
                 errorMessage = "No Pablo recordings were found."
                 return false
             }
-            return load(latest)
+            return load(target)
         } catch {
             errorMessage = error.localizedDescription
             return false
         }
+    }
+
+    func selectLibraryItem(_ id: String?) {
+        guard let id, let item = libraryItems.first(where: { $0.id == id }) else { return }
+        _ = load(item.packageURL)
+    }
+
+    func refreshLibrary() {
+        do {
+            try loadLibrary(directory: Self.recordingsDirectory, including: packageURL)
+        } catch {
+            errorMessage = error.localizedDescription
+        }
+    }
+
+    private func loadLibrary(directory: URL, including preferredURL: URL?) throws {
+        var urls: [URL] = []
+        if FileManager.default.fileExists(atPath: directory.path) {
+            urls = try FileManager.default.contentsOfDirectory(
+                at: directory,
+                includingPropertiesForKeys: [.contentModificationDateKey],
+                options: [.skipsHiddenFiles]
+            )
+            .filter { $0.pathExtension.caseInsensitiveCompare("pablo") == .orderedSame }
+        }
+        if let preferredURL,
+           !urls.contains(where: { $0.standardizedFileURL == preferredURL.standardizedFileURL }) {
+            urls.append(preferredURL)
+        }
+        libraryItems = urls.compactMap { url in
+            let modifiedAt = modificationDate(url)
+            if let web = try? PabloRRWebRecordingStorage.load(url) {
+                return ReplayLibraryItem(
+                    packageURL: url,
+                    kind: .web,
+                    title: web.manifest.tab.title,
+                    detail: "\(web.manifest.eventCount) web events",
+                    modifiedAt: modifiedAt
+                )
+            }
+            guard (try? ReplayRecording.load(from: url)) != nil else { return nil }
+            return ReplayLibraryItem(
+                packageURL: url,
+                kind: .native,
+                title: url.deletingPathExtension().lastPathComponent,
+                detail: "Video and accessibility evidence",
+                modifiedAt: modifiedAt
+            )
+        }.sorted { $0.modifiedAt > $1.modifiedAt }
     }
 
     func selectAccessibilityStep(_ id: Int?, seek: Bool) {
@@ -132,19 +242,35 @@ final class ReplayModel: ObservableObject {
     }
 
     func seek(to seconds: TimeInterval, synchronizeEvidence: Bool = true) {
-        let value = max(0, seconds)
-        player.pause()
+        let value = min(max(0, seconds), duration)
+        if webRecording != nil {
+            webPlaybackController?.pause()
+            webPlaybackController?.seek(to: value)
+        } else {
+            player.pause()
+            player.seek(
+                to: CMTime(seconds: value, preferredTimescale: 600),
+                toleranceBefore: .zero,
+                toleranceAfter: .zero
+            )
+        }
         isPlaying = false
-        player.seek(
-            to: CMTime(seconds: value, preferredTimescale: 600),
-            toleranceBefore: .zero,
-            toleranceAfter: .zero
-        )
         currentVideoTime = value
         if synchronizeEvidence { synchronizeTimeDependentUI(to: value) }
     }
 
     func togglePlayback() {
+        if webRecording != nil {
+            if isPlaying {
+                webPlaybackController?.pause()
+                isPlaying = false
+            } else {
+                webPlaybackController?.setPlaybackRate(playbackRate)
+                webPlaybackController?.play()
+                isPlaying = true
+            }
+            return
+        }
         if isPlaying || player.timeControlStatus == .playing {
             player.pause()
             isPlaying = false
@@ -156,7 +282,11 @@ final class ReplayModel: ObservableObject {
     }
 
     func setPlaybackRate(_ rate: Float) {
-        playbackRate = min(max(rate, 0.25), 3)
+        playbackRate = min(max(rate, 0.5), 8)
+        if webRecording != nil {
+            webPlaybackController?.setPlaybackRate(playbackRate)
+            return
+        }
         player.defaultRate = playbackRate
         if isPlaying || player.timeControlStatus == .playing {
             player.rate = playbackRate
@@ -165,6 +295,7 @@ final class ReplayModel: ObservableObject {
     }
 
     func updateCurrentVideoTime() {
+        guard recording != nil else { return }
         let seconds = player.currentTime().seconds
         guard seconds.isFinite else { return }
         let value = max(0, seconds)
@@ -204,11 +335,12 @@ final class ReplayModel: ObservableObject {
 
     func selectAnnotation(_ id: UUID?) {
         selectedAnnotationID = id
-        guard let recording, let annotation = selectedAnnotation else { return }
+        guard let annotation = selectedAnnotation else { return }
         selectedTimelineItemID = "annotation:\(annotation.id.uuidString)"
         if let timestamp = annotation.startTimestampNs {
-            seek(to: recording.videoTime(forTimestampNs: timestamp))
+            seek(to: videoTime(forTimestampNs: timestamp))
         }
+        guard let recording else { return }
         if let reference = annotation.accessibilityReferences.first,
            let step = recording.accessibilitySteps.first(where: { $0.reference == reference }) {
             selectAccessibilityStep(step.id, seek: false)
@@ -218,22 +350,21 @@ final class ReplayModel: ObservableObject {
 
     func selectTimelineItem(_ item: ReplayTimelineItem) {
         selectedTimelineItemID = item.id
-        seek(to: recording?.videoTime(forTimestampNs: item.timestampNs) ?? 0)
+        seek(to: videoTime(forTimestampNs: item.timestampNs))
         guard let reference = item.references.first else { return }
         switch reference {
         case .accessibility(let id):
             selectAccessibilityStep(id, seek: false)
         case .annotation(let id):
             selectAnnotation(id)
-        case .workspace, .input, .automation:
+        case .workspace, .input, .automation, .rrweb:
             break
         }
     }
 
     func moveToMeaningfulTimelineItem(_ direction: Int) {
-        guard let recording else { return }
-        let currentTimestamp = recording.sessionTimestampNs(forVideoTime: currentVideoTime)
-        let items = recording.meaningfulTimelineItems(annotations: annotations)
+        let currentTimestamp = sessionTimestampNs(forVideoTime: currentVideoTime)
+        let items = timelineItems.filter { $0.importance >= .meaningful }
         let item = direction < 0
             ? items.last(where: { $0.timestampNs + 1_000_000 < currentTimestamp })
             : items.first(where: { $0.timestampNs > currentTimestamp + 1_000_000 })
@@ -241,7 +372,7 @@ final class ReplayModel: ObservableObject {
     }
 
     func applicationName(for id: String) -> String {
-        guard let recording else { return id }
+        guard let recording else { return webRecording?.manifest.tab.title ?? id }
         for workspace in recording.workspaceSteps.reversed() {
             if let application = workspace.applications.first(where: { $0.id == id }) {
                 return application.name
@@ -256,8 +387,30 @@ final class ReplayModel: ObservableObject {
         attachEvidence: Bool,
         lineWidth: Double
     ) -> Bool {
-        guard let recording else { return false }
+        guard let packageURL else { return false }
         do {
+            if recording == nil {
+                let timestamp = sessionTimestampNs(forVideoTime: currentVideoTime)
+                let annotation = try RecordingAnnotationStore.add(
+                    to: packageURL,
+                    draft: RecordingAnnotationDraft(
+                        kind: kind,
+                        text: text,
+                        startTimestampNs: timestamp,
+                        endTimestampNs: timestamp,
+                        applicationIDs: webRecording.map { ["SAFARI-TAB-\($0.manifest.tab.id)"] } ?? [],
+                        accessibilityReferences: [],
+                        accessibilityNodeIDs: [],
+                        trace: nil
+                    ),
+                    author: .localHuman
+                )
+                reloadAnnotations()
+                selectAnnotation(annotation.id)
+                errorMessage = nil
+                return true
+            }
+            guard let recording else { return false }
             let selectedStep = attachEvidence ? self.selectedStep : nil
             let currentTimestamp = recording.sessionTimestampNs(forVideoTime: currentVideoTime)
             let trace = draftTraceSamples.isEmpty
@@ -301,10 +454,10 @@ final class ReplayModel: ObservableObject {
     }
 
     func resolveSelectedAnnotation() {
-        guard let recording, let annotation = selectedAnnotation else { return }
+        guard let packageURL, let annotation = selectedAnnotation else { return }
         do {
             let updated = try RecordingAnnotationStore.resolve(
-                in: recording.packageURL,
+                in: packageURL,
                 reference: annotation.reference,
                 author: .localHuman
             )
@@ -317,15 +470,19 @@ final class ReplayModel: ObservableObject {
     }
 
     func reloadAnnotations(changedRecordingPath: String? = nil) {
-        guard let recording else { return }
+        guard let packageURL else { return }
         if let changedRecordingPath,
            URL(fileURLWithPath: changedRecordingPath).standardizedFileURL !=
-            recording.packageURL.standardizedFileURL {
+            packageURL.standardizedFileURL {
             return
         }
         do {
-            annotations = try RecordingAnnotationStore.load(from: recording.packageURL)
-            timelineItems = recording.timelineItems(annotations: annotations)
+            annotations = try RecordingAnnotationStore.load(from: packageURL)
+            if let recording {
+                timelineItems = recording.timelineItems(annotations: annotations)
+            } else if let webReplayData {
+                timelineItems = webReplayData.timelineItems(annotations: annotations)
+            }
             if let selectedAnnotationID,
                !annotations.contains(where: { $0.id == selectedAnnotationID }) {
                 self.selectedAnnotationID = nil
@@ -337,22 +494,33 @@ final class ReplayModel: ObservableObject {
 
     private func load(_ url: URL) -> Bool {
         do {
-            let recording = try ReplayRecording.load(from: url)
-            self.recording = recording
-            annotations = recording.annotations
-            timelineItems = recording.timelineItems(annotations: annotations)
-            selectedStepID = recording.accessibilitySteps.first?.id
+            if let webRecording = try? PabloRRWebRecordingStorage.load(url) {
+                let replayData = try PabloRRWebReplayData(recording: webRecording)
+                source = .web(webRecording, replayData)
+                annotations = try RecordingAnnotationStore.load(from: url)
+                timelineItems = replayData.timelineItems(annotations: annotations)
+                selectedStepID = nil
+                player.replaceCurrentItem(with: nil)
+            } else {
+                let recording = try ReplayRecording.load(from: url)
+                source = .native(recording)
+                annotations = recording.annotations
+                timelineItems = recording.timelineItems(annotations: annotations)
+                selectedStepID = recording.accessibilitySteps.first?.id
+                player.replaceCurrentItem(with: AVPlayerItem(url: recording.videoURL))
+            }
             selectedNodeID = nil
             selectedAnnotationID = nil
             selectedTimelineItemID = nil
             draftTraceSamples = []
             currentVideoTime = 0
+            isPlaying = false
             errorMessage = nil
-            player.replaceCurrentItem(with: AVPlayerItem(url: recording.videoURL))
+            selectedLibraryItemID = url.standardizedFileURL.path
             seekToSelectedStep()
             return true
         } catch {
-            recording = nil
+            source = nil
             annotations = []
             timelineItems = []
             selectedStepID = nil
@@ -362,6 +530,66 @@ final class ReplayModel: ObservableObject {
             player.replaceCurrentItem(with: nil)
             errorMessage = error.localizedDescription
             return false
+        }
+    }
+
+    func attachWebPlaybackController(_ controller: RRWebPlaybackControlling) {
+        webPlaybackController = controller
+        controller.setPlaybackRate(playbackRate)
+        controller.seek(to: currentVideoTime)
+        if isPlaying { controller.play() }
+    }
+
+    func detachWebPlaybackController(_ controller: RRWebPlaybackControlling) {
+        if webPlaybackController === controller { webPlaybackController = nil }
+    }
+
+    func updateWebPlayback(time: TimeInterval, playing: Bool) {
+        let value = min(max(time, 0), duration)
+        if abs(value - currentVideoTime) > 0.0005 { currentVideoTime = value }
+        isPlaying = playing && value < max(0, duration - 0.001)
+    }
+
+    func videoTime(forTimestampNs timestampNs: UInt64) -> TimeInterval {
+        recording?.videoTime(forTimestampNs: timestampNs)
+            ?? TimeInterval(timestampNs) / 1_000_000_000
+    }
+
+    func sessionTimestampNs(forVideoTime seconds: TimeInterval) -> UInt64 {
+        recording?.sessionTimestampNs(forVideoTime: seconds)
+            ?? UInt64(max(0, seconds) * 1_000_000_000)
+    }
+
+    func timelineClusters(
+        lane: ReplayTimelineLane,
+        visibleTimestampRange: ClosedRange<UInt64>,
+        trackWidth: Double,
+        minimumSpacing: Double = 10
+    ) -> [ReplayTimelineCluster] {
+        let candidates = timelineItems.filter {
+            $0.lane == lane &&
+                $0.endTimestampNs >= visibleTimestampRange.lowerBound &&
+                $0.timestampNs <= visibleTimestampRange.upperBound
+        }
+        guard !candidates.isEmpty else { return [] }
+        let span = max(1, visibleTimestampRange.upperBound - visibleTimestampRange.lowerBound)
+        let binCount = max(1, Int(trackWidth / max(minimumSpacing, 1)))
+        let grouped = Dictionary(grouping: candidates) { item -> Int in
+            let visibleTimestamp = max(item.timestampNs, visibleTimestampRange.lowerBound)
+            let progress = Double(visibleTimestamp - visibleTimestampRange.lowerBound) / Double(span)
+            return min(binCount - 1, Int(progress * Double(binCount)))
+        }
+        let orderedGroups: [(key: Int, value: [ReplayTimelineItem])] = grouped.sorted {
+            $0.key < $1.key
+        }
+        return orderedGroups.map { entry in
+            let orderedItems = entry.value.sorted { lhs, rhs -> Bool in
+                if lhs.timestampNs == rhs.timestampNs {
+                    return lhs.id < rhs.id
+                }
+                return lhs.timestampNs < rhs.timestampNs
+            }
+            return ReplayTimelineCluster(lane: lane, items: orderedItems)
         }
     }
 
@@ -416,22 +644,31 @@ struct ReplayView: View {
     private let timer = Timer.publish(every: 1.0 / 60.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
-        Group {
-            if let recording = model.recording {
-                review(recording)
-            } else {
-                ContentUnavailableView {
-                    Label("No Recording Open", systemImage: "rectangle.and.text.magnifyingglass")
-                } description: {
-                    Text(model.errorMessage ?? "Choose a .pablo recording to review.")
-                } actions: {
-                    Button("Open Recordings…", action: openRecordings)
+        HSplitView {
+            RecordingBrowser(model: model, openRecordings: openRecordings)
+                .frame(minWidth: 220, idealWidth: 255, maxWidth: 310)
+
+            Group {
+                if let recording = model.recording {
+                    review(recording)
+                } else if let recording = model.webRecording {
+                    webReview(recording)
+                } else {
+                    ContentUnavailableView {
+                        Label("No Recording Open", systemImage: "rectangle.and.text.magnifyingglass")
+                    } description: {
+                        Text(model.errorMessage ?? "Choose a .pablo recording to review.")
+                    } actions: {
+                        Button("Open Recordings…", action: openRecordings)
+                    }
                 }
             }
+            .frame(minWidth: 620)
         }
         .navigationTitle(
-            model.recording?.packageURL.deletingPathExtension().lastPathComponent ?? "Pablo Review"
+            model.packageURL?.deletingPathExtension().lastPathComponent ?? "Pablo Review"
         )
+        .background(ReplayWindowMetadata(packageURL: model.packageURL))
         .toolbar {
             Button("Open Recordings…", action: openRecordings)
             Button {
@@ -448,6 +685,86 @@ struct ReplayView: View {
         .onReceive(NotificationCenter.default.publisher(for: .pabloAnnotationsDidChange)) { note in
             model.reloadAnnotations(changedRecordingPath: note.object as? String)
         }
+    }
+
+    private func webReview(_ recording: PabloRRWebRecording) -> some View {
+        GeometryReader { geometry in
+            let compact = geometry.size.width < 1_080
+            ZStack(alignment: .trailing) {
+                HStack(spacing: 0) {
+                    webReviewMain(recording)
+                        .frame(maxWidth: .infinity)
+                    if inspectorVisible && !compact {
+                        Divider()
+                        ReviewInspector(
+                            model: model,
+                            lineWidth: $traceLineWidth,
+                            kind: $draftKind,
+                            attachEvidence: $attachEvidence,
+                            close: { withAnimation(.snappy) { inspectorVisible = false } }
+                        )
+                        .frame(width: 410)
+                    }
+                }
+                if inspectorVisible && compact {
+                    ReviewInspector(
+                        model: model,
+                        lineWidth: $traceLineWidth,
+                        kind: $draftKind,
+                        attachEvidence: $attachEvidence,
+                        close: { withAnimation(.snappy) { inspectorVisible = false } }
+                    )
+                    .frame(width: min(430, geometry.size.width * 0.82))
+                    .background(.regularMaterial)
+                    .overlay(alignment: .leading) { Divider() }
+                    .shadow(color: .black.opacity(0.35), radius: 22, x: -8)
+                }
+            }
+            .onAppear { if compact { inspectorVisible = false } }
+            .onChange(of: compact) { _, isCompact in if isCompact { inspectorVisible = false } }
+        }
+    }
+
+    private func webReviewMain(_ recording: PabloRRWebRecording) -> some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(alignment: .firstTextBaseline) {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(recording.manifest.tab.title).font(.title3.weight(.semibold))
+                    Text(recording.manifest.tab.url)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
+                Spacer()
+                Label("Safari", systemImage: "safari")
+                Text(recording.manifest.state.rawValue.capitalized)
+                Label("\(recording.manifest.eventCount) events", systemImage: "point.3.connected.trianglepath.dotted")
+                if recording.manifest.inputsMasked {
+                    Label("Inputs masked", systemImage: "eye.slash")
+                }
+                Label("\(model.annotations.count) notes", systemImage: "text.bubble")
+            }
+            .font(.caption)
+            .foregroundStyle(.secondary)
+
+            if let error = recording.manifest.error {
+                Label(error, systemImage: "exclamationmark.triangle")
+                    .font(.caption)
+                    .foregroundStyle(.orange)
+                    .textSelection(.enabled)
+            }
+
+            RRWebPlayerWebView(recording: recording, model: model)
+                .id(recording.manifest.recordingID)
+                .aspectRatio(16 / 10, contentMode: .fit)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+                .background(.black)
+                .clipShape(RoundedRectangle(cornerRadius: 10))
+
+            UnifiedTimeline(model: model)
+        }
+        .padding(16)
+        .frame(minWidth: 520, maxWidth: .infinity, alignment: .topLeading)
     }
 
     private func review(_ recording: ReplayRecording) -> some View {
@@ -523,7 +840,7 @@ struct ReplayView: View {
                 cancelTrace: model.beginTrace,
                 selectAnnotation: model.selectAnnotation
             )
-            UnifiedTimeline(recording: recording, model: model)
+            UnifiedTimeline(model: model)
         }
         .padding(16)
         .frame(minWidth: 520, maxWidth: .infinity, alignment: .topLeading)
@@ -577,6 +894,82 @@ struct ReplayView: View {
         }
         .font(.caption)
         .foregroundStyle(.secondary)
+    }
+}
+
+private struct ReplayWindowMetadata: NSViewRepresentable {
+    let packageURL: URL?
+
+    func makeNSView(context: Context) -> ReplayWindowMetadataHost {
+        let view = ReplayWindowMetadataHost()
+        view.packageURL = packageURL
+        return view
+    }
+
+    func updateNSView(_ view: ReplayWindowMetadataHost, context: Context) {
+        view.packageURL = packageURL
+    }
+}
+
+private final class ReplayWindowMetadataHost: NSView {
+    var packageURL: URL? {
+        didSet { synchronizeWindow() }
+    }
+
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        synchronizeWindow()
+    }
+
+    private func synchronizeWindow() {
+        window?.representedURL = packageURL
+        window?.title = packageURL?.deletingPathExtension().lastPathComponent ?? "Pablo Review"
+    }
+}
+
+private struct RecordingBrowser: View {
+    @ObservedObject var model: ReplayModel
+    let openRecordings: @MainActor () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text("Recordings").font(.headline)
+                Spacer()
+                Button { model.refreshLibrary() } label: { Image(systemName: "arrow.clockwise") }
+                    .buttonStyle(.borderless)
+                    .help("Refresh recordings")
+            }
+            .padding(12)
+            Divider()
+            List(selection: Binding(
+                get: { model.selectedLibraryItemID },
+                set: { model.selectLibraryItem($0) }
+            )) {
+                ForEach(model.libraryItems) { item in
+                    VStack(alignment: .leading, spacing: 4) {
+                        Label(
+                            item.title,
+                            systemImage: item.kind == .web ? "safari" : "play.rectangle"
+                        )
+                        .font(.subheadline.weight(.medium))
+                        .lineLimit(2)
+                        Text(item.detail)
+                            .font(.caption2)
+                            .foregroundStyle(.secondary)
+                        Text(item.modifiedAt, style: .date)
+                            .font(.caption2)
+                            .foregroundStyle(.tertiary)
+                    }
+                    .padding(.vertical, 3)
+                    .tag(item.id)
+                }
+            }
+            Divider()
+            Button("Open Recordings…", action: openRecordings)
+                .padding(12)
+        }
+        .background(Color(nsColor: .controlBackgroundColor))
     }
 }
 
@@ -923,14 +1316,13 @@ private struct TraceOverlay: View {
 }
 
 private struct UnifiedTimeline: View {
-    let recording: ReplayRecording
     @ObservedObject var model: ReplayModel
     @State private var zoom = 1.0
     @State private var viewportCenter: TimeInterval?
     @State private var followsPlayhead = true
 
     private var duration: TimeInterval {
-        max(0.001, TimeInterval(recording.durationNs ?? 0) / 1_000_000_000)
+        model.duration
     }
 
     private var visibleRange: ClosedRange<TimeInterval> {
@@ -1034,10 +1426,9 @@ private struct UnifiedTimeline: View {
                 }
             )
             VStack(spacing: 3) {
-                ForEach(ReplayTimelineLane.allCases, id: \.self) { lane in
+                ForEach(model.availableTimelineLanes, id: \.self) { lane in
                     TimelineLaneRow(
                         lane: lane,
-                        recording: recording,
                         model: model,
                         visibleRange: visibleRange
                     )
@@ -1108,7 +1499,6 @@ private struct TimelineRuler: View {
 
 private struct TimelineLaneRow: View {
     let lane: ReplayTimelineLane
-    let recording: ReplayRecording
     @ObservedObject var model: ReplayModel
     let visibleRange: ClosedRange<TimeInterval>
     @State private var expandedClusterID: String?
@@ -1173,16 +1563,15 @@ private struct TimelineLaneRow: View {
     }
 
     private func timelineClusters(width: CGFloat) -> [ReplayTimelineCluster] {
-        recording.timelineClusters(
-            from: model.timelineItems,
+        model.timelineClusters(
             lane: lane,
-            visibleTimestampRange: recording.sessionTimestampNs(forVideoTime: visibleRange.lowerBound)...recording.sessionTimestampNs(forVideoTime: visibleRange.upperBound),
+            visibleTimestampRange: model.sessionTimestampNs(forVideoTime: visibleRange.lowerBound)...model.sessionTimestampNs(forVideoTime: visibleRange.upperBound),
             trackWidth: width
         )
     }
 
     private func x(forTimestamp timestamp: UInt64, width: CGFloat) -> CGFloat {
-        x(forTime: recording.videoTime(forTimestampNs: timestamp), width: width)
+        x(forTime: model.videoTime(forTimestampNs: timestamp), width: width)
     }
 
     private func x(forTime time: TimeInterval, width: CGFloat) -> CGFloat {
@@ -1192,7 +1581,7 @@ private struct TimelineLaneRow: View {
 
     private func clusterHelp(_ cluster: ReplayTimelineCluster) -> String {
         if cluster.items.count == 1, let item = cluster.items.first {
-            return "\(item.title) · \(formatTime(recording.videoTime(forTimestampNs: item.timestampNs)))"
+            return "\(item.title) · \(formatTime(model.videoTime(forTimestampNs: item.timestampNs)))"
         }
         return "\(cluster.memberCount) \(laneTitle.lowercased()) events — click to inspect"
     }
@@ -1223,6 +1612,7 @@ private struct TimelineLaneRow: View {
         case .input: return "INPUT"
         case .automation: return "AGENTS"
         case .accessibility: return "A11Y"
+        case .document: return "DOM"
         case .annotation: return "NOTES"
         }
     }
@@ -1233,6 +1623,7 @@ private struct TimelineLaneRow: View {
         case .input: return "cursorarrow.click"
         case .automation: return "cpu"
         case .accessibility: return "accessibility"
+        case .document: return "doc.text.magnifyingglass"
         case .annotation: return "text.bubble"
         }
     }
@@ -1243,6 +1634,7 @@ private struct TimelineLaneRow: View {
         case .input: return .secondary
         case .automation: return .purple
         case .accessibility: return .blue
+        case .document: return .mint
         case .annotation: return .orange
         }
     }
@@ -1388,6 +1780,10 @@ private struct ReviewInspector: View {
                         SelectedTimelineContext(item: item, model: model)
                     }
 
+                    if let event = model.selectedWebEvent {
+                        WebEventDetail(event: event)
+                    }
+
                     annotationSection
 
                     if let recording = model.recording, let step = model.selectedStep {
@@ -1466,7 +1862,9 @@ private struct ReviewInspector: View {
                     .foregroundStyle(.secondary)
             }
             if model.annotations.isEmpty {
-                Text("Click or draw on the video to add a spatial note.")
+                Text(model.webRecording == nil
+                     ? "Click or draw on the video to add a spatial note."
+                     : "Add a note at the current web replay time.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
@@ -1493,6 +1891,28 @@ private struct ReviewInspector: View {
     }
 }
 
+private struct WebEventDetail: View {
+    let event: PabloRRWebReplayEvent
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack {
+                Text("rrweb event \(event.index + 1)").font(.headline)
+                Spacer()
+                Text(formatTime(TimeInterval(event.timestampNs) / 1_000_000_000))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
+            }
+            Text(event.formattedJSON)
+                .font(.system(.caption, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(10)
+        .background(.quaternary.opacity(0.3), in: RoundedRectangle(cornerRadius: 8))
+    }
+}
+
 private struct SelectedTimelineContext: View {
     let item: ReplayTimelineItem
     @ObservedObject var model: ReplayModel
@@ -1504,11 +1924,9 @@ private struct SelectedTimelineContext: View {
                     .font(.caption.weight(.bold))
                     .foregroundStyle(laneColor)
                 Spacer()
-                if let recording = model.recording {
-                    Text(formatTime(recording.videoTime(forTimestampNs: item.timestampNs)))
-                        .font(.caption.monospacedDigit())
-                        .foregroundStyle(.secondary)
-                }
+                Text(formatTime(model.videoTime(forTimestampNs: item.timestampNs)))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
             Text(item.title).font(.subheadline.weight(.semibold))
             if let subtitle = item.subtitle {
@@ -1552,6 +1970,7 @@ private struct SelectedTimelineContext: View {
         case .input: return "cursorarrow.click"
         case .automation: return "cpu"
         case .accessibility: return "accessibility"
+        case .document: return "doc.text.magnifyingglass"
         case .annotation: return "text.bubble"
         }
     }
@@ -1561,6 +1980,7 @@ private struct SelectedTimelineContext: View {
         case .input: return .secondary
         case .automation: return .purple
         case .accessibility: return .blue
+        case .document: return .mint
         case .annotation: return .orange
         }
     }
@@ -2149,7 +2569,7 @@ private func annotationColor(_ kind: RecordingAnnotationKind) -> Color {
     }
 }
 
-private let playbackRates: [Float] = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 2, 2.5, 3]
+private let playbackRates: [Float] = [0.5, 1, 2, 4, 8]
 
 private func formatPlaybackRate(_ rate: Float) -> String {
     let value = Double(rate)

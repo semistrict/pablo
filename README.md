@@ -20,9 +20,10 @@ Recordings are saved to `~/Documents/Pablo Recordings`; application recording fi
 The bundled Safari Web Extension can dump a DOM-derived accessibility tree and
 perform bounded DOM actions without bringing Safari forward. It only receives
 website access after the user clicks its toolbar button for the active tab.
-Pablo can also stream a masked rrweb recording of that unlocked tab into a local
-`.pabloweb` package, with pause/resume/stop controls in both app surfaces and a
-built-in rrweb player. See [Safari web recordings](docs/rrweb.md).
+Pablo can also stream a masked rrweb recording of that unlocked tab into the
+same `.pablo` package format. The normal review window uses the same recording
+browser, transport, timeline, speed controls, inspector, and annotations for
+video evidence and web events. See [Safari web recordings](docs/rrweb.md).
 
 Pablo records locally and contains no network code. A recording can include typed text and anything visible in the selected app or display, so treat it with the same care as a screen recording.
 

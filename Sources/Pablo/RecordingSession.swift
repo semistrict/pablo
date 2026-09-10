@@ -102,6 +102,7 @@ public final class RecordingSession {
             }
             let manifest = RecordingManifest(
                 schemaVersion: RecordingManifest.currentSchemaVersion,
+                dataSource: .native,
                 startedAt: ISO8601DateFormatter.recordingFormatter.string(from: Date()),
                 endedAt: nil,
                 durationNs: nil,
@@ -130,7 +131,8 @@ public final class RecordingSession {
                     "events": "events.pb",
                     "accessibility": "accessibility.pb",
                     "workspace": "workspace.pb",
-                ]
+                ],
+                web: nil
             )
             self.manifest = manifest
             try writeManifest(manifest, to: manifestURL)

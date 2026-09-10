@@ -63,19 +63,8 @@ func appOwnsPabloRecordingPackages() throws {
             $0["LSHandlerRank"] as? String == "Owner"
     }))
 
-    let webRecordingType = try #require(declarations.first(where: {
-        $0["UTTypeIdentifier"] as? String == "com.ramon.pablo.web-recording"
-    }))
-    let webConformance = try #require(webRecordingType["UTTypeConformsTo"] as? [String])
-    let webTags = try #require(webRecordingType["UTTypeTagSpecification"] as? [String: Any])
-    let webExtensions = try #require(webTags["public.filename-extension"] as? [String])
-    #expect(webConformance.contains("com.apple.package"))
-    #expect(webExtensions == ["pabloweb"])
-    #expect(documentTypes.contains(where: {
-        ($0["LSItemContentTypes"] as? [String])?.contains("com.ramon.pablo.web-recording") == true &&
-            $0["CFBundleTypeRole"] as? String == "Viewer" &&
-            $0["LSHandlerRank"] as? String == "Owner"
-    }))
+    #expect(declarations.count == 1)
+    #expect(documentTypes.count == 1)
 }
 
 @Test("Swift package resource bundles are copied into the app")
@@ -89,9 +78,19 @@ func dependencyResourceBundlesArePackaged() throws {
         contentsOf: projectDirectory.appending(path: "scripts/build-app.sh"),
         encoding: .utf8
     )
+    let package = try String(
+        contentsOf: projectDirectory.appending(path: "Package.swift"),
+        encoding: .utf8
+    )
+    let replay = try String(
+        contentsOf: projectDirectory.appending(path: "Sources/PabloApp/RRWebPlaybackRenderer.swift"),
+        encoding: .utf8
+    )
 
     #expect(script.contains("*.bundle(N)"))
     #expect(script.contains("ditto \"$resource_bundle\""))
+    #expect(package.contains(#"resources: [.copy("Resources/RRWebPlayer")]"#))
+    #expect(replay.contains(#"subdirectory: "RRWebPlayer""#))
 }
 
 @Test("The signed app embeds a least-privilege Safari Web Extension")
@@ -112,6 +111,7 @@ func safariExtensionIsEmbeddedAndLeastPrivilege() throws {
         JSONSerialization.jsonObject(with: manifestData) as? [String: Any]
     )
     let permissions = try #require(manifest["permissions"] as? [String])
+    let background = try #require(manifest["background"] as? [String: Any])
     let infoData = try Data(contentsOf: projectDirectory.appending(path: "Resources/Pablo-Info.plist"))
     let info = try #require(
         PropertyListSerialization.propertyList(from: infoData, format: nil) as? [String: Any]
@@ -122,6 +122,10 @@ func safariExtensionIsEmbeddedAndLeastPrivilege() throws {
     #expect(buildScript.range(of: "Pablo Safari.appex")!.lowerBound <
         buildScript.range(of: "--identifier com.ramon.pablo")!.lowerBound)
     #expect(Set(permissions) == Set(["activeTab", "nativeMessaging", "scripting"]))
+    #expect(background["scripts"] as? [String] == ["native-message.js", "background.js"])
+    #expect(background["type"] == nil)
+    #expect(background["persistent"] == nil)
+    #expect(background["service_worker"] == nil)
     #expect(manifest["host_permissions"] == nil)
     #expect(manifest["content_scripts"] == nil)
     #expect(!String(decoding: manifestData, as: UTF8.self).contains("<all_urls>"))
@@ -140,7 +144,7 @@ func safariExtensionIsEmbeddedAndLeastPrivilege() throws {
         encoding: .utf8
     )
     let replaySource = try String(
-        contentsOf: projectDirectory.appending(path: "Sources/PabloApp/RRWebReplayView.swift"),
+        contentsOf: projectDirectory.appending(path: "Sources/PabloApp/RRWebPlaybackRenderer.swift"),
         encoding: .utf8
     )
     #expect(recorderSource.contains("maskAllInputs: true"))
@@ -159,9 +163,14 @@ func safariExtensionIsEmbeddedAndLeastPrivilege() throws {
     #expect(replaySource.contains("websiteDataStore = .nonPersistent()"))
     #expect(replaySource.contains(#""url-filter":"^https?://""#))
     #expect(replaySource.contains("autoPlay: false"))
-    #expect(replaySource.contains("showController: true"))
+    #expect(replaySource.contains("showController: false"))
+    #expect(replaySource.contains("RRWebPlaybackControlling"))
+    #expect(replaySource.contains("window.pabloPlayer?.goto"))
     #expect(replaySource.contains("skipInactive: true"))
     #expect(replaySource.contains("speedOption: [0.5, 1, 2, 4, 8]"))
+    #expect(replaySource.contains("events.base64EncodedString()"))
+    #expect(replaySource.contains("JSON.parse(new TextDecoder().decode(bytes))"))
+    #expect(!replaySource.contains(#"fetch("events.json")"#))
 }
 
 @Test("Safari extension and rrweb JavaScript parse before packaging")
@@ -172,6 +181,7 @@ func safariExtensionJavaScriptParses() throws {
         .deletingLastPathComponent()
         .deletingLastPathComponent()
     let sources = [
+        "SafariExtension/Resources/native-message.js",
         "SafariExtension/Resources/background.js",
         "SafariExtension/JavaScript/recorder-entry.js",
         "SafariExtension/JavaScript/player-entry.js",
@@ -194,6 +204,37 @@ func safariExtensionJavaScriptParses() throws {
             Comment(rawValue: "\(source): \(String(decoding: detail, as: UTF8.self))")
         )
     }
+
+    let envelopeTest = Process()
+    let envelopeOutput = Pipe()
+    envelopeTest.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+    envelopeTest.currentDirectoryURL = projectDirectory
+    envelopeTest.arguments = [
+        "node",
+        "-e",
+        """
+        const decode = require('./SafariExtension/Resources/native-message.js');
+        const expected = 'serialized-command';
+        const cases = [
+          { name: 'dom-command', command: expected },
+          { name: 'dom-command', userInfo: { command: expected } },
+          { message: { name: 'dom-command', command: expected } },
+          { messageName: 'dom-command', message: { command: expected } },
+        ];
+        if (cases.some((value) => decode(value, 'dom-command') !== expected)) process.exit(1);
+        if (decode({ name: 'different', command: expected }, 'dom-command') !== undefined) process.exit(2);
+        if (decode({ name: 'dom-command' }, 'dom-command') !== undefined) process.exit(3);
+        """,
+    ]
+    envelopeTest.standardOutput = envelopeOutput
+    envelopeTest.standardError = envelopeOutput
+    try envelopeTest.run()
+    envelopeTest.waitUntilExit()
+    let envelopeDetail = try envelopeOutput.fileHandleForReading.readToEnd() ?? Data()
+    #expect(
+        envelopeTest.terminationStatus == 0,
+        Comment(rawValue: String(decoding: envelopeDetail, as: UTF8.self))
+    )
 }
 
 @Test("Local app builds never silently fall back to ad-hoc signing")

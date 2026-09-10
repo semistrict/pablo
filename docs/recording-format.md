@@ -1,8 +1,9 @@
 # Recording format v3
 
-This document describes `.pablo` video/accessibility packages. Safari DOM-event
-recordings use the separate `.pabloweb` format documented in
-[Safari web recordings](rrweb.md); the two evidence formats are not combined.
+This document describes every `.pablo` recording package. A manifest declares
+either native video/accessibility evidence or Safari rrweb events as its data
+source. Both sources use the same package extension, recording browser, review
+window, transport, timeline, inspector, and annotation journal.
 
 Version 3 is a multi-application desktop-session format. There is no v2 decoder or compatibility representation. Application-scoped and display-scoped recordings use exactly the same manifest, streams, identities, and replay algorithms.
 
@@ -14,7 +15,11 @@ All evidence uses unsigned monotonic nanoseconds from one session clock. Paused 
 
 Every observed process instance receives a recording-local stable reference such as `APP-004`. A PID is metadata, never identity. Every accessibility node ID is namespaced by its application identity, and every window identity combines an application identity with its observed system window number. Identities are meaningful only inside one recording.
 
-The manifest declares schema version 3, the application or display recording scope, display and application catalogs, global capture geometry, encoded video properties, the first video timestamp, and evidence file paths. The application catalog is finalized at shutdown. Streaming records repeat descriptors needed to interpret evidence before shutdown or after partial recovery.
+The manifest declares schema version 3 and a `dataSource` of `native` or
+`rrweb`. Native recordings declare application/display scope, capture geometry,
+video properties, and protobuf evidence paths. rrweb recordings declare tab,
+privacy, lifecycle, and rrweb-version metadata plus the `events.json` path.
+The field is required; there is no fallback decoder for manifests that omit it.
 
 ## Workspace stream
 
@@ -67,6 +72,10 @@ For display scope, accessibility rectangles normalize against `manifest.capture.
 `annotations.pb` is an optional append-only stream of `pablo.v3.RecordingAnnotation`. It is markup, not captured evidence, and remains absent from the manifest evidence file map.
 
 Each complete state has stable `NOTE-###` sequence identity. Anchors can name application identities, accessibility frames, namespaced nodes, a time interval, and a normalized spatiotemporal freehand trace. Resolving appends a state; it never rewrites evidence or an earlier state.
+
+Safari rrweb packages use the same journal. Their notes are time-anchored and
+may reference selected web events; spatial video traces and accessibility-frame
+anchors apply only to native sources.
 
 ## Local control API
 

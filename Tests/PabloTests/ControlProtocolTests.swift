@@ -311,6 +311,7 @@ func controlSocketServesOpenAPI() throws {
     #expect(paths[PabloControlSocket.endpoint(for: .rrwebStop)] != nil)
     #expect(paths[PabloControlSocket.endpoint(for: .rrwebStatus)] != nil)
     #expect(paths[PabloControlSocket.endpoint(for: .rrwebRecordings)] != nil)
+    #expect(paths[PabloControlSocket.endpoint(for: .openRecording)] != nil)
     #expect(paths[PabloControlSocket.endpoint(for: .rrwebInspect)] != nil)
     #expect(paths[PabloControlSocket.openAPIEndpoint] != nil)
     let components = try #require(document["components"] as? [String: Any])
@@ -414,7 +415,7 @@ func rrwebJSONDefaults() throws {
     }
     #expect(throws: RecordingError.self) {
         try PabloRRWebControlRequest(
-            recordingPath: "/tmp/Recording.pabloweb",
+            recordingPath: "/tmp/Recording.pablo",
             recordingID: UUID()
         ).validate(for: .rrwebInspect)
     }
@@ -422,6 +423,41 @@ func rrwebJSONDefaults() throws {
         try PabloRRWebControlRequest(recordingID: UUID(), eventLimit: 10_001)
             .validate(for: .rrwebInspect)
     }
+}
+
+@Test("recording.open carries only a unified pablo package path")
+func recordingOpenControlRoundTrip() throws {
+    let suffix = UUID().uuidString.prefix(8)
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-open-control-\(suffix)", isDirectory: true)
+    let socketPath = root.appendingPathComponent("control.sock").path
+    let expectedPath = "/tmp/Session.pablo"
+    let server = PabloControlServer(socketPath: socketPath) { request, _ in
+        #expect(request.method == .openRecording)
+        #expect(request.recordingOpenRequest?.recordingPath == expectedPath)
+        return PabloControlResponse(
+            id: request.id,
+            result: PabloControlResult(
+                state: "idle",
+                scopeName: nil,
+                applicationIDs: [],
+                recordingPath: expectedPath,
+                elapsedNanoseconds: 0
+            )
+        )
+    }
+    defer {
+        server.stop()
+        try? FileManager.default.removeItem(at: root)
+    }
+    try server.start()
+
+    _ = try PabloControlClient.send(
+        PabloControlRequest(
+            method: .openRecording,
+            recordingOpenRequest: PabloRecordingOpenRequest(recordingPath: expectedPath)
+        ),
+        socketPath: socketPath
+    )
 }
 
 @Test("Safari DOM requests cross the JSON control socket with documented defaults")

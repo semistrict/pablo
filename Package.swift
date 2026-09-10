@@ -37,7 +37,7 @@ let package = Package(
             name: "PabloApp",
             dependencies: ["PabloCore"],
             path: "Sources/PabloApp",
-            resources: [.process("Resources")],
+            resources: [.copy("Resources/RRWebPlayer")],
             linkerSettings: [
                 .linkedFramework("AVKit"),
                 .linkedFramework("SafariServices"),

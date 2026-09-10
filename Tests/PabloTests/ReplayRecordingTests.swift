@@ -173,6 +173,7 @@ func multiApplicationReplayKeepsTreesSeparate() throws {
     var manifest = testManifest()
     manifest = RecordingManifest(
         schemaVersion: 3,
+        dataSource: manifest.dataSource,
         startedAt: manifest.startedAt,
         endedAt: manifest.endedAt,
         durationNs: manifest.durationNs,
@@ -180,7 +181,8 @@ func multiApplicationReplayKeepsTreesSeparate() throws {
         displays: [],
         applications: [testApplication, secondApplication],
         capture: manifest.capture,
-        files: manifest.files
+        files: manifest.files,
+        web: manifest.web
     )
     try JSONEncoder().encode(manifest).write(to: packageURL.appendingPathComponent("manifest.json"))
 
