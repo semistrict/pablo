@@ -1394,7 +1394,9 @@ final class RecorderModel: ObservableObject {
                 ?? options.pid.map { "PID \($0)" }
                 ?? "an application"
         let textNotice = options.captureText ? " Typed text will be captured." : " Typed text will not be captured."
-        return "This app wants to start a recording of \(target).\(textNotice)"
+        let windowNotice = options.scope == .application
+            ? " Its eligible windows across displays, including newly opened windows, will be captured." : ""
+        return "This app wants to start a recording of \(target).\(windowNotice)\(textNotice)"
     }
 
     private func controlResult(

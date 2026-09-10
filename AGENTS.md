@@ -38,7 +38,7 @@ A session has five synchronized evidence artifacts plus optional markup:
 ```text
 Recording.pablo/
 ├── manifest.json
-├── video.mov
+├── video/VIDEO-001.mov
 ├── events.pb
 ├── workspace.pb
 ├── accessibility.pb
@@ -51,7 +51,7 @@ The recording protobuf source of truth is `proto/pablo/v3/pablo.proto`; `buf.gen
 
 Captured artifacts and the manifest are evidence and remain untouched by markup. `annotations.pb` is an append-only journal of full annotation states with stable `NOTE-###` references. Visual markup is a full-fidelity spatiotemporal freehand trace: normalized x/y samples carry session timestamps, with equal timestamps denoting a shape on one paused video frame. Resolving an annotation appends a new state. Agent annotation mutations go through the approved app bridge; read-only annotation inspection stays offline.
 
-Application scope follows the selected app's largest visible window. Display scope records the selected display without app exclusions, observes global input with receiving app/window provenance, and snapshots accessibility for visible applications. Both scopes use the same v3 structures. Secure accessibility text values are redacted.
+Application scope follows the selected app's eligible windows across connected displays, including newly opened windows. `manifest.capture.videoTracks` describes application-filtered display tracks and their lifetimes; display changes start or end tracks on the same clock. Display scope remains restricted to the selected display without app exclusions. Application workspace snapshots include the selected app's off-screen windows with explicit visibility; display snapshots describe visible applications. Secure accessibility text values are redacted. See `CONTEXT.md` for the domain vocabulary and `docs/recording-format.md` when changing capture, coordinates, or replay.
 
 Every approved live action requested while a recording is active or paused appends explicit `automationAction` requested and outcome records to `events.pb`, including actions aimed at a different app. They share one UUID and preserve the verified calling application/developer, exact sanitized target parameters, resolved action PID when available, and paused state. Never put typed content in the automation record; store only its character count. Synthesized raw input stays as separate evidence when it is in recording scope.
 
@@ -177,7 +177,7 @@ Tests use both XCTest and Swift Testing. Behavioral tests must encode the intend
 High-risk areas that need focused coverage when changed:
 
 - ScreenCaptureKit start/stop lifecycle and a user ending system screen sharing
-- session clock pause/resume accounting
+- shared host-clock conversion, pause/resume accounting, and multi-display track lifetimes
 - automation action provenance, requested/outcome pairing, and typed-text redaction
 - accessibility full-tree and delta materialization
 - secure-value redaction
@@ -188,8 +188,9 @@ High-risk areas that need focused coverage when changed:
 - live target parsing, snapshot indexing, bounded responses, and in-memory event observation
 - live action validation, coordinate mapping, key names, exposed accessibility actions, and target isolation
 - annotation journal materialization, immutable evidence, anchor validation, and caller provenance
+- application window lifecycle, replay window focus, and annotation coordinate frames across display changes
 
-Some true permission and capture behaviors require a signed app and manual testing because macOS owns the consent UI. Unit-test the state transitions and error classification around those boundaries.
+Some true permission and capture behaviors require a signed app and manual testing because macOS owns the consent UI. Unit-test the state transitions and error classification around those boundaries. With an existing Screen Recording grant, `PABLO_CAPTURE_SMOKE_TEST=1 swift test --filter applicationVideoCapturesNewWindows` creates temporary colored windows to verify existing, newly opened, and closed windows in the actual capture output. The opt-in test never requests privacy grants; an unavailable prerequisite is a blocked test, not a pass.
 
 ## Versioning and release
 

@@ -2,6 +2,20 @@ import Foundation
 import Testing
 @testable import PabloCore
 
+@Test("Malformed native capture dimensions and frame rates fail before video preparation",
+      arguments: [("width", 0), ("height", -1), ("framesPerSecond", 0), ("framesPerSecond", Int(Int32.max) + 1)])
+func invalidNativeCaptureMetadataIsRejected(field: String, value: Int) throws {
+    let package = FileManager.default.temporaryDirectory.appendingPathComponent("pablo-invalid-video-\(UUID().uuidString).pablo")
+    try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
+    defer { try? FileManager.default.removeItem(at: package) }
+    var json = try #require(JSONSerialization.jsonObject(with: JSONEncoder().encode(testManifest())) as? [String: Any])
+    var capture = try #require(json["capture"] as? [String: Any])
+    capture[field] = value
+    json["capture"] = capture
+    try JSONSerialization.data(withJSONObject: json).write(to: package.appendingPathComponent("manifest.json"))
+    #expect(throws: RecordingError.self) { try RecordingManifest.load(from: package) }
+}
+
 @Test func replayLoaderReturnsEveryAccessibilityStep() throws {
     let packageURL = FileManager.default.temporaryDirectory
         .appendingPathComponent("pablo-replay-\(UUID().uuidString).pablo", isDirectory: true)

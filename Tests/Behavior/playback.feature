@@ -2,6 +2,19 @@ Feature: Replay is driven by one authoritative media clock
   Video, accessibility evidence, annotations, node highlights, and transport state stay synchronized at every supported speed.
 
   @automated
+  # ReplayVideoCompositionTests.displayVideosComposeOnOneTimeline
+  # ReplayVideoCompositionTests.replayWindowFocusPreservesTimeAndCoordinates
+  # ReplayVideoCompositionTests.annotationCoordinatesSurviveDisplayChanges
+  Scenario: All windows and window focus share one recording time
+    Given a recording has display tracks with different start and end times
+    When replay shows all windows
+    Then each track occupies its recorded desktop position only during its lifetime
+    When a window is selected
+    Then replay focuses its current recorded bounds without changing the time
+    And unavailable windows have no stale recorded view
+    And spatial annotations stay in their recorded desktop positions
+
+  @automated
   # ReplayRecordingTests.replayLoaderReturnsEveryAccessibilityStep
   Scenario: A video time selects the latest materialized accessibility frame
     Given accessibility frames occur at 0.10, 1.00, and 1.40 seconds of video time

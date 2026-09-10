@@ -8,6 +8,35 @@ struct RecordingProcessIdentity: Equatable, Sendable {
     let startMicroseconds: UInt64
 }
 
+struct RecordingWindowObservation {
+    let pid: pid_t
+    let systemID: UInt32
+    let title: String?
+    let frame: CGRect
+    let layer: Int
+    let isOnScreen: Bool
+    let zOrder: UInt32
+
+    static func current(includeOffscreen: Bool) -> [Self] {
+        let options: CGWindowListOption = includeOffscreen ? .optionAll : .optionOnScreenOnly
+        let info = CGWindowListCopyWindowInfo(options, kCGNullWindowID) as? [[String: Any]] ?? []
+        return info.enumerated().compactMap { order, info in
+            guard let ownerPID = info[kCGWindowOwnerPID as String] as? NSNumber,
+                  let systemID = info[kCGWindowNumber as String] as? NSNumber,
+                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
+                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary),
+                  frame.width > 0, frame.height > 0 else { return nil }
+            return Self(
+                pid: pid_t(ownerPID.int32Value), systemID: systemID.uint32Value,
+                title: info[kCGWindowName as String] as? String, frame: frame,
+                layer: (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0,
+                isOnScreen: (info[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? true,
+                zOrder: UInt32(order)
+            )
+        }
+    }
+}
+
 final class RecordingApplicationRegistry: @unchecked Sendable {
     private struct Entry {
         var application: RecordingApplication
@@ -69,35 +98,40 @@ final class RecordingApplicationRegistry: @unchecked Sendable {
         timestampNs: UInt64,
         reason: String,
         captureFrame: CGRect?,
-        tracksLifecycle: Bool = true
+        tracksLifecycle: Bool = true,
+        applicationPID: pid_t? = nil,
+        observations: [RecordingWindowObservation]? = nil,
+        frontmostPID: pid_t? = NSWorkspace.shared.frontmostApplication?.processIdentifier
     ) -> WorkspaceSnapshotRecord {
-        let windowInfo = CGWindowListCopyWindowInfo([.optionOnScreenOnly], kCGNullWindowID) as? [[String: Any]] ?? []
+        let observed = observations ?? RecordingWindowObservation.current(includeOffscreen: applicationPID != nil)
         var windows: [RecordingWindow] = []
         var visiblePIDs = Set<pid_t>()
 
-        for (zOrder, info) in windowInfo.enumerated() {
-            guard let ownerPID = info[kCGWindowOwnerPID as String] as? NSNumber,
-                  let systemID = info[kCGWindowNumber as String] as? NSNumber,
-                  let bounds = info[kCGWindowBounds as String] as? NSDictionary,
-                  let frame = CGRect(dictionaryRepresentation: bounds as CFDictionary) else { continue }
+        for window in observed {
+            let frame = window.frame
+            let pid = window.pid
+            if let applicationPID, pid != applicationPID { continue }
             if let captureFrame, !captureFrame.intersects(frame) { continue }
-            let pid = pid_t(ownerPID.int32Value)
             guard let application = application(for: pid, timestampNs: timestampNs) else { continue }
             visiblePIDs.insert(pid)
             windows.append(RecordingWindow(
-                id: "\(application.id):WIN-\(systemID.uint32Value)",
+                id: "\(application.id):WIN-\(window.systemID)",
                 applicationID: application.id,
-                systemWindowID: systemID.uint32Value,
-                title: info[kCGWindowName as String] as? String,
+                systemWindowID: window.systemID,
+                title: window.title,
                 frame: RecordingRect(x: frame.origin.x, y: frame.origin.y, width: frame.width, height: frame.height),
-                layer: (info[kCGWindowLayer as String] as? NSNumber)?.intValue ?? 0,
-                isOnScreen: (info[kCGWindowIsOnscreen as String] as? NSNumber)?.boolValue ?? true,
-                zOrder: UInt32(zOrder)
+                layer: window.layer,
+                isOnScreen: window.isOnScreen,
+                zOrder: window.zOrder
             ))
         }
 
-        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
-        let frontmostID = frontmostPID.flatMap { application(for: $0, timestampNs: timestampNs)?.id }
+        if let applicationPID {
+            _ = application(for: applicationPID, timestampNs: timestampNs)
+            visiblePIDs.insert(applicationPID)
+        }
+        let includedFrontmostPID = applicationPID == nil || frontmostPID == applicationPID ? frontmostPID : nil
+        let frontmostID = includedFrontmostPID.flatMap { application(for: $0, timestampNs: timestampNs)?.id }
         let visible = lock.withLock {
             entriesByPID.values.map(\.application).filter {
                 visiblePIDs.contains(pid_t($0.pid)) || $0.id == frontmostID
@@ -153,12 +187,7 @@ enum RecordingDisplays {
             return RecordingDisplay(
                 id: id,
                 name: screen.localizedName,
-                frame: RecordingRect(
-                    x: screen.frame.origin.x,
-                    y: screen.frame.origin.y,
-                    width: screen.frame.width,
-                    height: screen.frame.height
-                ),
+                frame: RecordingRect(CGDisplayBounds(id)),
                 scale: screen.backingScaleFactor,
                 isPrimary: id == CGMainDisplayID()
             )

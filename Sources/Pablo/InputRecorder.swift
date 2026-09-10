@@ -114,16 +114,25 @@ final class InputRecorder {
             if let tap { CGEvent.tapEnable(tap: tap, enable: true) }
             return
         }
-        guard shouldRecord(type: type, event: event) else { return }
-
         let location = event.location
         let isPointer = Self.pointerTypes.contains(type)
         let isScroll = type == .scrollWheel
         let isKeyboard = type == .keyDown || type == .keyUp || type == .flagsChanged
+        let rawPID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
+        let frontmostPID = NSWorkspace.shared.frontmostApplication?.processIdentifier
+        let hitTestPID = rawPID <= 0 && (isPointer || isScroll)
+            ? RecordingWindowObservation.current(includeOffscreen: false)
+                .first(where: { $0.frame.contains(location) })?.pid
+            : nil
+        let attributedPID = InputRecordingPolicy.receivingPID(
+            eventPID: rawPID, frontmostPID: frontmostPID, hitTestPID: hitTestPID,
+            isPointer: isPointer || isScroll
+        )
+        guard !stateLock.withLock({ paused }), InputRecordingPolicy.accepts(
+            scope: scope, selectedPID: selectedPID, receivingPID: attributedPID
+        ) else { return }
         let text = includeText && type == .keyDown ? keyboardText(from: event) : nil
         let timestampNs = clock.nowNanoseconds()
-        let rawPID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
-        let attributedPID = rawPID > 0 ? rawPID : NSWorkspace.shared.frontmostApplication?.processIdentifier
         let application = attributedPID.flatMap { registry.application(for: $0, timestampNs: timestampNs) }
         let windowID: String?
         if isPointer || isScroll {
@@ -131,10 +140,11 @@ final class InputRecorder {
                 timestampNs: timestampNs,
                 reason: "input-attribution",
                 captureFrame: targetFrame(),
-                tracksLifecycle: false
+                tracksLifecycle: false,
+                applicationPID: scope == .application ? selectedPID : nil
             )
             windowID = workspace.windows.first(where: {
-                $0.applicationID == application?.id && CGRect(
+                $0.isOnScreen && $0.applicationID == application?.id && CGRect(
                     x: $0.frame.x, y: $0.frame.y, width: $0.frame.width, height: $0.frame.height
                 ).contains(location)
             })?.id
@@ -160,20 +170,6 @@ final class InputRecorder {
             automationAction: nil
         )
         handler(record)
-    }
-
-    private func shouldRecord(type: CGEventType, event: CGEvent) -> Bool {
-        guard !stateLock.withLock({ paused }) else { return false }
-        if scope == .display { return true }
-        guard let selectedPID else { return false }
-        let eventPID = pid_t(event.getIntegerValueField(.eventTargetUnixProcessID))
-        if eventPID == selectedPID { return true }
-        if NSWorkspace.shared.frontmostApplication?.processIdentifier == selectedPID { return true }
-        if Self.pointerTypes.contains(type) || type == .scrollWheel,
-           let frame = targetFrame(), frame.contains(event.location) {
-            return true
-        }
-        return false
     }
 
     private func keyboardText(from event: CGEvent) -> String? {

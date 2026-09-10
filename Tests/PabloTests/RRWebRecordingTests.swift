@@ -16,7 +16,7 @@ private let rrwebTestTab = PabloSafariTab(
     url: "https://example.com/account"
 )
 
-@Test("rrweb packages name Safari and the tab and record masked-input metadata")
+@Test("rrweb packages name the captured application and retain tab metadata")
 func rrwebPackageManifestAndFilename() throws {
     let directory = try temporaryRRWebDirectory()
     defer { try? FileManager.default.removeItem(at: directory) }
@@ -31,7 +31,9 @@ func rrwebPackageManifestAndFilename() throws {
     )
 
     #expect(recording.packageURL.pathExtension == "pablo")
-    #expect(recording.packageURL.lastPathComponent.hasPrefix("Safari Example - Account- Overview Web Recording "))
+    #expect(recording.packageURL == PabloRecordingStorage.defaultRecordingURL(
+        applicationName: "Safari", at: startedAt, directory: directory
+    ))
     #expect(recording.manifest.recordingID == recordingID)
     #expect(recording.manifest.tab == rrwebTestTab)
     #expect(recording.manifest.state == .recording)

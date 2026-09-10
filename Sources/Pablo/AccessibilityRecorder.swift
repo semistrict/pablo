@@ -231,7 +231,10 @@ final class AccessibilityRecorder {
         let shouldSkip = stateLock.withLock { paused && reason != "final" }
         guard !shouldSkip else { return }
         let timestampNs = clock.nowNanoseconds()
-        let workspace = registry.snapshot(timestampNs: timestampNs, reason: reason, captureFrame: captureFrame())
+        let workspace = registry.snapshot(
+            timestampNs: timestampNs, reason: reason, captureFrame: captureFrame(),
+            applicationPID: scope == .application ? selectedPID : nil
+        )
         do {
             try workspaceWriter.append(workspace)
         } catch {

@@ -30,10 +30,16 @@ func testManifest(schemaVersion: Int = 3) -> RecordingManifest {
             width: 100,
             height: 100,
             framesPerSecond: 30,
-            firstFrameTimestampNs: 100_000_000
+            firstFrameTimestampNs: 100_000_000,
+            videoTracks: [RecordingVideoTrack(
+                id: "VIDEO-001", displayID: 1, file: "video.mov",
+                frame: RecordingRect(x: 10, y: 20, width: 50, height: 50),
+                width: 100, height: 100, displayScale: 2, framesPerSecond: 30,
+                startedTimestampNs: 0, firstFrameTimestampNs: 100_000_000,
+                endedTimestampNs: 2_000_000_000, endReason: .recordingStopped
+            )]
         ),
         files: [
-            "video": "video.mov",
             "events": "events.pb",
             "accessibility": "accessibility.pb",
             "workspace": "workspace.pb",

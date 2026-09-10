@@ -1,6 +1,7 @@
 import ApplicationServices
 import Foundation
 
+@MainActor
 public final class RecordingSession {
     public enum State {
         case idle
@@ -17,7 +18,7 @@ public final class RecordingSession {
     private var inputWriter: ProtobufStreamWriter<InputEventRecord>?
     private var accessibilityWriter: ProtobufStreamWriter<AXSnapshotRecord>?
     private var workspaceWriter: ProtobufStreamWriter<WorkspaceSnapshotRecord>?
-    private var video: VideoRecorder?
+    private var video: VideoCaptureSession?
     private var accessibility: AccessibilityRecorder?
     private var input: InputRecorder?
     private var manifest: RecordingManifest?
@@ -52,7 +53,6 @@ public final class RecordingSession {
         let inputURL = packageURL.appendingPathComponent("events.pb")
         let accessibilityURL = packageURL.appendingPathComponent("accessibility.pb")
         let workspaceURL = packageURL.appendingPathComponent("workspace.pb")
-        let videoURL = packageURL.appendingPathComponent("video.mov")
         let manifestURL = packageURL.appendingPathComponent("manifest.json")
         self.manifestURL = manifestURL
 
@@ -76,9 +76,9 @@ public final class RecordingSession {
         } else {
             .display(options.displayID)
         }
-        let video = VideoRecorder(
-            captureScope: captureScope,
-            outputURL: videoURL,
+        let video = VideoCaptureSession(
+            scope: captureScope,
+            directory: packageURL.appendingPathComponent("video", isDirectory: true),
             clock: clock,
             framesPerSecond: options.framesPerSecond
         )
@@ -96,7 +96,8 @@ public final class RecordingSession {
         self.accessibility = accessibility
 
         do {
-            let capture = try await video.start()
+            try await video.start()
+            let capture = video.capture
             let selectedDescriptor = selectedApplication.flatMap {
                 applicationRegistry.application(for: $0.pid, timestampNs: 0)
             }
@@ -109,25 +110,12 @@ public final class RecordingSession {
                 scope: .init(
                     kind: options.scope,
                     selectedApplicationID: selectedDescriptor?.id,
-                    selectedDisplayID: capture.displayID
+                    selectedDisplayID: options.scope == .display ? options.displayID ?? CGMainDisplayID() : nil
                 ),
                 displays: RecordingDisplays.current(),
                 applications: applicationRegistry.allApplications(),
-                capture: .init(
-                    frame: RecordingRect(
-                        x: capture.frame.origin.x,
-                        y: capture.frame.origin.y,
-                        width: capture.frame.width,
-                        height: capture.frame.height
-                    ),
-                    displayScale: capture.displayScale,
-                    width: capture.width,
-                    height: capture.height,
-                    framesPerSecond: capture.framesPerSecond,
-                    firstFrameTimestampNs: nil
-                ),
+                capture: capture,
                 files: [
-                    "video": "video.mov",
                     "events": "events.pb",
                     "accessibility": "accessibility.pb",
                     "workspace": "workspace.pb",
@@ -221,7 +209,7 @@ public final class RecordingSession {
 
         manifest?.endedAt = ISO8601DateFormatter.recordingFormatter.string(from: Date())
         manifest?.durationNs = clock.nowNanoseconds()
-        manifest?.capture.firstFrameTimestampNs = video?.firstFrameTimestampNs
+        if let video { manifest?.capture = video.capture }
         manifest?.applications = applicationRegistry.allApplications()
         manifest?.displays = RecordingDisplays.current()
         if let manifest, let manifestURL {

@@ -54,6 +54,7 @@ func annotationsPreserveEvidence() throws {
     #expect(created.applicationIDs == ["APP-001"])
     #expect(created.accessibilityNodeIDs == ["APP-001:button"])
     #expect(created.trace?.samples.count == 3)
+    #expect(created.trace?.coordinateFrame == testManifest().capture.frame)
     #expect(created.trace?.samples.allSatisfy { $0.timestampNs == 300_000_000 } == true)
     #expect(resolved.id == created.id)
     #expect(resolved.status == .resolved)
@@ -70,6 +71,23 @@ func annotationsPreserveEvidence() throws {
     #expect(try ReplayRecording.load(from: packageURL).annotations == [resolved])
     #expect(try CLI.annotations(packageURL, json: false).contains("NOTE-001"))
     #expect(try CLI.annotations(packageURL, json: true).contains("Submit remains disabled."))
+}
+
+@Test("Stored annotation trace frames reject non-finite and non-positive geometry", arguments: [Double.nan, .infinity, -1, 0])
+func invalidStoredAnnotationFramesAreRejected(width: Double) throws {
+    let package = try makeAnnotationTestPackage()
+    defer { try? FileManager.default.removeItem(at: package) }
+    let annotation = try RecordingAnnotationStore.add(
+        to: package,
+        draft: RecordingAnnotationDraft(
+            kind: .issue, text: "Trace", startTimestampNs: 300_000_000,
+            trace: RecordingAnnotationTrace(samples: [.init(timestampNs: 300_000_000, x: 0.5, y: 0.5)])
+        ), author: .localHuman
+    )
+    var protobuf = annotation.protobuf
+    protobuf.trace.coordinateFrame.width = width
+    let data = try ProtobufStream.frame(protobuf)
+    #expect(throws: RecordingError.self) { try PabloProtobufCodec.decodeAnnotations(from: data) }
 }
 
 @Test("Annotation anchors must refer to valid evidence")

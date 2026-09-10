@@ -70,6 +70,14 @@ struct VideoCaptureLifecycle {
             error.code == SCStreamError.Code.attemptToStopStreamState.rawValue
     }
 
+    static func isUnavailableSource(_ error: Error) -> Bool {
+        let error = error as NSError
+        return error.domain == SCStreamErrorDomain && [
+            SCStreamError.Code.noDisplayList.rawValue,
+            SCStreamError.Code.noCaptureSource.rawValue,
+        ].contains(error.code)
+    }
+
     private static func isUserStopped(_ error: Error) -> Bool {
         let error = error as NSError
         return error.domain == SCStreamErrorDomain &&
@@ -123,8 +131,9 @@ enum VideoWriterPipeline {
     }
 }
 
-final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
-    private let captureScope: VideoCaptureScope
+final class VideoRecorder: NSObject, RecordingVideoTrackCapturing, SCStreamOutput, SCStreamDelegate, @unchecked Sendable {
+    private let display: RecordingDisplay
+    private let applicationPID: pid_t?
     private let outputURL: URL
     private let clock: SessionClock
     private let framesPerSecond: Int
@@ -136,24 +145,17 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     private var pixelBufferAdaptor: AVAssetWriterInputPixelBufferAdaptor?
     private var lifecycle = VideoCaptureLifecycle()
     private var didStartSession = false
-    private var _captureFrame: CGRect?
     private var _firstFrameTimestampNs: UInt64?
     private var captureError: Error?
     private var paused = false
-    private var pausedAtHostTime: CMTime?
-    private var accumulatedPauseDuration = CMTime.zero
+    private var earliestTimestampNs: UInt64 = 0
 
-    init(captureScope: VideoCaptureScope, outputURL: URL, clock: SessionClock, framesPerSecond: Int = 30) {
-        self.captureScope = captureScope
+    init(display: RecordingDisplay, applicationPID: pid_t?, outputURL: URL, clock: SessionClock, framesPerSecond: Int = 30) {
+        self.display = display
+        self.applicationPID = applicationPID
         self.outputURL = outputURL
         self.clock = clock
         self.framesPerSecond = framesPerSecond
-    }
-
-    var captureFrame: CGRect? {
-        stateLock.lock()
-        defer { stateLock.unlock() }
-        return _captureFrame
     }
 
     var firstFrameTimestampNs: UInt64? {
@@ -167,40 +169,29 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
     }
 
     func start() async throws -> VideoCaptureInfo {
-        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-        let frame: CGRect
-        let displayID: UInt32?
-        let scale: Double
+        earliestTimestampNs = clock.nowNanoseconds()
+        let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: false)
+        guard let sourceDisplay = content.displays.first(where: { $0.displayID == display.id }) else {
+            throw RecordingError.capture("Display \(display.id) is not available for recording.")
+        }
+        let frame = sourceDisplay.frame
+        let displayID = display.id
+        let scale = display.scale
         let filter: SCContentFilter
-        switch captureScope {
-        case let .application(targetPID):
-            let candidates = content.windows.filter {
-                $0.owningApplication?.processID == targetPID && $0.frame.width >= 64 && $0.frame.height >= 64
-            }
-            guard let window = candidates.max(by: { score($0) < score($1) }) else {
+        if let applicationPID {
+            guard let application = content.applications.first(where: { $0.processID == applicationPID }) else {
                 throw RecordingError.capture(
-                    "The selected application has no visible recordable window. Open a window and try again."
+                    "The selected application is not available for recording."
                 )
             }
-            frame = window.frame
-            displayID = nil
-            scale = Double(NSScreen.screens.first(where: { $0.frame.intersects(window.frame) })?.backingScaleFactor ?? 2)
-            filter = SCContentFilter(desktopIndependentWindow: window)
-        case let .display(requestedID):
-            let wantedID = requestedID ?? CGMainDisplayID()
-            guard let display = content.displays.first(where: { $0.displayID == wantedID }) else {
-                throw RecordingError.capture("Display \(wantedID) is not available for recording.")
-            }
-            frame = display.frame
-            displayID = display.displayID
-            scale = Double(NSScreen.screens.first(where: {
-                ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber)?.uint32Value == display.displayID
-            })?.backingScaleFactor ?? 1)
-            filter = SCContentFilter(display: display, excludingApplications: [], exceptingWindows: [])
+            // An application filter follows new windows without changing the
+            // recording target or accidentally including a different app.
+            filter = SCContentFilter(display: sourceDisplay, including: [application], exceptingWindows: [])
+        } else {
+            filter = SCContentFilter(display: sourceDisplay, excludingApplications: [], exceptingWindows: [])
         }
         let width = even(Int((frame.width * scale).rounded()))
         let height = even(Int((frame.height * scale).rounded()))
-        stateLock.withLock { _captureFrame = frame }
 
         let preparedWriter = try VideoWriterPipeline.prepare(
             outputURL: outputURL,
@@ -221,6 +212,9 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         configuration.showsCursor = true
         configuration.capturesAudio = false
         configuration.colorSpaceName = CGColorSpace.sRGB
+        if #available(macOS 14.2, *) {
+            configuration.includeChildWindows = true
+        }
 
         let stream = SCStream(filter: filter, configuration: configuration, delegate: self)
         try stream.addStreamOutput(self, type: .screen, sampleHandlerQueue: videoQueue)
@@ -246,7 +240,7 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         )
     }
 
-    func stop() async throws {
+    func stop(at timestampNs: UInt64) async throws {
         var firstError = await stopStreamIfNeeded()
         do {
             try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
@@ -255,6 +249,13 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
                         continuation.resume()
                         return
                     }
+                    guard self.didStartSession else {
+                        writer.cancelWriting()
+                        try? FileManager.default.removeItem(at: self.outputURL)
+                        continuation.resume()
+                        return
+                    }
+                    writer.endSession(atSourceTime: CMTime(value: Int64(clamping: timestampNs), timescale: 1_000_000_000))
                     input.markAsFinished()
                     writer.finishWriting {
                         if writer.status == .failed {
@@ -268,7 +269,8 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
                 }
             }
         } catch {
-            firstError = firstError ?? error
+            // Encoder failures must not be hidden by an expected source loss.
+            firstError = error
         }
         if let captureError = stateLock.withLock({ self.captureError }) {
             firstError = firstError ?? captureError
@@ -291,20 +293,12 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
         stateLock.withLock {
             guard !paused else { return }
             paused = true
-            pausedAtHostTime = CMClockGetTime(CMClockGetHostTimeClock())
         }
     }
 
     func resume() {
         stateLock.withLock {
             guard paused else { return }
-            if let pausedAtHostTime {
-                accumulatedPauseDuration = CMTimeAdd(
-                    accumulatedPauseDuration,
-                    CMTimeSubtract(CMClockGetTime(CMClockGetHostTimeClock()), pausedAtHostTime)
-                )
-            }
-            self.pausedAtHostTime = nil
             paused = false
         }
     }
@@ -331,18 +325,22 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
               writer.status == .writing,
               let pixelBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) else { return }
 
-        let timing = stateLock.withLock { (paused, accumulatedPauseDuration) }
-        guard !timing.0 else { return }
-        let presentationTime = CMTimeSubtract(
+        guard !stateLock.withLock({ paused }) else { return }
+        let hostTime = CMTimeConvertScale(
             CMSampleBufferGetPresentationTimeStamp(sampleBuffer),
-            timing.1
+            timescale: 1_000_000_000,
+            method: .default
         )
+        guard hostTime.isNumeric, hostTime.value >= 0,
+              let timestampNs = clock.timestamp(forHostNanoseconds: UInt64(hostTime.value)),
+              timestampNs >= earliestTimestampNs else { return }
+        let presentationTime = CMTime(value: Int64(clamping: timestampNs), timescale: 1_000_000_000)
 
         if !didStartSession {
             didStartSession = true
             writer.startSession(atSourceTime: presentationTime)
             stateLock.lock()
-            _firstFrameTimestampNs = clock.nowNanoseconds()
+            _firstFrameTimestampNs = timestampNs
             stateLock.unlock()
         }
         if input.isReadyForMoreMediaData, !adaptor.append(pixelBuffer, withPresentationTime: presentationTime) {
@@ -350,11 +348,6 @@ final class VideoRecorder: NSObject, SCStreamOutput, SCStreamDelegate, @unchecke
             captureError = writer.error ?? RecordingError.capture("A video frame could not be encoded.")
             stateLock.unlock()
         }
-    }
-
-    private func score(_ window: SCWindow) -> Double {
-        let layerBonus = window.windowLayer == 0 ? 1_000_000_000.0 : 0
-        return layerBonus + window.frame.width * window.frame.height
     }
 
     private func stopStreamIfNeeded() async -> Error? {

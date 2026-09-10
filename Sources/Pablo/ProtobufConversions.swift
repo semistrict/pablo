@@ -560,11 +560,24 @@ private extension RecordingAnnotationTraceSample {
 
 private extension RecordingAnnotationTrace {
     var protobuf: PabloV3AnnotationTrace {
-        .with { $0.samples = samples.map(\.protobuf); $0.lineWidth = lineWidth }
+        .with {
+            $0.samples = samples.map(\.protobuf)
+            $0.lineWidth = lineWidth
+            if let coordinateFrame { $0.coordinateFrame = coordinateFrame.protobuf }
+        }
     }
 
-    init(_ value: PabloV3AnnotationTrace) {
-        self.init(samples: value.samples.map(RecordingAnnotationTraceSample.init), lineWidth: value.lineWidth)
+    init(_ value: PabloV3AnnotationTrace) throws {
+        guard value.hasCoordinateFrame else {
+            throw RecordingError.capture("An annotation trace is missing its coordinate frame.")
+        }
+        self.init(
+            samples: value.samples.map(RecordingAnnotationTraceSample.init), lineWidth: value.lineWidth,
+            coordinateFrame: RecordingRect(value.coordinateFrame)
+        )
+        guard isValid else {
+            throw RecordingError.capture("An annotation trace contains invalid coordinates.")
+        }
     }
 }
 
@@ -605,7 +618,7 @@ extension RecordingAnnotation {
             applicationIDs: value.applicationIds,
             accessibilityReferences: value.accessibilityReferences,
             accessibilityNodeIDs: value.accessibilityNodeIds,
-            trace: value.hasTrace ? RecordingAnnotationTrace(value.trace) : nil
+            trace: value.hasTrace ? try RecordingAnnotationTrace(value.trace) : nil
         )
     }
 }

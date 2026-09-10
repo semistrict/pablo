@@ -28,7 +28,7 @@ scroll state, viewport changes, and other standard rrweb events can be present.
 Each package contains:
 
 ```text
-Safari Example Web Recording 2026-08-15 at 14.30.00.pablo/
+Safari Recording 2026-08-15 at 14.30.00.pablo/
 ├── manifest.json
 └── events.json
 ```

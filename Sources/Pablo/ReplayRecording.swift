@@ -154,9 +154,15 @@ public struct ReplayAccessibilityStep: Codable, Identifiable, Sendable {
     }
 }
 
+public struct ReplayVideoTrack: Codable, Identifiable, Sendable {
+    public let metadata: RecordingVideoTrack
+    public let url: URL
+    public var id: String { metadata.id }
+}
+
 public struct ReplayRecording: Codable, Sendable {
     public let packageURL: URL
-    public let videoURL: URL
+    public let videoTracks: [ReplayVideoTrack]
     public let scopeName: String
     public let scope: RecordingScopeKind
     public let selectedApplicationID: String?
@@ -182,7 +188,9 @@ public struct ReplayRecording: Codable, Sendable {
         let manifest = try RecordingManifest.load(from: packageURL)
         let accessibilityURL = try manifest.fileURL(for: "accessibility", in: packageURL)
         let eventsURL = try manifest.fileURL(for: "events", in: packageURL)
-        let videoURL = try manifest.fileURL(for: "video", in: packageURL)
+        let videoTracks = try manifest.capture.videoTracks.map { track in
+            ReplayVideoTrack(metadata: track, url: try manifest.evidenceURL(for: track.file, in: packageURL))
+        }
         let workspaceURL = try manifest.fileURL(for: "workspace", in: packageURL)
         let records = try RecordingStreamReader.accessibility(at: accessibilityURL)
         let inputEvents = try RecordingStreamReader.events(at: eventsURL)
@@ -223,7 +231,7 @@ public struct ReplayRecording: Codable, Sendable {
         }
         return ReplayRecording(
             packageURL: packageURL,
-            videoURL: videoURL,
+            videoTracks: videoTracks,
             scopeName: selectedName ?? manifest.scope.selectedDisplayID.map { "Display \($0)" } ?? "Entire Screen",
             scope: manifest.scope.kind,
             selectedApplicationID: manifest.scope.selectedApplicationID,
@@ -283,6 +291,28 @@ public struct ReplayRecording: Codable, Sendable {
     public func workspaceStep(atVideoTime seconds: TimeInterval) -> WorkspaceSnapshotRecord? {
         let timestamp = sessionTimestampNs(forVideoTime: seconds)
         return workspaceSteps.last(where: { $0.timestampNs <= timestamp }) ?? workspaceSteps.first
+    }
+
+    public var windows: [RecordingWindow] {
+        var latestByID: [String: RecordingWindow] = [:]
+        for workspace in workspaceSteps {
+            for window in workspace.windows { latestByID[window.id] = window }
+        }
+        return latestByID.values.sorted { $0.id < $1.id }
+    }
+
+    public func windowFrame(id: String, atVideoTime seconds: TimeInterval) -> RecordingRect? {
+        guard let window = workspaceStep(atVideoTime: seconds)?.windows.first(where: { $0.id == id }),
+              window.isOnScreen else { return nil }
+        let timestamp = sessionTimestampNs(forVideoTime: seconds)
+        let recorded = videoTracks
+            .filter { $0.metadata.contains(timestampNs: timestamp) }
+            .reduce(CGRect.null) { frame, track in
+                let intersection = track.metadata.frame.cgRect.intersection(window.frame.cgRect)
+                return intersection.isNull ? frame : frame.union(intersection)
+            }
+        guard !recorded.isNull, !recorded.isEmpty else { return nil }
+        return RecordingRect(recorded)
     }
 
     public func applicationID(

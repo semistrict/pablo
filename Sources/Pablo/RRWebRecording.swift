@@ -258,7 +258,7 @@ public enum PabloRRWebRecordingStorage {
         fileManager: FileManager = .default
     ) throws -> PabloRRWebRecording {
         try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
-        let packageURL = uniquePackageURL(tabTitle: tab.title, date: date, directory: directory, fileManager: fileManager)
+        let packageURL = uniquePackageURL(date: date, directory: directory, fileManager: fileManager)
         try fileManager.createDirectory(at: packageURL, withIntermediateDirectories: false)
         let recording = PabloRRWebRecording(
             packageURL: packageURL,
@@ -434,7 +434,8 @@ public enum PabloRRWebRecordingStorage {
                 width: 0,
                 height: 0,
                 framesPerSecond: 0,
-                firstFrameTimestampNs: 0
+                firstFrameTimestampNs: 0,
+                videoTracks: []
             ),
             files: ["rrweb": eventsFilename],
             web: .init(
@@ -456,17 +457,14 @@ public enum PabloRRWebRecordingStorage {
     }
 
     private static func uniquePackageURL(
-        tabTitle: String,
         date: Date,
         directory: URL,
         fileManager: FileManager
     ) -> URL {
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd 'at' HH.mm.ss"
-        let title = safeFilenameComponent(tabTitle) ?? "Untitled Tab"
-        let base = "Safari \(title) Web Recording \(formatter.string(from: date))"
-        var candidate = directory.appendingPathComponent("\(base).\(packageExtension)", isDirectory: true)
+        var candidate = PabloRecordingStorage.defaultRecordingURL(
+            applicationName: "Safari", at: date, directory: directory
+        )
+        let base = candidate.deletingPathExtension().lastPathComponent
         var suffix = 2
         while fileManager.fileExists(atPath: candidate.path) {
             candidate = directory.appendingPathComponent(
@@ -476,19 +474,6 @@ public enum PabloRRWebRecordingStorage {
             suffix += 1
         }
         return candidate
-    }
-
-    private static func safeFilenameComponent(_ value: String) -> String? {
-        let forbidden = CharacterSet.controlCharacters.union(CharacterSet(charactersIn: "/:"))
-        let replaced = value.unicodeScalars.map { scalar -> String in
-            if CharacterSet.whitespacesAndNewlines.contains(scalar) { return " " }
-            return forbidden.contains(scalar) ? "-" : String(scalar)
-        }.joined()
-        let collapsed = replaced.components(separatedBy: .whitespacesAndNewlines)
-            .filter { !$0.isEmpty }
-            .joined(separator: " ")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        return collapsed.isEmpty ? nil : String(collapsed.prefix(80))
     }
 
     private static let encoder: JSONEncoder = {

@@ -66,14 +66,33 @@ public struct RecordingAnnotationTraceSample: Codable, Equatable, Sendable {
 public struct RecordingAnnotationTrace: Codable, Equatable, Sendable {
     public let samples: [RecordingAnnotationTraceSample]
     public let lineWidth: Double
+    public let coordinateFrame: RecordingRect?
 
-    public init(samples: [RecordingAnnotationTraceSample], lineWidth: Double = 0.008) {
+    public init(
+        samples: [RecordingAnnotationTraceSample],
+        lineWidth: Double = 0.008,
+        coordinateFrame: RecordingRect? = nil
+    ) {
         self.samples = samples
         self.lineWidth = lineWidth
+        self.coordinateFrame = coordinateFrame
     }
 
     public var startTimestampNs: UInt64? { samples.first?.timestampNs }
     public var endTimestampNs: UInt64? { samples.last?.timestampNs }
+
+    public func samples(_ samples: [RecordingAnnotationTraceSample], in canvas: RecordingRect) -> [RecordingAnnotationTraceSample] {
+        let source = coordinateFrame ?? canvas
+        return samples.map { sample in
+            let point = canvas.normalizedPoint(x: sample.x, y: sample.y, from: source)
+            return .init(timestampNs: sample.timestampNs, x: point.x, y: point.y)
+        }
+    }
+
+    public func lineWidth(in canvas: RecordingRect) -> Double {
+        let source = coordinateFrame ?? canvas
+        return lineWidth * min(source.width, source.height) / max(1, min(canvas.width, canvas.height))
+    }
 
     /// Returns the portion of the trace visible at a point on the session timeline.
     /// A paused trace (all timestamps equal) appears as one complete shape. A moving
@@ -109,11 +128,12 @@ public struct RecordingAnnotationTrace: Codable, Equatable, Sendable {
         return visible
     }
 
-    fileprivate var isValid: Bool {
+    var isValid: Bool {
         guard !samples.isEmpty,
               lineWidth.isFinite,
               lineWidth > 0,
               lineWidth <= 0.1,
+              coordinateFrame.map(\.isValid) ?? true,
               samples.allSatisfy(\.isValid) else { return false }
         return zip(samples, samples.dropFirst()).allSatisfy {
             $0.timestampNs <= $1.timestampNs
@@ -193,6 +213,7 @@ public enum RecordingAnnotationStore {
         try lock.withLock {
             try validatePackage(packageURL)
             try validate(draft, in: packageURL)
+            let canvas = try RecordingManifest.load(from: packageURL).capture.frame
             let annotations = try loadUnlocked(from: packageURL)
             let annotation = RecordingAnnotation(
                 id: UUID(),
@@ -209,7 +230,12 @@ public enum RecordingAnnotationStore {
                 applicationIDs: uniqueNonempty(draft.applicationIDs),
                 accessibilityReferences: normalizedReferences(draft.accessibilityReferences),
                 accessibilityNodeIDs: uniqueNonempty(draft.accessibilityNodeIDs),
-                trace: draft.trace
+                trace: draft.trace.map { trace in
+                    RecordingAnnotationTrace(
+                        samples: trace.samples, lineWidth: trace.lineWidth,
+                        coordinateFrame: trace.coordinateFrame ?? canvas
+                    )
+                }
             )
             try append(annotation, to: packageURL)
             return annotation
@@ -309,6 +335,10 @@ public enum RecordingAnnotationStore {
             }
         }
         let manifest = try RecordingManifest.load(from: packageURL)
+        if let frame = draft.trace?.coordinateFrame,
+           !manifest.capture.frame.cgRect.contains(frame.cgRect) {
+            throw RecordingError.usage("The trace coordinate frame lies outside the recording canvas.")
+        }
         let validApplicationIDs = Set(manifest.applications.map(\.id))
         let applicationIDs = uniqueNonempty(draft.applicationIDs)
         for applicationID in applicationIDs where !validApplicationIDs.contains(applicationID) {

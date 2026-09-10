@@ -8,33 +8,59 @@ final class SessionClock {
     private let denom: UInt64
     private let lock = NSLock()
     private var pausedAt: UInt64?
-    private var pausedTicks: UInt64 = 0
+    private var pauses: [ClosedRange<UInt64>] = []
 
     init() {
         var info = mach_timebase_info_data_t()
         mach_timebase_info(&info)
-        origin = mach_continuous_time()
         numer = UInt64(info.numer)
         denom = UInt64(info.denom)
+        origin = UInt64(info.denom).dividingFullWidth(
+            mach_absolute_time().multipliedFullWidth(by: UInt64(info.numer))
+        ).quotient
     }
 
     func nowNanoseconds() -> UInt64 {
-        let ticks = lock.withLock {
-            (pausedAt ?? mach_continuous_time()) - origin - pausedTicks
+        lock.withLock {
+            Self.timestamp(hostNanoseconds: pausedAt ?? hostNanoseconds(), origin: origin, pauses: pauses)
         }
-        return denom.dividingFullWidth(ticks.multipliedFullWidth(by: numer)).quotient
+    }
+
+    /// ScreenCaptureKit timestamps use the host clock. Convert at capture time,
+    /// rather than when a stream's callback happens to reach its queue.
+    func timestamp(forHostNanoseconds hostTime: UInt64) -> UInt64? {
+        lock.withLock {
+            guard hostTime >= origin,
+                  !(pausedAt.map { hostTime >= $0 } ?? false),
+                  !pauses.contains(where: { $0.contains(hostTime) }) else { return nil }
+            return Self.timestamp(hostNanoseconds: hostTime, origin: origin, pauses: pauses)
+        }
+    }
+
+    static func timestamp(hostNanoseconds: UInt64, origin: UInt64, pauses: [ClosedRange<UInt64>]) -> UInt64 {
+        let elapsed = hostNanoseconds > origin ? hostNanoseconds - origin : 0
+        let paused = pauses.reduce(UInt64(0)) { total, interval in
+            let start = max(origin, interval.lowerBound)
+            let end = min(hostNanoseconds, interval.upperBound)
+            return total + (end > start ? end - start : 0)
+        }
+        return elapsed > paused ? elapsed - paused : 0
+    }
+
+    private func hostNanoseconds() -> UInt64 {
+        denom.dividingFullWidth(mach_absolute_time().multipliedFullWidth(by: numer)).quotient
     }
 
     func pause() {
         lock.withLock {
-            if pausedAt == nil { pausedAt = mach_continuous_time() }
+            if pausedAt == nil { pausedAt = hostNanoseconds() }
         }
     }
 
     func resume() {
         lock.withLock {
             guard let pausedAt else { return }
-            pausedTicks += mach_continuous_time() - pausedAt
+            pauses.append(pausedAt...hostNanoseconds())
             self.pausedAt = nil
         }
     }

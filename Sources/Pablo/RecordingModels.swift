@@ -24,6 +24,7 @@ struct RecordingManifest: Codable {
         let height: Int
         let framesPerSecond: Int
         var firstFrameTimestampNs: UInt64?
+        var videoTracks: [RecordingVideoTrack]
     }
 
     struct Web: Codable {
@@ -67,12 +68,28 @@ extension RecordingManifest {
         }
         let requiredFiles = manifest.dataSource == .rrweb
             ? ["rrweb"]
-            : ["video", "events", "workspace", "accessibility"]
+            : ["events", "workspace", "accessibility"]
         for key in requiredFiles {
             _ = try manifest.fileURL(for: key, in: packageURL)
         }
         if manifest.dataSource == .rrweb, manifest.web == nil {
             throw RecordingError.capture("The Safari recording is missing its web metadata.")
+        }
+        if manifest.dataSource == .native {
+            let tracks = manifest.capture.videoTracks
+            guard !tracks.isEmpty, Set(tracks.map(\.id)).count == tracks.count,
+                  Set(tracks.map(\.file)).count == tracks.count,
+                  manifest.capture.frame.isValid,
+                  manifest.capture.displayScale.isFinite, manifest.capture.displayScale > 0,
+                  (1...Int(Int32.max)).contains(manifest.capture.width),
+                  (1...Int(Int32.max)).contains(manifest.capture.height),
+                  (1...Int(Int32.max)).contains(manifest.capture.framesPerSecond) else {
+                throw RecordingError.capture("The native recording has an invalid video track catalog.")
+            }
+            for track in tracks {
+                try track.validate()
+                _ = try manifest.evidenceURL(for: track.file, in: packageURL)
+            }
         }
         return manifest
     }
@@ -81,9 +98,13 @@ extension RecordingManifest {
         guard let relativePath = files[key], !relativePath.isEmpty else {
             throw RecordingError.capture("Recording manifest is missing its \(key) evidence path.")
         }
+        return try evidenceURL(for: relativePath, in: packageURL)
+    }
+
+    func evidenceURL(for relativePath: String, in packageURL: URL) throws -> URL {
         let components = NSString(string: relativePath).pathComponents
-        guard !relativePath.hasPrefix("/"), !components.contains("..") else {
-            throw RecordingError.capture("Recording manifest has an unsafe \(key) evidence path.")
+        guard !relativePath.isEmpty, !relativePath.hasPrefix("/"), !components.contains("..") else {
+            throw RecordingError.capture("Recording manifest has an unsafe evidence path.")
         }
         return packageURL.appendingPathComponent(relativePath)
     }
@@ -104,6 +125,13 @@ public struct RecordingRect: Codable, Equatable, Sendable {
     public let y: Double
     public let width: Double
     public let height: Double
+
+    public init(x: Double, y: Double, width: Double, height: Double) {
+        self.x = x
+        self.y = y
+        self.width = width
+        self.height = height
+    }
 }
 
 struct RecordingDisplay: Codable, Equatable, Sendable {

@@ -262,6 +262,7 @@ message AnnotationTraceSample {
 message AnnotationTrace {
   repeated AnnotationTraceSample samples = 1;
   double line_width = 2;
+  optional Rect coordinate_frame = 3;
 }
 
 message RecordingAnnotation {

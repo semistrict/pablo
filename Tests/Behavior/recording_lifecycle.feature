@@ -69,7 +69,7 @@ Feature: Record one Mac application on a single monotonic timeline
     And the user stops recording in Pablo
     Then Pablo returns to Ready without disappearing
     And one `.pablo` package is finalized in the selected output directory
-    And the package contains `manifest.json`, `video.mov`, `events.pb`, `workspace.pb`, and `accessibility.pb`
+    And the package contains `manifest.json`, `video/VIDEO-001.mov`, `events.pb`, `workspace.pb`, and `accessibility.pb`
     And the video is playable
     And all artifact timestamps share the recording timeline
 

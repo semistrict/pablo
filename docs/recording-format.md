@@ -17,13 +17,13 @@ Every observed process instance receives a recording-local stable reference such
 
 The manifest declares schema version 3 and a `dataSource` of `native` or
 `rrweb`. Native recordings declare application/display scope, capture geometry,
-video properties, and protobuf evidence paths. rrweb recordings declare tab,
+video tracks, and protobuf evidence paths. rrweb recordings declare tab,
 privacy, lifecycle, and rrweb-version metadata plus the `events.json` path.
 The field is required; there is no fallback decoder for manifests that omit it.
 
 ## Workspace stream
 
-`workspace.pb` contains `pablo.v3.WorkspaceSnapshotRecord` messages. Each record is a complete view of applications and windows intersecting the capture scope at that timestamp. It names the frontmost application and explicitly lists appeared and removed application and window identities.
+`workspace.pb` contains `pablo.v3.WorkspaceSnapshotRecord` messages. Each record is a complete view of the capture scope at that timestamp, with appeared and removed identities. Application scope includes all observed windows belonging to the selected process across displays. An off-screen or minimized window retains its identity and has `isOnScreen: false`; a closed window is removed. The frontmost application is named only when it belongs to the scope. Display scope includes visible windows intersecting that display.
 
 A consumer selects the last workspace record at or before a playback point. No process lookup is required during replay.
 
@@ -57,7 +57,11 @@ Nodes include topology, accessibility semantics, interaction state, and global s
 
 ## Video and geometry
 
-Application scope records the selected application's largest visible window. Display scope records the selected display with no application exclusions. Both store the global captured rectangle in `manifest.capture.frame`.
+Application scope uses an application filter for every connected display. Existing and newly opened eligible windows are included without choosing a single window. Display scope records only the selected display with no application exclusions.
+
+`manifest.capture.videoTracks` is the native video catalog. Each track identifies a `VIDEO-###` reference, relative `file` path (normally `video/VIDEO-###.mov`), display ID, desktop frame, pixel dimensions, scale, frame rate, start time, optional first-frame time, optional end time, and end reason. Frames use the shared host clock with pause intervals removed. A display disconnect ends its track; reconnecting or changing geometry creates a new track. An explicit system stop ends capture without restarting streams. A track that received no frames has no movie and a null first-frame timestamp.
+
+`manifest.capture.frame` is the union of every track's desktop rectangle over the session, in Quartz logical points (top-left origin, including negative coordinates). Pixel dimensions describe the replay canvas at the maximum track scale. Playback composes tracks at their recorded positions and times through one media clock; ended or not-yet-started tracks contribute no image. The original movies remain separate evidence files.
 
 To map evidence to movie time:
 
@@ -65,13 +69,15 @@ To map evidence to movie time:
 movieTimeNs = max(0, evidenceTimestampNs - firstFrameTimestampNs)
 ```
 
-For display scope, accessibility rectangles normalize against `manifest.capture.frame`. For application scope, they normalize against the captured window.
+The global first-frame timestamp is the earliest captured frame across tracks. Each track's first frame is inserted at its own offset from that origin. Accessibility rectangles normalize against the recording canvas for both scopes.
+
+Replay's All windows view shows the recorded desktop arrangement. Window focus crops to the selected window's current recorded bounds while keeping the same time and player. When its window or display has no recorded view at that time, replay shows an unavailable state. Cropping cannot reveal pixels hidden behind overlapping windows.
 
 ## Annotation journal
 
 `annotations.pb` is an optional append-only stream of `pablo.v3.RecordingAnnotation`. It is markup, not captured evidence, and remains absent from the manifest evidence file map.
 
-Each complete state has stable `NOTE-###` sequence identity. Anchors can name application identities, accessibility frames, namespaced nodes, a time interval, and a normalized spatiotemporal freehand trace. Resolving appends a state; it never rewrites evidence or an earlier state.
+Each complete state has stable `NOTE-###` sequence identity. Anchors can name application identities, accessibility frames, namespaced nodes, a time interval, and a normalized spatiotemporal freehand trace. Each stored trace retains its desktop `coordinateFrame`; normalized samples and line width refer to that frame. A draft may omit the frame to use the recording canvas at append time. Replay maps the retained frame into its current view, so adding a display or focusing a window never changes where existing markup belongs. Resolving appends a state; it never rewrites evidence or an earlier state.
 
 Safari rrweb packages use the same journal. Their notes are time-anchored and
 may reference selected web events; spatial video traces and accessibility-frame

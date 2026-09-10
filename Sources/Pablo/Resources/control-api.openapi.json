@@ -608,6 +608,32 @@
           "lineWidth"
         ],
         "properties": {
+          "coordinateFrame": {
+            "type": "object",
+            "description": "Desktop bounds in logical points for the normalized samples. If omitted, Pablo binds the trace to the recording canvas when the annotation is added. Stored traces retain this frame across display changes.",
+            "required": [
+              "x",
+              "y",
+              "width",
+              "height"
+            ],
+            "properties": {
+              "x": {
+                "type": "number"
+              },
+              "y": {
+                "type": "number"
+              },
+              "width": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "height": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              }
+            }
+          },
           "samples": {
             "type": "array",
             "items": {

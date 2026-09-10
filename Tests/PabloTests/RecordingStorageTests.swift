@@ -11,6 +11,7 @@ func recordingsUseTheDocumentsDirectory() {
 }
 
 @Test("Default application recording names include a filename-safe application name")
+@MainActor
 func defaultApplicationRecordingNamesIncludeTheApplication() throws {
     let directory = URL(fileURLWithPath: "/private/tmp/Pablo Recordings", isDirectory: true)
     let date = Date(timeIntervalSince1970: 1_700_000_000)

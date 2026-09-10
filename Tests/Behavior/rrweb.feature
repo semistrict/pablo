@@ -28,7 +28,7 @@ Feature: Record and replay an explicitly unlocked Safari tab
   Scenario: Web recording packages identify their tab and privacy policy
     Given an unlocked Safari tab has a title and URL
     When Pablo creates a `.pablo` package with an rrweb event source
-    Then its filename includes Safari and a safe form of the tab title
+    Then its filename uses Safari as the captured application name and includes a timestamp
     And simultaneous names remain unique
     And its manifest identifies the tab, recording UUID, rrweb version, and start time
     And its manifest states that input values are masked

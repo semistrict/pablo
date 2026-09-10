@@ -17,6 +17,8 @@ Requires macOS 14 or newer on an Apple silicon Mac.
 
 Recordings are saved to `~/Documents/Pablo Recordings`; application recording filenames include the application name by default. Open one in Pablo to replay the video, move through indexed accessibility frames such as `A11Y-012`, and trace circles, underlines, or arbitrary shapes directly over time with stable references such as `NOTE-007`.
 
+Recording an application follows its eligible windows across your displays, including windows opened during recording. Replay keeps them on one timeline: choose **All windows** for their desktop arrangement or select a window to focus on its recorded view.
+
 The bundled Safari Web Extension can dump a DOM-derived accessibility tree and
 perform bounded DOM actions without bringing Safari forward. It only receives
 website access after the user clicks its toolbar button for the active tab.

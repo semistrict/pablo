@@ -39,3 +39,5 @@ The `.feature` files in this directory describe intended product behavior in a G
 | `SessionClockTests` | `recording_lifecycle.feature` |
 | `VideoCaptureLifecycleTests` | `recording_lifecycle.feature` |
 | `VideoWriterPipelineTests` | `video_pipeline.feature` |
+| `MultiWindowCaptureTests`, `ApplicationWindowCaptureTests` (opt-in) | `video_pipeline.feature`, `recording_lifecycle.feature` |
+| `ReplayVideoCompositionTests` | `playback.feature`, `annotations.feature` |

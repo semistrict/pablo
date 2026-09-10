@@ -1420,9 +1420,20 @@ nonisolated struct PabloV3AnnotationTrace: Sendable {
 
   var lineWidth: Double = 0
 
+  var coordinateFrame: PabloV3Rect {
+    get {_coordinateFrame ?? PabloV3Rect()}
+    set {_coordinateFrame = newValue}
+  }
+  /// Returns true if `coordinateFrame` has been explicitly set.
+  var hasCoordinateFrame: Bool {self._coordinateFrame != nil}
+  /// Clears the value of `coordinateFrame`. Subsequent reads from it will return its default value.
+  mutating func clearCoordinateFrame() {self._coordinateFrame = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
+
+  fileprivate var _coordinateFrame: PabloV3Rect? = nil
 }
 
 nonisolated struct PabloV3RecordingAnnotation: @unchecked Sendable {
@@ -2783,7 +2794,7 @@ nonisolated extension PabloV3AnnotationTraceSample: SwiftProtobuf.Message, Swift
 
 nonisolated extension PabloV3AnnotationTrace: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AnnotationTrace"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}samples\0\u{3}line_width\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}samples\0\u{3}line_width\0\u{3}coordinate_frame\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2793,24 +2804,33 @@ nonisolated extension PabloV3AnnotationTrace: SwiftProtobuf.Message, SwiftProtob
       switch fieldNumber {
       case 1: try { try decoder.decodeRepeatedMessageField(value: &self.samples) }()
       case 2: try { try decoder.decodeSingularDoubleField(value: &self.lineWidth) }()
+      case 3: try { try decoder.decodeSingularMessageField(value: &self._coordinateFrame) }()
       default: break
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
     if !self.samples.isEmpty {
       try visitor.visitRepeatedMessageField(value: self.samples, fieldNumber: 1)
     }
     if self.lineWidth.bitPattern != 0 {
       try visitor.visitSingularDoubleField(value: self.lineWidth, fieldNumber: 2)
     }
+    try { if let v = self._coordinateFrame {
+      try visitor.visitSingularMessageField(value: v, fieldNumber: 3)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: PabloV3AnnotationTrace, rhs: PabloV3AnnotationTrace) -> Bool {
     if lhs.samples != rhs.samples {return false}
     if lhs.lineWidth != rhs.lineWidth {return false}
+    if lhs._coordinateFrame != rhs._coordinateFrame {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

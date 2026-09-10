@@ -56,6 +56,10 @@ final class ReplayModel: ObservableObject {
     @Published private(set) var errorMessage: String?
     let player = AVPlayer()
     private weak var webPlaybackController: RRWebPlaybackControlling?
+    private var videoLoadTask: Task<Void, Never>?
+    private var videoLoadID = UUID()
+    @Published private(set) var videoIsLoading = false
+    @Published private(set) var focusedWindowID: String?
 
     var recording: ReplayRecording? {
         guard case .native(let recording) = source else { return nil }
@@ -76,7 +80,7 @@ final class ReplayModel: ObservableObject {
     var sourceKind: ReplaySourceKind? { recording == nil ? (webRecording == nil ? nil : .web) : .native }
     var duration: TimeInterval {
         if let recording {
-            return max(0.001, TimeInterval(recording.durationNs ?? 0) / 1_000_000_000)
+            return max(0.001, recording.videoTime(forTimestampNs: recording.durationNs ?? 0))
         }
         return webReplayData?.duration ?? 0.001
     }
@@ -116,27 +120,30 @@ final class ReplayModel: ObservableObject {
         recording?.workspaceStep(atVideoTime: currentVideoTime)
     }
 
+    var focusedWindowFrame: RecordingRect? {
+        guard let focusedWindowID else { return nil }
+        return recording?.windowFrame(id: focusedWindowID, atVideoTime: currentVideoTime)
+    }
+
+    var videoViewport: RecordingRect? {
+        guard let recording else { return nil }
+        return focusedWindowFrame ?? recording.captureFrame
+    }
+
+    func focusWindow(_ id: String?) {
+        guard id == nil || recording?.windows.contains(where: { $0.id == id }) == true else { return }
+        focusedWindowID = id
+        beginTrace()
+    }
+
     var selectedNodeVideoRegion: CGRect? {
-        guard let selectedStep, let node = selectedNode, let frame = node.frame,
+        guard let node = selectedNode, let frame = node.frame,
               frame.width > 0, frame.height > 0 else { return nil }
-        let nodesByID = Dictionary(uniqueKeysWithValues: selectedStep.nodes.map { ($0.id, $0) })
-        var ancestor: ReplayAccessibilityNode? = node
-        var visited = Set<String>()
-        let referenceFrame: ReplayAccessibilityFrame?
-        if recording?.scope == .display, let capture = recording?.captureFrame {
-            referenceFrame = ReplayAccessibilityFrame(
-                x: capture.x, y: capture.y, width: capture.width, height: capture.height
+        let referenceFrame = recording.map { capture in
+            ReplayAccessibilityFrame(
+                x: capture.captureFrame.x, y: capture.captureFrame.y,
+                width: capture.captureFrame.width, height: capture.captureFrame.height
             )
-        } else {
-            var windowFrame: ReplayAccessibilityFrame?
-            while let current = ancestor, visited.insert(current.id).inserted {
-                if current.role == "AXWindow", let candidate = current.frame {
-                    windowFrame = candidate
-                    break
-                }
-                ancestor = current.parentID.flatMap { nodesByID[$0] }
-            }
-            referenceFrame = windowFrame
         }
         guard let referenceFrame, referenceFrame.width > 0, referenceFrame.height > 0 else { return nil }
         let region = CGRect(
@@ -295,7 +302,7 @@ final class ReplayModel: ObservableObject {
     }
 
     func updateCurrentVideoTime() {
-        guard recording != nil else { return }
+        guard recording != nil, !videoIsLoading else { return }
         let seconds = player.currentTime().seconds
         guard seconds.isFinite else { return }
         let value = max(0, seconds)
@@ -415,7 +422,9 @@ final class ReplayModel: ObservableObject {
             let currentTimestamp = recording.sessionTimestampNs(forVideoTime: currentVideoTime)
             let trace = draftTraceSamples.isEmpty
                 ? nil
-                : RecordingAnnotationTrace(samples: draftTraceSamples, lineWidth: lineWidth)
+                : RecordingAnnotationTrace(
+                    samples: draftTraceSamples, lineWidth: lineWidth, coordinateFrame: recording.captureFrame
+                )
             let startTimestamp = trace?.startTimestampNs ?? currentTimestamp
             let endTimestamp = trace?.endTimestampNs ?? currentTimestamp
             var applicationIDs = Set(selectedStep.map { [$0.applicationID] } ?? [])
@@ -493,6 +502,10 @@ final class ReplayModel: ObservableObject {
     }
 
     private func load(_ url: URL) -> Bool {
+        videoLoadTask?.cancel()
+        videoLoadID = UUID()
+        videoIsLoading = false
+        focusedWindowID = nil
         do {
             if let webRecording = try? PabloRRWebRecordingStorage.load(url) {
                 let replayData = try PabloRRWebReplayData(recording: webRecording)
@@ -507,7 +520,8 @@ final class ReplayModel: ObservableObject {
                 annotations = recording.annotations
                 timelineItems = recording.timelineItems(annotations: annotations)
                 selectedStepID = recording.accessibilitySteps.first?.id
-                player.replaceCurrentItem(with: AVPlayerItem(url: recording.videoURL))
+                player.replaceCurrentItem(with: nil)
+                prepareVideo(recording)
             }
             selectedNodeID = nil
             selectedAnnotationID = nil
@@ -530,6 +544,28 @@ final class ReplayModel: ObservableObject {
             player.replaceCurrentItem(with: nil)
             errorMessage = error.localizedDescription
             return false
+        }
+    }
+
+    private func prepareVideo(_ recording: ReplayRecording) {
+        let loadID = videoLoadID
+        videoIsLoading = true
+        videoLoadTask = Task { [weak self] in
+            do {
+                let item = try await ReplayVideoComposition.makeItem(recording: recording)
+                guard let self, self.videoLoadID == loadID, !Task.isCancelled else { return }
+                self.player.replaceCurrentItem(with: item)
+                await self.player.seek(to: CMTime(seconds: self.currentVideoTime, preferredTimescale: 600))
+                guard self.videoLoadID == loadID, !Task.isCancelled else { return }
+                self.player.defaultRate = self.playbackRate
+                if self.isPlaying { self.player.play() }
+                self.videoIsLoading = false
+            } catch {
+                guard let self, self.videoLoadID == loadID, !Task.isCancelled else { return }
+                self.videoIsLoading = false
+                self.isPlaying = false
+                self.errorMessage = error.localizedDescription
+            }
         }
     }
 
@@ -814,9 +850,23 @@ struct ReplayView: View {
     private func reviewMain(_ recording: ReplayRecording) -> some View {
         VStack(alignment: .leading, spacing: 12) {
             recordingHeader(recording)
+            Picker("View", selection: Binding(
+                get: { model.focusedWindowID },
+                set: { model.focusWindow($0) }
+            )) {
+                Text("All windows").tag(String?.none)
+                ForEach(recording.windows, id: \.id) { window in
+                    Text(window.title.flatMap { $0.isEmpty ? nil : $0 } ?? "Window \(window.systemWindowID)")
+                        .tag(Optional(window.id))
+                }
+            }
+            .pickerStyle(.menu)
+            .frame(maxWidth: 420, alignment: .leading)
             videoToolPicker
             VideoMarkupCanvas(
                 recording: recording,
+                viewport: model.videoViewport ?? recording.captureFrame,
+                windowUnavailable: model.focusedWindowID != nil && model.focusedWindowFrame == nil,
                 player: model.player,
                 annotations: model.annotations,
                 selectedAnnotationID: model.selectedAnnotationID,
@@ -840,6 +890,13 @@ struct ReplayView: View {
                 cancelTrace: model.beginTrace,
                 selectAnnotation: model.selectAnnotation
             )
+            .overlay {
+                if model.videoIsLoading {
+                    ProgressView("Preparing recording…")
+                        .padding(16)
+                        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 10))
+                }
+            }
             UnifiedTimeline(model: model)
         }
         .padding(16)
@@ -975,6 +1032,8 @@ private struct RecordingBrowser: View {
 
 private struct VideoMarkupCanvas: View {
     let recording: ReplayRecording
+    let viewport: RecordingRect
+    let windowUnavailable: Bool
     let player: AVPlayer
     let annotations: [RecordingAnnotation]
     let selectedAnnotationID: UUID?
@@ -998,11 +1057,20 @@ private struct VideoMarkupCanvas: View {
 
     var body: some View {
         ZStack {
-            VideoPlayer(player: player)
-                .accessibilityHidden(true)
             GeometryReader { geometry in
+                ReplayVideoSurface(player: player)
+                    .frame(
+                        width: geometry.size.width * recording.captureFrame.width / viewport.width,
+                        height: geometry.size.height * recording.captureFrame.height / viewport.height
+                    )
+                    .offset(
+                        x: -geometry.size.width * (viewport.x - recording.captureFrame.x) / viewport.width,
+                        y: -geometry.size.height * (viewport.y - recording.captureFrame.y) / viewport.height
+                    )
+                    .accessibilityHidden(true)
                 TraceOverlay(
                     recording: recording,
+                    viewport: viewport,
                     annotations: annotations,
                     selectedAnnotationID: selectedAnnotationID,
                     currentVideoTime: currentVideoTime,
@@ -1011,7 +1079,12 @@ private struct VideoMarkupCanvas: View {
                 )
                 if let selectedNodeRegion {
                     AccessibilityBoundsOverlay(
-                        region: selectedNodeRegion,
+                        region: viewport.normalizedRect(for: RecordingRect(
+                            x: recording.captureFrame.x + selectedNodeRegion.minX * recording.captureFrame.width,
+                            y: recording.captureFrame.y + selectedNodeRegion.minY * recording.captureFrame.height,
+                            width: selectedNodeRegion.width * recording.captureFrame.width,
+                            height: selectedNodeRegion.height * recording.captureFrame.height
+                        )),
                         label: selectedNodeName,
                         size: geometry.size
                     )
@@ -1034,8 +1107,18 @@ private struct VideoMarkupCanvas: View {
                     .position(commentPosition(for: endpoint, in: geometry.size))
                 }
             }
+            .clipped()
+            .opacity(windowUnavailable ? 0 : 1)
+            .allowsHitTesting(!windowUnavailable)
+            if windowUnavailable {
+                ContentUnavailableView(
+                    "Window unavailable",
+                    systemImage: "macwindow",
+                    description: Text("This window has no recorded view at the current time. Choose All windows or move along the timeline.")
+                )
+            }
         }
-        .aspectRatio(recording.videoAspectRatio, contentMode: .fit)
+        .aspectRatio(viewport.width / max(1, viewport.height), contentMode: .fit)
         .frame(maxWidth: .infinity, alignment: .center)
         .background(.black)
         .clipShape(RoundedRectangle(cornerRadius: 10))
@@ -1098,9 +1181,13 @@ private struct VideoMarkupCanvas: View {
     }
 
     private func appendPoint(at point: CGPoint, in size: CGSize) {
+        let canvasPoint = recording.captureFrame.normalizedPoint(
+            x: min(max(point.x / size.width, 0), 1),
+            y: min(max(point.y / size.height, 0), 1),
+            from: viewport
+        )
         appendPoint(
-            min(max(point.x / size.width, 0), 1),
-            min(max(point.y / size.height, 0), 1)
+            min(max(canvasPoint.x, 0), 1), min(max(canvasPoint.y, 0), 1)
         )
     }
 
@@ -1115,7 +1202,7 @@ private struct VideoMarkupCanvas: View {
                 pointToleranceNs: frameTolerance,
                 tailDurationNs: frameTolerance
             )
-            let points = samples.map { CGPoint(x: size.width * $0.x, y: size.height * $0.y) }
+            let points = trace.samples(samples, in: viewport).map { CGPoint(x: size.width * $0.x, y: size.height * $0.y) }
             if points.contains(where: { hypot($0.x - point.x, $0.y - point.y) <= threshold }) {
                 return true
             }
@@ -1138,9 +1225,10 @@ private struct VideoMarkupCanvas: View {
         for endpoint: RecordingAnnotationTraceSample,
         in size: CGSize
     ) -> CGPoint {
-        let point = CGPoint(x: size.width * endpoint.x, y: size.height * endpoint.y)
+        let normalized = viewport.normalizedPoint(x: endpoint.x, y: endpoint.y, from: recording.captureFrame)
+        let point = CGPoint(x: size.width * normalized.x, y: size.height * normalized.y)
         let halfWidth: CGFloat = 135
-        let proposedX = endpoint.x > 0.62
+        let proposedX = normalized.x > 0.62
             ? point.x - halfWidth - 16
             : point.x + halfWidth + 16
         return CGPoint(
@@ -1232,6 +1320,7 @@ private struct DraftCommentBubble: View {
 
 private struct TraceOverlay: View {
     let recording: ReplayRecording
+    let viewport: RecordingRect
     let annotations: [RecordingAnnotation]
     let selectedAnnotationID: UUID?
     let currentVideoTime: TimeInterval
@@ -1252,17 +1341,20 @@ private struct TraceOverlay: View {
                     tailDurationNs: frameTolerance
                 )
                 draw(
-                    samples,
-                    lineWidth: trace.lineWidth,
+                    trace.samples(samples, in: viewport),
+                    lineWidth: trace.lineWidth(in: viewport),
                     color: annotationColor(annotation.kind),
                     emphasized: annotation.id == selectedAnnotationID,
                     in: &context,
                     size: size
                 )
             }
+            let draft = RecordingAnnotationTrace(
+                samples: draftSamples, lineWidth: draftLineWidth, coordinateFrame: recording.captureFrame
+            )
             draw(
-                draftSamples,
-                lineWidth: draftLineWidth,
+                draft.samples(draftSamples, in: viewport),
+                lineWidth: draft.lineWidth(in: viewport),
                 color: .yellow,
                 emphasized: true,
                 in: &context,
