@@ -59,6 +59,16 @@ Nodes include topology, accessibility semantics, interaction state, and global s
 
 Application scope uses an application filter for every connected display. Existing and newly opened eligible windows are included without choosing a single window. Display scope records only the selected display with no application exclusions.
 
+Native capture retains sticky `streamIssues` in its finalized manifest when input,
+workspace, accessibility, video, or manifest writing fails. Each issue identifies the
+stream, failure count, first and last session timestamps, and a bounded error message.
+Later successful writes do not erase an earlier gap. Live control status exposes these
+issues during capture; stop reports interrupted or failed completeness and keeps the
+package for inspection. A manifest write failure can only be reported by the live app
+and its retained completion when that same file cannot be updated. Healthy finalized
+captures carry an empty issue list; older current-v3 manifests can omit the optional
+health diagnostic. This is not a decoder for older recording schema versions.
+
 `manifest.capture.videoTracks` is the native video catalog. Each track identifies a `VIDEO-###` reference, relative `file` path (normally `video/VIDEO-###.mov`), display ID, desktop frame, pixel dimensions, scale, frame rate, start time, optional first-frame time, optional end time, and end reason. Frames use the shared host clock with pause intervals removed. A display disconnect ends its track; reconnecting or changing geometry creates a new track. An explicit system stop ends capture without restarting streams. A track that received no frames has no movie and a null first-frame timestamp.
 
 `manifest.capture.frame` is the union of every track's desktop rectangle over the session, in Quartz logical points (top-left origin, including negative coordinates). Pixel dimensions describe the replay canvas at the maximum track scale. Playback composes tracks at their recorded positions and times through one media clock; ended or not-yet-started tracks contribute no image. The original movies remain separate evidence files.
@@ -90,3 +100,9 @@ The app accepts one HTTP/1.1 request and response per Unix-domain socket connect
 ## Compatibility policy
 
 Pablo accepts only recording schema version 3. The HTTP/JSON control API has unversioned URLs and no compatibility fallback. There is no migration, fallback decoder, legacy target field, or dual-write path. Do not reuse or renumber v3 recording protobuf fields. Change the source proto, run Buf, and update all evidence producers, consumers, and behavior tests together. Change the JSON control models, client, server, API documentation, and behavior tests together when the control contract changes.
+
+Safari automation traces additionally preserve `safariTarget`: the requested tab ID,
+document generation, opaque DOM node ID and/or selector. These fields are distinct
+from a native live session/window target. Set-value traces retain only character count,
+never the supplied value. Requested/outcome records share the UUID returned by the
+control call or recoverable operation receipt.

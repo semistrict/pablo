@@ -55,6 +55,42 @@ func replayWindowFocusPreservesTimeAndCoordinates() async throws {
     #expect(model.videoViewport == recording.captureFrame)
 }
 
+@MainActor
+@Test("Review image export returns the settled crop with matching provenance and immutable evidence")
+func reviewImageExportMatchesCrop() async throws {
+    let package = try await makeMultiDisplayReplayPackage()
+    defer { try? FileManager.default.removeItem(at: package) }
+    let before = try Data(contentsOf: package.appendingPathComponent("manifest.json"))
+    let model = ReplayModel()
+    #expect(model.loadLatest(preferredURL: package, directory: package))
+    let registry = ReviewSessionRegistry()
+    registry.register(model)
+    defer { registry.remove(model.reviewID) }
+    var state = try registry.state(model.reviewID)
+    let command = PabloReviewCommandRequest(reviewID: model.reviewID, serviceID: registry.serviceID,
+        expectedSourceGeneration: try #require(state.source?.generation), expectedRevision: state.revision,
+        command: .init(kind: .seek, seconds: 1.5))
+    let settled = try await registry.perform(command, caller: "Fixture app")
+    #expect(settled.status == .completed)
+    model.focusWindow("APP-001:WIN-2")
+    state = try registry.state(model.reviewID)
+    let request = PabloReviewEvidenceRequest(reviewID: model.reviewID, serviceID: registry.serviceID,
+        expectedSourceGeneration: try #require(state.source?.generation), expectedRevision: state.revision,
+        kind: .image, maxPixelDimension: 160)
+    let result = try await registry.evidence(request)
+    #expect(result.state.source == state.source)
+    #expect(result.state.viewport == RecordingRect(x: 0, y: 0, width: 40, height: 30))
+    let exported = try #require(result.image)
+    #expect(exported.width == 80)
+    #expect(exported.height == 60)
+    #expect(abs(exported.renderedSeconds - 1.5) < 0.04)
+    let bytes = try #require(Data(base64Encoded: exported.base64))
+    let image = try #require(NSBitmapImageRep(data: bytes)?.cgImage)
+    try expectPixel(image, x: 40, y: 30, green: true)
+    #expect(try Data(contentsOf: package.appendingPathComponent("manifest.json")) == before)
+    #expect(!FileManager.default.fileExists(atPath: package.appendingPathComponent("annotations.pb").path))
+}
+
 @Test("Stored annotation coordinates survive expansion of the recording canvas")
 func annotationCoordinatesSurviveDisplayChanges() throws {
     let originalCanvas = RecordingRect(x: 0, y: 0, width: 100, height: 100)
@@ -65,6 +101,81 @@ func annotationCoordinatesSurviveDisplayChanges() throws {
     )
     #expect(trace.samples(trace.samples, in: expandedCanvas) == [.init(timestampNs: 100, x: 0.75, y: 0.5)])
     #expect(trace.lineWidth(in: expandedCanvas) == 0.01)
+}
+
+@MainActor
+@Test("Selecting a note while native video loads settles at the note's exact time")
+func initialNativeNoteSelectionSettlesAtRequestedTime() async throws {
+    let package = FileManager.default.temporaryDirectory.appendingPathComponent("pablo-initial-seek-\(UUID()).pablo")
+    try FileManager.default.createDirectory(at: package, withIntermediateDirectories: false)
+    defer { try? FileManager.default.removeItem(at: package) }
+    // A variable frame rate keeps annotation times independent of encoded sample boundaries.
+    try await writeSolidTestVideo(to: package.appendingPathComponent("video.mov"), width: 160, height: 120,
+        color: .green, duration: 4, framesPerSecond: 15,
+        frameTimes: (0..<56).map { Double($0) * 0.0715 })
+    var manifest = testManifest()
+    manifest.capture = .native(tracks: [.init(id: "VIDEO-001", displayID: 1, file: "video.mov",
+        frame: .init(x: 0, y: 0, width: 160, height: 120), width: 160, height: 120, displayScale: 1,
+        framesPerSecond: 15, startedTimestampNs: 0, firstFrameTimestampNs: 346_085_834,
+        endedTimestampNs: 4_346_085_834, endReason: .recordingStopped)], framesPerSecond: 15)
+    manifest.durationNs = 4_346_085_834
+    try JSONEncoder().encode(manifest).write(to: package.appendingPathComponent("manifest.json"))
+    for file in ["events.pb", "workspace.pb", "accessibility.pb"] { try Data().write(to: package.appendingPathComponent(file)) }
+    let note = try RecordingAnnotationStore.add(to: package,
+        draft: .init(kind: .observation, text: "Between encoded frames", startTimestampNs: 2_346_085_834),
+        author: .localHuman)
+    let model = ReplayModel()
+    #expect(model.loadLatest(preferredURL: package, directory: package))
+    let openingDeadline = ContinuousClock.now.advanced(by: .seconds(5))
+    while model.player.currentItem == nil, ContinuousClock.now < openingDeadline { await Task.yield() }
+    _ = try #require(model.player.currentItem)
+    let registry = ReviewSessionRegistry()
+    registry.register(model)
+    defer { registry.remove(model.reviewID) }
+    let state = try registry.state(model.reviewID)
+    let result = try await registry.perform(.init(reviewID: model.reviewID, serviceID: registry.serviceID,
+        expectedSourceGeneration: try #require(state.source?.generation), expectedRevision: state.revision,
+        command: .init(kind: .selectAnnotation, reference: note.reference)), caller: "Fixture app")
+    #expect(result.status == .completed)
+    let settled = try registry.state(model.reviewID)
+    #expect(settled.selection?.reference == note.reference)
+    #expect(abs(settled.playheadSeconds - 2) <= 0.06)
+    #expect(abs(try #require(settled.renderedSeconds) - 2) <= 0.06)
+}
+
+@MainActor
+@Test("Native replay can seek beyond the final video track without inventing available video")
+func nativeReplaySeeksBeyondCapturedVideo() async throws {
+    let package = try await makeMultiDisplayReplayPackage()
+    defer { try? FileManager.default.removeItem(at: package) }
+    let manifestURL = package.appendingPathComponent("manifest.json")
+    var manifest = try JSONDecoder().decode(RecordingManifest.self, from: Data(contentsOf: manifestURL))
+    manifest.durationNs = 5_000_000_000
+    try JSONEncoder().encode(manifest).write(to: manifestURL)
+    let model = ReplayModel()
+    #expect(model.loadLatest(preferredURL: package, directory: package))
+    let registry = ReviewSessionRegistry()
+    registry.register(model)
+    defer { registry.remove(model.reviewID) }
+    let state = try registry.state(model.reviewID)
+    let result = try await registry.perform(.init(reviewID: model.reviewID, serviceID: registry.serviceID,
+        expectedSourceGeneration: try #require(state.source?.generation), expectedRevision: state.revision,
+        command: .init(kind: .seek, seconds: 4)), caller: "Fixture app")
+    #expect(result.status == .completed)
+    let settled = try registry.state(model.reviewID)
+    #expect(abs(settled.playheadSeconds - 4) <= 0.06)
+    #expect(abs(try #require(settled.renderedSeconds) - 4) <= 0.06)
+    #expect(settled.videoAvailability == .unavailable)
+    #expect(settled.accessibilityAvailability == .unavailable)
+    #expect(settled.observations.isEmpty)
+    let item = try #require(model.player.currentItem)
+    let generator = AVAssetImageGenerator(asset: item.asset)
+    generator.videoComposition = item.videoComposition
+    generator.requestedTimeToleranceBefore = .zero
+    generator.requestedTimeToleranceAfter = .zero
+    let frame = try await generator.image(at: CMTime(seconds: 4, preferredTimescale: 30)).image
+    try expectPixel(frame, x: 40, y: 30, black: true)
+    try expectPixel(frame, x: 120, y: 90, black: true)
 }
 
 @MainActor
@@ -118,9 +229,10 @@ private func makeMultiDisplayReplayPackage() async throws -> URL {
     }
 }
 
-func writeSolidTestVideo(to url: URL, width: Int, height: Int, color: NSColor, duration: Double) async throws {
+func writeSolidTestVideo(to url: URL, width: Int, height: Int, color: NSColor, duration: Double,
+                         framesPerSecond: Int = 30, frameTimes: [Double]? = nil) async throws {
     let pipeline = try VideoWriterPipeline.prepare(
-        outputURL: url, width: width, height: height, framesPerSecond: 30, expectsMediaDataInRealTime: false
+        outputURL: url, width: width, height: height, framesPerSecond: framesPerSecond, expectsMediaDataInRealTime: false
     )
     var buffer: CVPixelBuffer?
     let result = CVPixelBufferCreate(kCFAllocatorDefault, width, height, kCVPixelFormatType_32BGRA, nil, &buffer)
@@ -140,10 +252,10 @@ func writeSolidTestVideo(to url: URL, width: Int, height: Int, color: NSColor, d
     }
     CVPixelBufferUnlockBaseAddress(pixels, [])
     pipeline.writer.startSession(atSourceTime: .zero)
-    for seconds in [0, duration - 1.0 / 30] {
+    for seconds in frameTimes ?? [0, duration - 1.0 / 30] {
         let deadline = Date().addingTimeInterval(5)
         while !pipeline.input.isReadyForMoreMediaData, Date() < deadline { try await Task.sleep(for: .milliseconds(10)) }
-        #expect(pipeline.adaptor.append(pixels, withPresentationTime: CMTime(seconds: seconds, preferredTimescale: 30)))
+        #expect(pipeline.adaptor.append(pixels, withPresentationTime: CMTime(seconds: seconds, preferredTimescale: 60_000)))
     }
     pipeline.writer.endSession(atSourceTime: CMTime(seconds: duration, preferredTimescale: 30))
     pipeline.input.markAsFinished()

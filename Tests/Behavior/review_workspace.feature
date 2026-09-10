@@ -157,8 +157,8 @@ Feature: Review recordings in one synchronized evidence workspace
     When the tester presses and drags across empty video
     Then no trace or point annotation is created
 
-  @automated
-  # Expected: ReviewSelectionModelTests.annotationSelectionProducesUnifiedContext
+  @signed-app @manual
+  # This checks visible agreement across the video, timeline, and inspector.
   Scenario: Annotation selection yields one unified contextual inspection
     Given an annotation is anchored to an exact time, `A11Y-###` frame, application, and accessibility node
     And the accessibility frame describes a meaningful change to that node
@@ -168,8 +168,8 @@ Feature: Review recordings in one synchronized evidence workspace
     And the same selection drives the video highlight, timeline marker, and inspector content
     And no Markup or Evidence mode switch is required
 
-  @automated
-  # Expected: ReviewSelectionModelTests.annotationSelectionUsesItsExactAnchoredEvidence
+  @signed-app @manual
+  # This checks the inspector's visible evidence provenance.
   Scenario: Annotation context comes from its exact evidence anchor
     Given the playhead's current accessibility frame differs from an annotation's anchored `A11Y-###` frame
     And the annotation identifies one application and one stable accessibility node in its anchored frame
@@ -189,8 +189,8 @@ Feature: Review recordings in one synchronized evidence workspace
     And playback time and selection are preserved
     And Elements, Activity, and Notes have separate inspector sections
 
-  @automated
-  # Expected: ReviewWindowPlacementTests.newRecordingWindowsCascadeWithinVisibleScreen
+  @signed-app @manual
+  # Cascading is owned by AppKit window placement and requires a visible-screen check.
   Scenario: Several recordings receive distinct cascaded window frames
     Given multiple recording windows will open on one visible screen
     When Pablo calculates each new review window frame
@@ -215,8 +215,8 @@ Feature: Review recordings in one synchronized evidence workspace
     And it does not create a duplicate recorder or review window
     And every review window preserves its playback time, timeline zoom, and selection
 
-  @automated
-  # Expected: ReviewWindowPlacementTests.sideBySideFramesTileVisibleReviewWindows
+  @signed-app @manual
+  # Per-display grouping is an AppKit integration check; pure tiling is covered separately.
   Scenario: Side-by-side arrangement tiles visible recording windows
     Given review windows are distributed across two or more displays
     When Pablo calculates the Arrange Side by Side layout
@@ -234,3 +234,168 @@ Feature: Review recordings in one synchronized evidence workspace
     And no review window crosses to another display
     And each recording remains independently playable and inspectable
     And the Window menu identifies every open recording and its key window
+
+  @automated
+  # ReviewSessionTests.reviewSessionIdentityAndCoherentState
+  Scenario: A review snapshot identifies one model and one loaded source generation
+    Given two review models loaded the same package
+    When their states are read through the registry
+    Then the review IDs differ and source IDs agree
+    And tool, inspector visibility, playhead, and renderer readiness come from each model
+    When one model reloads the same path
+    Then its source generation changes and its review ID remains stable
+    When the review is removed
+    Then that review ID can no longer be read
+
+  @automated
+  # ReviewSessionTests.reviewSelectionAndRevision
+  Scenario: A web event replaces an earlier primary note selection
+    Given a web recording has a selected note and a recorded click event
+    When the click event is selected
+    Then the note is deselected and the click becomes the primary selection
+    When normal playback advances
+    Then the logical context revision remains stable
+    When an explicit seek occurs
+    Then the old event selection is cleared and the revision advances
+
+  @automated
+  # ReviewSessionTests.reviewCommandsRespectContextAndReceipts
+  Scenario: Review commands preserve stale context and human draft boundaries
+    Given a caller has read an explicit review source generation and revision
+    When it submits a tool change with a fresh operation ID
+    Then the tool changes and a caller-bound receipt is retained
+    When it repeats the identical request within its retention window
+    Then the original receipt returns without another mutation
+    When it submits a new request using the old revision
+    Then the request reports stale context
+    When the human has unsaved draft text
+    Then an agent seek reports a draft conflict without changing the draft
+
+  @automated
+  # ReviewSessionTests.reviewSeekWaitsForRenderedTime
+  # ReplayVideoCompositionTests.initialNativeNoteSelectionSettlesAtRequestedTime
+  Scenario: A seek receipt waits for observed renderer completion
+    Given a renderer boundary fixture delays reaching the requested time
+    When a review seek is submitted
+    Then its operation remains running while observed time differs
+    When the renderer reports the requested time
+    Then the operation completes with the observed time in its state
+    But if the human changes the review while it is pending
+    Then the operation is interrupted and preserves the human change
+
+  @signed-app @human-approval @manual
+  Scenario: The API and visible review remain synchronized
+    Given the signed app has an open native or web review and the calling app is approved
+    When the caller reads review.list and review.state
+    Then the active review, source, tool, primary selection, crop, and draft match the visible UI
+    When the caller applies a seek using that source generation and revision
+    Then completion identifies the settled renderer time and the visible playhead agrees
+    When the human selects a different tool or source before a context-dependent command arrives
+    Then the old command reports stale context without changing the visible selection
+
+  @automated
+  # ReplayVideoCompositionTests.reviewImageExportMatchesCrop
+  Scenario: A composed recorded frame exports with its current crop
+    Given fixture videos show different colors on two recorded displays
+    When the review settles at a time containing both tracks and focuses the second window
+    Then exported PNG pixels show the second window's color and dimensions
+    And the response identifies its source, viewport, and rendered time
+    And the manifest and annotation journal are unchanged
+
+  @automated
+  # ReplayVideoCompositionTests.nativeReplaySeeksBeyondCapturedVideo
+  Scenario: The review timeline continues after captured video ends
+    Given the recording has evidence timestamps after its final video track ends
+    When the agent seeks to one of those later timestamps
+    Then the visible playhead and renderer settle at the requested time
+    And video availability remains unavailable
+    And the empty composition is black without a stale captured image
+    And absent accessibility observations remain unavailable
+
+  @automated
+  # ReviewSessionTests.reviewEvidenceRangeAndSourcePreconditions
+  Scenario: A timeline query belongs to one source and revision
+    Given a web timeline contains events inside and outside a requested range
+    Then paged queries contain the matching events in order
+    And the next cursor advances without repeating the prior page
+    When the human changes the review context
+    Then the old query precondition is rejected
+
+  @automated
+  # ReviewSessionTests.reviewSourceReplacementPreservesDraft
+  Scenario: Failed loads and source changes preserve unfinished text
+    Given a review has a loaded source
+    When another package fails to load
+    Then the original source remains available
+    When the human has an unfinished note and selects another source
+    Then the source change is rejected and its captured draft remains intact
+
+  @automated
+  # ReviewSessionTests.reviewSeekWaitsForRenderedTime
+  # ControlProtocolTests.controlPendingHandlerDoesNotBlockReads
+  Scenario: A caller can interrupt its pending review command
+    Given a renderer fixture has not yet reached the requested time
+    When the same caller cancels its pending operation
+    Then cancellation is admitted while a mutation is waiting
+    And the receipt becomes interrupted without claiming to undo an issued seek
+    And another caller cannot cancel that receipt
+
+
+  @signed-app @manual
+  Scenario: Recorded point workflows are keyboard and accessibility operable
+    Given a native recording is paused and the video renderer is ready
+    When the tester expands Recorded point controls and enters coordinates between 0 and 1
+    And activates Inspect point with Inspect selected
+    Then the same recorded element as a canvas click is selected with its frame and observation age
+    And no annotation draft is created
+    When the tester selects Pen and adds two trace points using the coordinate fields
+    Then the draft retains both points in the recording canvas coordinate frame
+    When the tester activates Finish trace
+    Then the comment composer is available through native accessibility
+    And Escape cancels the draft without publishing it
+    And invalid coordinates or an unsettled renderer disable point actions
+
+  @signed-app @manual
+  Scenario: Native accessibility names identify temporal controls and selection
+    Given the recording event timeline and inspector are visible
+    Then event navigation identifies Previous meaningful event and Next meaningful event
+    And frame navigation identifies Previous accessibility frame and Next accessibility frame
+    And event markers expose their event descriptions and whether they are selected
+    And the video tool picker exposes the selected tool and playback position exposes its value
+
+
+  @automated
+  # ReviewSessionTests.reviewActivationRequiresObservedWindow
+  Scenario: Window activation requires an observed result
+    Given a review activation callback is awaiting its window observation
+    Then its operation receipt remains running
+    When the observation confirms activation
+    Then the receipt completes and identifies the active review
+    But a rejected activation fails and a cancelled activation is interrupted
+    And neither rejection nor cancellation marks an inactive review active
+
+
+  @automated
+  # ReviewWindowLayoutTests.twoReviewWindowsArrangeSideBySide
+  # ReviewWindowLayoutTests.denseReviewWorkspacesUseBalancedGrid
+  # ReviewWindowLayoutTests.reviewWindowLayoutPreservesDisplayCoordinates
+  Scenario: A calculated grid stays within one display's supplied visible frame
+    Given a supplied visible frame including a negative desktop origin
+    When the layout helper places two or more review windows
+    Then its grid keeps every frame within those bounds without overlapping adjacent windows
+
+  @automated
+  # ReviewSessionTests.quickNoteKeepsCapturedAnchorAndFailedDraft
+  Scenario: Quick-note submission retains the captured anchor and failed draft
+    Given a human starts a quick note and then seeks to another time
+    When the human submits the quick note
+    Then the saved note retains its original timestamp
+    And a failed journal write retains the text and captured anchor
+
+  @automated
+  # ReplayVideoInspectionTests.pinningVideoElementKeepsPlayheadAndDoesNotCreateMarkup
+  Scenario: Clearing a recorded selection does not clear observed evidence
+    Given a native recorded node or accessibility frame is selected
+    When the agent clears the review selection
+    Then the primary selection and pinned evidence are empty
+    And the playhead and sampled accessibility observations are unchanged

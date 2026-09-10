@@ -73,7 +73,7 @@ Feature: Record and replay an explicitly unlocked Safari tab
     Given Pablo Safari is enabled
     And Safari is running but not frontmost
     And the user has clicked Pablo Safari in the active tab
-    When the tester refreshes Safari tabs in Pablo
+    When the tester opens the recorder in Pablo
     Then that tab appears in both the recorder window and menu-bar controls
     When the tester starts, pauses, resumes, and stops its web recording
     Then the visible state and event count follow each transition
@@ -123,3 +123,40 @@ Feature: Record and replay an explicitly unlocked Safari tab
     When Pablo restarts
     Then it reconnects if the same tab recorder and recording ID are still active
     Otherwise it preserves the chunks and marks the recording interrupted
+
+  Scenario: Select one of several unfinished Safari recordings for recovery
+    Given multiple retained Safari packages are unresolved
+    And there is no healthy current Safari recording
+    When the human or approved agent selects one recording ID for recovery
+    Then that package becomes the shared recovery target
+    And every other package and spool remains intact
+    And no package is finalized until its matching stop acknowledgment is validated
+
+  Scenario: The recorder follows Safari access without a refresh button
+    Given the recorder is visible and Pablo Safari is enabled
+    When a Safari tab is unlocked from its toolbar button
+    Then the tab appears automatically in the recorder
+    When the tab navigates to another page on the same origin
+    Then the tab disappears automatically
+    And DOM reads, actions, and recording start require another toolbar unlock
+    And Safari retaining activeTab permission does not extend Pablo access
+    And a background tab discovery failure does not replace a recording failure
+
+  Scenario: Native discovery remains available after Safari becomes idle
+    Given Pablo Safari is enabled and its native connection is established
+    When Safari remains idle for more than two minutes
+    Then tab discovery continues responding without another toolbar click
+    And an explicitly unlocked document remains available until navigation
+    And navigation still expires access even when Safari retains its activeTab permission
+
+  @automated
+  # RecorderLifecycleTests.webRecoveryCanFinishWithoutDestroyedRecorder
+  # ControlProtocolTests.rrwebInterruptedRecoveryContract
+  Scenario: Explicit recovery can finish after the recorder document is destroyed
+    Given an unfinished Safari recording needs recovery after its tab closes or navigates
+    When received evidence is explicitly saved with recoveryAction finishInterrupted
+    Then the package is marked interrupted with its received events
+    And its spool remains available for late delivery
+    And a new Safari recording can start
+    And an unreadable spool leaves recovery active
+    And a healthy recording or mismatched recording ID is rejected

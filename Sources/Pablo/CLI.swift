@@ -14,6 +14,32 @@ public struct RecordOptions {
     public var framesPerSecond = 30
 
     public init() {}
+
+    /// Keeps conversions onto the signed nanosecond timeline representable.
+    public static let maximumTimeInterval = TimeInterval(Int64.max / 1_000_000_000)
+
+    public func validate() throws {
+        let target = PabloLiveApplicationTarget(pid: pid, bundleIdentifier: bundleIdentifier, appName: appName)
+        if scope == .application {
+            try target.validate()
+            guard displayID == nil else {
+                throw RecordingError.usage("An application recording cannot select a display.")
+            }
+        } else if pid != nil || bundleIdentifier != nil || appName != nil {
+            throw RecordingError.usage("A display recording cannot include an application selector.")
+        }
+        guard (1...60).contains(framesPerSecond) else {
+            throw RecordingError.usage("framesPerSecond must be from 1 to 60.")
+        }
+        guard snapshotInterval.isFinite, (0...Self.maximumTimeInterval).contains(snapshotInterval) else {
+            throw RecordingError.usage("snapshotInterval must be a finite, nonnegative timeline interval.")
+        }
+        if let duration {
+            guard duration.isFinite, duration > 0, duration <= Self.maximumTimeInterval else {
+                throw RecordingError.usage("duration must be a finite, positive timeline interval.")
+            }
+        }
+    }
 }
 
 public struct AnnotationOptions {
@@ -61,6 +87,9 @@ public enum InspectionSource: Equatable, Sendable {
 }
 
 public enum Command {
+    case review(PabloControlRequest)
+    case reviewCommandFile(URL)
+    case reviewEvidenceFile(URL)
     case record(RecordOptions)
     case status
     case pause
@@ -71,10 +100,11 @@ public enum Command {
     case recordings(json: Bool)
     case frames(InspectionSource, json: Bool)
     case frame(reference: String, source: InspectionSource, changedOnly: Bool, json: Bool)
-    case events(InspectionSource, limit: Int, json: Bool)
+    case events(InspectionSource, limit: Int, json: Bool, after: UInt64?)
     case workspace(recording: URL?, json: Bool)
     case annotations(InspectionSource, json: Bool)
     case liveAction(PabloLiveActionRequest)
+    case liveObservation(PabloLiveInspectionRequest)
     case annotate(AnnotationOptions)
     case resolveAnnotation(reference: String, recording: URL?)
     case help
@@ -84,6 +114,37 @@ public enum CLI {
     public static func parse(_ arguments: [String]) throws -> Command {
         guard let command = arguments.first else { return .help }
         switch command {
+        case "review":
+            guard let action = arguments.dropFirst().first else {
+                throw RecordingError.usage("review requires list, state, open, command, operation, or watch.")
+            }
+            switch action {
+            case "list" where arguments.count == 2:
+                return .review(.init(method: .listReviews))
+            case "watch" where arguments.count == 2:
+                return .review(.init(method: .watchChanges, changeWatchRequest: .init()))
+            case "watch" where arguments.count == 4:
+                guard let service = UUID(uuidString: arguments[2]), let cursor = UInt64(arguments[3]) else {
+                    throw RecordingError.usage("review watch requires a service UUID and nonnegative cursor.")
+                }
+                return .review(.init(method: .watchChanges, changeWatchRequest: .init(serviceID: service, after: cursor, waitMs: 25_000)))
+            case "state" where arguments.count == 3:
+                guard let id = UUID(uuidString: arguments[2]) else { throw RecordingError.usage("review state requires a review UUID.") }
+                return .review(.init(method: .reviewState, reviewStateRequest: .init(reviewID: id)))
+            case "open" where arguments.count == 3:
+                return .review(.init(method: .openRecording, recordingOpenRequest: .init(recordingPath: URL(fileURLWithPath: arguments[2]).path)))
+            case "evidence" where arguments.count == 3:
+                return .reviewEvidenceFile(URL(fileURLWithPath: arguments[2]))
+            case "command" where arguments.count == 3:
+                return .reviewCommandFile(URL(fileURLWithPath: arguments[2]))
+            case "operation" where arguments.count == 4, "cancel" where arguments.count == 4:
+                guard let service = UUID(uuidString: arguments[2]), let operation = UUID(uuidString: arguments[3]) else {
+                    throw RecordingError.usage("review operation requires service and operation UUIDs.")
+                }
+                return .review(.init(method: arguments[1] == "cancel" ? .cancelReviewOperation : .reviewOperation, reviewOperationRequest: .init(serviceID: service, operationID: operation)))
+            default:
+                throw RecordingError.usage("Invalid review command or argument count.")
+            }
         case "record":
             var options = RecordOptions()
             var index = 1
@@ -138,14 +199,7 @@ public enum CLI {
                 }
                 index += 1
             }
-            let selectors = [options.pid != nil, options.bundleIdentifier != nil, options.appName != nil].filter { $0 }.count
-            if options.scope == .display {
-                guard selectors == 0 else {
-                    throw RecordingError.usage("--screen cannot be combined with an application selector.")
-                }
-            } else if selectors != 1 {
-                throw RecordingError.usage("Choose --screen or exactly one application with --app, --bundle-id, or --pid.")
-            }
+            try options.validate()
             return .record(options)
         case "status":
             try requireNoArguments(arguments, usage: "pablo status")
@@ -159,6 +213,17 @@ public enum CLI {
         case "stop":
             try requireNoArguments(arguments, usage: "pablo stop")
             return .stop
+        case "observe":
+            guard arguments.count >= 2, let kind = ["start": PabloLiveInspectionKind.observationStart,
+                "status": .observationStatus, "read": .events, "stop": .observationStop][arguments[1]] else {
+                throw RecordingError.usage("Usage: pablo observe start|status|read|stop --app NAME [--session UUID] [--after SEQUENCE] [--no-text]")
+            }
+            let parsed = try parseInspectionArguments(Array(arguments.dropFirst(2)), allowsLimit: true, allowsTextOption: true)
+            guard case .live(let target) = parsed.source else { throw RecordingError.usage("Observation requires an explicit live target.") }
+            let request = PabloLiveInspectionRequest(kind: kind, target: target, limit: parsed.limit ?? 100,
+                after: parsed.after, includeText: parsed.includeText)
+            try request.validate()
+            return .liveObservation(request)
         case "inspect":
             let parsed = try parseInspectionArguments(Array(arguments.dropFirst()))
             return .inspect(parsed.source)
@@ -190,7 +255,7 @@ public enum CLI {
             )
         case "events":
             let parsed = try parseInspectionArguments(Array(arguments.dropFirst()), allowsLimit: true)
-            return .events(parsed.source, limit: parsed.limit ?? 100, json: parsed.json)
+            return .events(parsed.source, limit: parsed.limit ?? 100, json: parsed.json, after: parsed.after)
         case "workspace":
             let parsed = try parseRecordingArguments(Array(arguments.dropFirst()))
             return .workspace(recording: parsed.url, json: parsed.json)
@@ -231,6 +296,15 @@ public enum CLI {
       pablo pause
       pablo resume
       pablo stop
+      pablo review list
+      pablo review state REVIEW-ID
+      pablo review watch [SERVICE-ID CURSOR]
+      pablo review open recording.pablo
+      pablo review command request.json
+      pablo review operation SERVICE-ID OPERATION-ID
+      pablo review cancel SERVICE-ID OPERATION-ID
+      pablo review evidence request.json
+      pablo observe start|status|read|stop --app NAME [--session UUID] [--after SEQUENCE] [--no-text]
       pablo recordings [--json]
       pablo latest
       pablo inspect [recording.pablo | live target]
@@ -266,7 +340,10 @@ public enum CLI {
       --unlock-foreground-actions
                                Allow Pablo to activate the target (NOT RECOMMENDED)
       --node ID                Target an accessibility node from a live frame
-      --point X,Y              Target normalized coordinates in the largest window
+      --session UUID           Require this live inspection session
+      --window ID              Target this observed live window (requires --session)
+      --frame REFERENCE        Require the latest live frame (requires --session)
+      --point X,Y              Normalized coordinates in the selected or largest window
       --button BUTTON          left, right, or middle (default: left)
       --count N                Click count from 1 to 3 (default: 1)
       --from X,Y / --to X,Y    Normalized drag endpoints
@@ -313,10 +390,34 @@ public enum CLI {
     }
 
     public static func addAnnotation(_ options: AnnotationOptions) throws -> PabloControlResult {
+        try send(.init(method: .addAnnotation, annotationRequest: prepareAnnotation(options)))
+    }
+
+    public static func prepareAnnotation(_ options: AnnotationOptions) throws -> PabloControlAnnotationRequest {
+        let times = [options.at, options.from, options.to].compactMap { $0 } + options.tracePoints.map(\.videoTime)
+        guard times.allSatisfy({ $0.isFinite && (0...RecordOptions.maximumTimeInterval).contains($0) }) else {
+            throw RecordingError.usage("Annotation times must be finite, nonnegative timeline positions.")
+        }
         guard let text = options.text else {
             throw RecordingError.usage("Annotation text cannot be empty.")
         }
         let packageURL = try resolveRecording(options.recordingURL)
+        let manifest = try RecordingManifest.load(from: packageURL)
+        if manifest.dataSource == .rrweb {
+            guard options.accessibilityReferences.isEmpty, options.accessibilityNodeIDs.isEmpty,
+                  options.tracePoints.isEmpty, options.point == nil else {
+                throw RecordingError.usage("Web notes support time anchors; native accessibility and video traces are unavailable.")
+            }
+            let web = try PabloRRWebRecordingStorage.load(packageURL)
+            let start = options.at ?? options.from
+            let end = options.at ?? options.to
+            return PabloControlAnnotationRequest(recordingPath: packageURL.path, draft: .init(
+                kind: options.kind, text: text,
+                startTimestampNs: start.map { UInt64($0 * 1_000_000_000) },
+                endTimestampNs: end.map { UInt64($0 * 1_000_000_000) },
+                applicationIDs: options.applicationIDs.isEmpty ? ["SAFARI-TAB-\(web.manifest.tab.id)"] : options.applicationIDs,
+                accessibilityReferences: [], accessibilityNodeIDs: [], trace: nil))
+        }
         let recording = try ReplayRecording.load(from: packageURL)
         var startVideoTime = options.at ?? options.from
         var endVideoTime = options.at ?? options.to
@@ -384,13 +485,7 @@ public enum CLI {
             accessibilityNodeIDs: options.accessibilityNodeIDs,
             trace: trace
         )
-        return try send(PabloControlRequest(
-            method: .addAnnotation,
-            annotationRequest: PabloControlAnnotationRequest(
-                recordingPath: packageURL.path,
-                draft: draft
-            )
-        ))
+        return PabloControlAnnotationRequest(recordingPath: packageURL.path, draft: draft)
     }
 
     public static func resolveAnnotation(
@@ -407,14 +502,38 @@ public enum CLI {
         ))
     }
 
-    private static func send(_ request: PabloControlRequest) throws -> PabloControlResult {
-        let response: PabloControlResponse
-        do {
-            response = try PabloControlClient.send(request)
-        } catch {
-            try launchApp()
-            response = try waitForAppAndSend(request)
+    public static func sendReviewCommandFile(_ url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let data = try handle.read(upToCount: 65_537) ?? Data()
+        guard data.count <= 65_536 else { throw RecordingError.usage("The review command file exceeds 64 KiB.") }
+        let command = try PabloControlJSONCodec.decode(PabloReviewCommandRequest.self, from: data)
+        try command.command.validate()
+        return try sendReview(.init(method: .reviewCommand, reviewCommandRequest: command))
+    }
+
+    public static func sendReviewEvidenceFile(_ url: URL) throws -> String {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        let data = try handle.read(upToCount: 65_537) ?? Data()
+        guard data.count <= 65_536 else { throw RecordingError.usage("The review evidence file exceeds 64 KiB.") }
+        let query = try PabloControlJSONCodec.decode(PabloReviewEvidenceRequest.self, from: data)
+        try query.validate()
+        return try sendReview(.init(method: .reviewEvidence, reviewEvidenceRequest: query))
+    }
+
+    public static func sendReview(_ request: PabloControlRequest) throws -> String {
+        let result = try send(request)
+        let output = formatControlResult(result)
+        if request.method == .reviewCommand, case .object(let fields) = result.output,
+           case .string(let status) = fields["status"], !["completed", "running"].contains(status) {
+            throw RecordingError.capture(output)
         }
+        return output
+    }
+
+    private static func send(_ request: PabloControlRequest) throws -> PabloControlResult {
+        let response = try PabloControlClient.sendStartingAppIfNeeded(request, startApp: launchApp)
         if let error = response.error {
             throw RecordingError.capture(error)
         }
@@ -483,13 +602,15 @@ public enum CLI {
     public static func events(
         _ source: InspectionSource,
         limit: Int,
-        json: Bool
+        json: Bool,
+        after: UInt64? = nil
     ) throws -> String {
         switch source {
         case .recording(let url):
+            guard after == nil else { throw RecordingError.usage("--after is a live event cursor; use review evidence for recorded time ranges.") }
             return try events(url, limit: limit, json: json)
         case .live(let target):
-            return try inspectLive(.init(kind: .events, target: target, limit: limit))
+            return try inspectLive(.init(kind: .events, target: target, limit: limit, after: after))
         }
     }
 
@@ -502,7 +623,7 @@ public enum CLI {
         }
     }
 
-    private static func inspectLive(_ inspection: PabloLiveInspectionRequest) throws -> String {
+    public static func inspectLive(_ inspection: PabloLiveInspectionRequest) throws -> String {
         let result = try send(PabloControlRequest(
             method: .inspectLive,
             liveInspectionRequest: inspection
@@ -527,6 +648,14 @@ public enum CLI {
     public static func inspect(_ requestedURL: URL?) throws -> String {
         let packageURL = try resolveRecording(requestedURL)
         let manifest = try RecordingManifest.load(from: packageURL)
+        if manifest.dataSource == .rrweb {
+            let replay = try PabloRRWebReplayData(recording: PabloRRWebRecordingStorage.load(packageURL))
+            var summary = SessionSummary(manifest: manifest, inputEventCount: 0, workspaceRecordCount: 0,
+                                         accessibilityRecordCount: 0,
+                                         annotationCount: try RecordingAnnotationStore.load(from: packageURL).count)
+            summary.webEventCount = replay.events.count
+            return try jsonString(summary)
+        }
         let inputCount = try RecordingStreamReader.events(
             at: try manifest.fileURL(for: "events", in: packageURL)
         ).count
@@ -555,11 +684,14 @@ public enum CLI {
     public static func recordings(json: Bool) throws -> String {
         let urls = try recordingURLs()
         if json {
-            return try jsonString(urls.map { url in
+            return try jsonString(try urls.map { url in
                 RecordingListEntry(
                     path: url.path,
                     name: url.lastPathComponent,
-                    modifiedAt: modificationDate(url)
+                    modifiedAt: modificationDate(url),
+                    dataSource: try RecordingManifest.load(from: url).dataSource.rawValue,
+                    capabilities: try RecordingManifest.load(from: url).dataSource == .rrweb
+                        ? ["events", "annotations", "review"] : ["events", "frames", "workspace", "annotations", "review"]
                 )
             })
         }
@@ -571,7 +703,11 @@ public enum CLI {
     }
 
     public static func frames(_ requestedURL: URL?, json: Bool) throws -> String {
-        let recording = try ReplayRecording.load(from: resolveRecording(requestedURL))
+        let packageURL = try resolveRecording(requestedURL)
+        guard try RecordingManifest.load(from: packageURL).dataSource == .native else {
+            throw RecordingError.usage("Web recordings have no native accessibility frames. Use events for recorded web evidence.")
+        }
+        let recording = try ReplayRecording.load(from: packageURL)
         if json {
             return try jsonString(recording.accessibilitySteps)
         }
@@ -591,7 +727,11 @@ public enum CLI {
         changedOnly: Bool,
         json: Bool
     ) throws -> String {
-        let recording = try ReplayRecording.load(from: resolveRecording(requestedURL))
+        let packageURL = try resolveRecording(requestedURL)
+        guard try RecordingManifest.load(from: packageURL).dataSource == .native else {
+            throw RecordingError.usage("Web recordings have no native accessibility frames. Use events for recorded web evidence.")
+        }
+        let recording = try ReplayRecording.load(from: packageURL)
         let index = try frameIndex(reference)
         guard recording.accessibilitySteps.indices.contains(index) else {
             throw RecordingError.usage(
@@ -619,8 +759,21 @@ public enum CLI {
     }
 
     public static func events(_ requestedURL: URL?, limit: Int, json: Bool) throws -> String {
+        guard (1...10_000).contains(limit) else { throw RecordingError.usage("limit must be from 1 to 10000.") }
         let packageURL = try resolveRecording(requestedURL)
         let manifest = try RecordingManifest.load(from: packageURL)
+        if manifest.dataSource == .rrweb {
+            let replay = try PabloRRWebReplayData(recording: PabloRRWebRecordingStorage.load(packageURL))
+            let events = Array(replay.events.prefix(limit))
+            if json {
+                return try jsonString(try events.map { event in
+                    OfflineWebEvent(reference: "rrweb:\(event.index)", timestampNs: event.timestampNs,
+                                    title: event.title, event: try PabloControlOutput(json: event.formattedJSON))
+                })
+            }
+            guard !events.isEmpty else { return "No web events found." }
+            return events.map { "rrweb:\($0.index)  \(formatTimeNs($0.timestampNs))  \($0.title)" }.joined(separator: "\n")
+        }
         let url = try manifest.fileURL(for: "events", in: packageURL)
         let records = try RecordingStreamReader.events(at: url)
         let limited = Array(records.prefix(limit))
@@ -660,6 +813,9 @@ public enum CLI {
     public static func workspace(_ requestedURL: URL?, json: Bool) throws -> String {
         let packageURL = try resolveRecording(requestedURL)
         let manifest = try RecordingManifest.load(from: packageURL)
+        guard manifest.dataSource == .native else {
+            throw RecordingError.usage("Web recordings have no native workspace snapshots. Use events for recorded web evidence.")
+        }
         let records = try RecordingStreamReader.workspace(
             at: try manifest.fileURL(for: "workspace", in: packageURL)
         )
@@ -679,13 +835,14 @@ public enum CLI {
 
     public static func annotations(_ requestedURL: URL?, json: Bool) throws -> String {
         let packageURL = try resolveRecording(requestedURL)
-        let recording = try ReplayRecording.load(from: packageURL)
-        let annotations = recording.annotations
+        let manifest = try RecordingManifest.load(from: packageURL)
+        let origin = manifest.dataSource == .native ? (manifest.capture.firstFrameTimestampNs ?? 0) : 0
+        let annotations = try RecordingAnnotationStore.load(from: packageURL)
         if json { return try jsonString(annotations) }
         guard !annotations.isEmpty else { return "No annotations found." }
         return annotations.map { annotation in
             let time = annotation.startTimestampNs
-                .map { formatTime(recording.videoTime(forTimestampNs: $0)) }
+                .map { formatTimeNs($0 > origin ? $0 - origin : 0) }
                 ?? "--:--.---"
             let frames = annotation.accessibilityReferences.isEmpty
                 ? ""
@@ -703,6 +860,9 @@ public enum CLI {
     }
 
     private struct ParsedInspectionArguments {
+        var sessionID: UUID?
+        var after: UInt64?
+        var includeText: Bool?
         var url: URL?
         var pid: pid_t?
         var bundleIdentifier: String?
@@ -716,20 +876,33 @@ public enum CLI {
                 return .live(PabloLiveApplicationTarget(
                     pid: pid,
                     bundleIdentifier: bundleIdentifier,
-                    appName: appName
+                    appName: appName,
+                    sessionID: sessionID
                 ))
             }
             return .recording(url)
         }
     }
 
+    private struct OfflineWebEvent: Codable {
+        let reference: String
+        let timestampNs: UInt64
+        let title: String
+        let event: PabloControlOutput
+    }
+
     private struct RecordingListEntry: Codable {
         let path: String
         let name: String
         let modifiedAt: Date
+        let dataSource: String
+        let capabilities: [String]
     }
 
     private struct ParsedLiveAction {
+        var sessionID: UUID?
+        var windowID: String?
+        var frameReference: String?
         var pid: pid_t?
         var bundleIdentifier: String?
         var appName: String?
@@ -754,7 +927,10 @@ public enum CLI {
             PabloLiveApplicationTarget(
                 pid: pid,
                 bundleIdentifier: bundleIdentifier,
-                appName: appName
+                appName: appName,
+                sessionID: sessionID,
+                windowID: windowID,
+                frameReference: frameReference
             )
         }
     }
@@ -768,6 +944,14 @@ public enum CLI {
         while index < arguments.count {
             let argument = arguments[index]
             switch argument {
+            case "--session":
+                let value = try next(arguments, &index, option: argument)
+                guard let id = UUID(uuidString: value) else { throw RecordingError.usage("--session requires a live session UUID.") }
+                parsed.sessionID = id
+            case "--window":
+                parsed.windowID = try next(arguments, &index, option: argument)
+            case "--frame":
+                parsed.frameReference = try next(arguments, &index, option: argument)
             case "--pid":
                 let value = try next(arguments, &index, option: argument)
                 guard let pid = pid_t(value), pid > 0 else {
@@ -850,6 +1034,8 @@ public enum CLI {
             )
         }
 
+        try parsed.target.validate()
+
         switch kind {
         case .click:
             guard (parsed.nodeID == nil) != (parsed.point == nil) else {
@@ -931,7 +1117,8 @@ public enum CLI {
     private static func parseInspectionArguments(
         _ arguments: [String],
         allowsChanged: Bool = false,
-        allowsLimit: Bool = false
+        allowsLimit: Bool = false,
+        allowsTextOption: Bool = false
     ) throws -> ParsedInspectionArguments {
         var result = ParsedInspectionArguments()
         var index = 0
@@ -948,6 +1135,16 @@ public enum CLI {
                     throw RecordingError.usage("--limit must be a positive integer.")
                 }
                 result.limit = limit
+            case "--session":
+                let value = try next(arguments, &index, option: argument)
+                guard let id = UUID(uuidString: value) else { throw RecordingError.usage("--session requires a live session UUID.") }
+                result.sessionID = id
+            case "--after" where allowsLimit:
+                let value = try next(arguments, &index, option: argument)
+                guard let cursor = UInt64(value) else { throw RecordingError.usage("--after requires a nonnegative event sequence.") }
+                result.after = cursor
+            case "--no-text" where allowsTextOption:
+                result.includeText = false
             case "--pid":
                 let value = try next(arguments, &index, option: argument)
                 guard let pid = pid_t(value), pid > 0 else {
@@ -980,6 +1177,12 @@ public enum CLI {
         }
         guard result.url == nil || liveSelectorCount == 0 else {
             throw RecordingError.usage("Choose either a recording package or a live target, not both.")
+        }
+        guard (result.sessionID == nil && result.after == nil) || liveSelectorCount == 1 else {
+            throw RecordingError.usage("Live sessions and cursors require an explicit live target.")
+        }
+        guard result.after == nil || result.sessionID != nil else {
+            throw RecordingError.usage("--after requires the --session returned by the previous event page.")
         }
         return result
     }
@@ -1185,7 +1388,8 @@ public enum CLI {
         )
         .filter { url in
             url.pathExtension == "pablo" &&
-                ((try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false)
+                ((try? url.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) ?? false) &&
+                (try? RecordingManifest.load(from: url)) != nil
         }
         .sorted { modificationDate($0) > modificationDate($1) }
     }
@@ -1277,19 +1481,6 @@ public enum CLI {
                 "Could not launch Pablo. Install and open Pablo.app once, then try again."
             )
         }
-    }
-
-    private static func waitForAppAndSend(_ request: PabloControlRequest) throws -> PabloControlResponse {
-        var lastError: Error?
-        for _ in 0..<80 {
-            do {
-                return try PabloControlClient.send(request)
-            } catch {
-                lastError = error
-                Thread.sleep(forTimeInterval: 0.1)
-            }
-        }
-        throw lastError ?? RecordingError.capture("Pablo did not start its control service.")
     }
 
 }

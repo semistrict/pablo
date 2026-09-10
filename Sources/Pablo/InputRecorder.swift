@@ -2,6 +2,21 @@ import AppKit
 import ApplicationServices
 import Foundation
 
+/// Stop returns only after the in-flight callback has finished writing its evidence.
+final class InputDeliveryGate: @unchecked Sendable {
+    private let lock = NSLock()
+    private var stopped = false
+
+    func deliver(_ body: () -> Void) {
+        lock.withLock {
+            guard !stopped else { return }
+            body()
+        }
+    }
+
+    func stopAndDrain() { lock.withLock { stopped = true } }
+}
+
 final class InputRecorder {
     typealias EventHandler = (InputEventRecord) -> Void
 
@@ -13,6 +28,7 @@ final class InputRecorder {
     private let targetFrame: () -> CGRect?
     private let handler: EventHandler
     private let stateLock = NSLock()
+    private let delivery = InputDeliveryGate()
     private var eventTap: CFMachPort?
     private var runLoop: CFRunLoop?
     private var thread: Thread?
@@ -89,6 +105,7 @@ final class InputRecorder {
     }
 
     func stop() {
+        delivery.stopAndDrain()
         stateLock.lock()
         let loop = runLoop
         runLoop = nil
@@ -107,6 +124,10 @@ final class InputRecorder {
     }
 
     private func receive(type: CGEventType, event: CGEvent) {
+        delivery.deliver { receiveWhileActive(type: type, event: event) }
+    }
+
+    private func receiveWhileActive(type: CGEventType, event: CGEvent) {
         if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
             stateLock.lock()
             let tap = eventTap

@@ -64,6 +64,10 @@ private final class TestWebPlaybackController: RRWebPlaybackControlling {
     func seek(to seconds: TimeInterval) { seeks.append(seconds) }
     func setPlaybackRate(_ rate: Float) { rates.append(rate) }
 
+    func observedPlayback() async throws -> RRWebObservedPlayback {
+        .init(time: seeks.last ?? 0, playing: playCount > pauseCount)
+    }
+
     func reset() {
         playCount = 0
         pauseCount = 0
@@ -178,4 +182,27 @@ func unifiedRecordingBrowserSwitchesDataSources() throws {
 
     #expect(model.recording == nil)
     #expect(model.webRecording?.packageURL.standardizedFileURL == web.packageURL.standardizedFileURL)
+}
+
+
+@MainActor
+@Test("Library discovery keeps unopened evidence lazy and opening reports corrupt evidence")
+func libraryDiscoveryDefersEvidenceLoading() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent("pablo-lazy-library-\(UUID().uuidString)")
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let selected = try PabloRRWebRecordingStorage.create(
+        recordingID: UUID(), tab: .init(id: 1, title: "Selected", url: "https://example.test"), directory: directory)
+    let unopened = directory.appendingPathComponent("Unopened.pablo")
+    try FileManager.default.createDirectory(at: unopened, withIntermediateDirectories: false)
+    try JSONEncoder().encode(testManifest()).write(to: unopened.appendingPathComponent("manifest.json"))
+    try Data([0xff]).write(to: unopened.appendingPathComponent("accessibility.pb"))
+    for name in ["events.pb", "workspace.pb", "video.mov"] {
+        try Data().write(to: unopened.appendingPathComponent(name))
+    }
+    let model = ReplayModel()
+    #expect(model.loadLatest(preferredURL: selected.packageURL, directory: directory))
+    #expect(model.libraryItems.contains { $0.packageURL.standardizedFileURL == unopened.standardizedFileURL })
+    model.selectLibraryItem(unopened.standardizedFileURL.path)
+    #expect(model.errorMessage != nil)
+    #expect(model.webRecording?.packageURL == selected.packageURL)
 }

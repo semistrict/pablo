@@ -63,6 +63,7 @@ func rrwebSpoolBoundsErrors() throws {
     let (store, directory) = try temporarySpoolStore()
     defer { try? FileManager.default.removeItem(at: directory) }
     let recordingID = UUID()
+    try store.prepare(recordingID: recordingID)
     try store.storeError(
         recordingID: recordingID,
         message: String(repeating: "🙂", count: PabloRRWebSpoolStore.maximumErrorBytes)
@@ -74,17 +75,51 @@ func rrwebSpoolBoundsErrors() throws {
     #expect(!stored.isEmpty)
 }
 
+@Test("rrweb finalization verifies contiguous durable batches and the acknowledged event count")
+func rrwebSpoolVerifiesDeliveryReceipt() throws {
+    let (store, directory) = try temporarySpoolStore()
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recordingID = UUID()
+    try store.prepare(recordingID: recordingID)
+    try store.storeEventBatch(recordingID: recordingID, sequence: 0, events: [["type": 1]])
+    try store.storeEventBatch(recordingID: recordingID, sequence: 2, events: [["type": 3]])
+    #expect(throws: PabloRRWebSpoolError.self) {
+        try store.eventBatches(recordingID: recordingID, expectedNextSequence: 3, expectedEventCount: 3)
+    }
+    // Equal file count cannot conceal a missing sequence.
+    #expect(throws: PabloRRWebSpoolError.self) {
+        try store.eventBatches(recordingID: recordingID, expectedNextSequence: 2, expectedEventCount: 2)
+    }
+    try store.storeEventBatch(recordingID: recordingID, sequence: 1, events: [["type": 2]])
+    #expect(throws: PabloRRWebSpoolError.self) {
+        try store.eventBatches(recordingID: recordingID, expectedNextSequence: 3, expectedEventCount: 4)
+    }
+    #expect(try store.eventBatches(
+        recordingID: recordingID, expectedNextSequence: 3, expectedEventCount: 3
+    ).count == 3)
+}
+
 @Test("preparing and removing an rrweb spool clears prior chunks")
 func rrwebSpoolLifecycle() throws {
     let (store, directory) = try temporarySpoolStore()
     defer { try? FileManager.default.removeItem(at: directory) }
     let recordingID = UUID()
+    try store.prepare(recordingID: recordingID)
     try store.storeEventBatch(recordingID: recordingID, sequence: 0, events: [["type": 1]])
     #expect(try store.eventBatches(recordingID: recordingID).count == 1)
 
     try store.prepare(recordingID: recordingID)
     #expect(try store.eventBatches(recordingID: recordingID).isEmpty)
     try store.remove(recordingID: recordingID)
+    #expect(!FileManager.default.fileExists(
+        atPath: store.recordingDirectory(recordingID: recordingID).path
+    ))
+    #expect(throws: (any Error).self) {
+        try store.storeEventBatch(recordingID: recordingID, sequence: 1, events: [["type": 2]])
+    }
+    #expect(throws: (any Error).self) {
+        try store.storeError(recordingID: recordingID, message: "late delivery")
+    }
     #expect(!FileManager.default.fileExists(
         atPath: store.recordingDirectory(recordingID: recordingID).path
     ))

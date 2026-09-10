@@ -2,6 +2,34 @@ import XCTest
 @testable import PabloCore
 
 final class CLITests: XCTestCase {
+    func testReviewCommandsRequireExplicitIdentities() throws {
+        let id = UUID()
+        guard case .review(let request) = try CLI.parse(["review", "state", id.uuidString]) else {
+            return XCTFail("Expected review state")
+        }
+        XCTAssertEqual(request.method, .reviewState)
+        XCTAssertEqual(request.reviewStateRequest?.reviewID, id)
+        XCTAssertThrowsError(try CLI.parse(["review", "state", "latest"]))
+        XCTAssertThrowsError(try CLI.parse(["review", "command"]))
+        XCTAssertThrowsError(try CLI.parse(["review", "list", "extra"]))
+        guard case .reviewCommandFile(let url) = try CLI.parse(["review", "command", "/tmp/request.json"]) else {
+            return XCTFail("Expected a review command request file")
+        }
+        XCTAssertEqual(url.path, "/tmp/request.json")
+    }
+
+    func testLiveActionsCarryExplicitWindowAndFrameContext() throws {
+        let sessionID = UUID()
+        let reference = "LIVE-\(sessionID.uuidString)/A11Y-001"
+        guard case .liveAction(let request) = try CLI.parse([
+            "click", "--app", "Fixture", "--session", sessionID.uuidString,
+            "--window", "window-1", "--frame", reference, "--point", "0.25,0.5"
+        ]) else { return XCTFail("Expected a live action") }
+        XCTAssertEqual(request.target.windowID, "window-1")
+        XCTAssertEqual(request.target.frameReference, reference)
+        XCTAssertThrowsError(try CLI.parse(["click", "--app", "Fixture", "--window", "window-1", "--point", "0.25,0.5"]))
+    }
+
     func testParsesRecordOptions() throws {
         guard case .record(let options) = try CLI.parse([
             "record", "--bundle-id", "com.example.App", "--duration", "2.5", "--no-text",
@@ -48,7 +76,7 @@ final class CLITests: XCTestCase {
         }
         XCTAssertEqual(reference, "A11Y-012")
         XCTAssertEqual(source, .recording(nil))
-        guard case .events(let eventSource, limit: 25, json: false) = try CLI.parse([
+        guard case .events(let eventSource, limit: 25, json: false, after: nil) = try CLI.parse([
             "events", "--limit", "25",
         ]) else {
             return XCTFail("Expected events command")
@@ -60,6 +88,22 @@ final class CLITests: XCTestCase {
             return XCTFail("Expected annotations command")
         }
         XCTAssertEqual(annotationSource, .recording(nil))
+    }
+
+    func testParsesLiveObservationAndGenerationCursor() throws {
+        let session = UUID()
+        guard case .liveObservation(let request) = try CLI.parse([
+            "observe", "read", "--app", "Notes", "--session", session.uuidString, "--after", "25", "--limit", "2"
+        ]) else { return XCTFail("Expected an observation request") }
+        XCTAssertEqual(request.target.sessionID, session)
+        XCTAssertEqual(request.after, 25)
+        XCTAssertEqual(request.limit, 2)
+        XCTAssertThrowsError(try CLI.parse(["events", "--app", "Notes", "--after", "25"]))
+        guard case .liveObservation(let start) = try CLI.parse(["observe", "start", "--app", "Notes", "--no-text"]) else {
+            return XCTFail("Expected an explicit observation start")
+        }
+        XCTAssertEqual(start.kind, .observationStart)
+        XCTAssertEqual(start.includeText, false)
     }
 
     func testParsesEveryLiveInspectionCommand() throws {
@@ -84,7 +128,7 @@ final class CLITests: XCTestCase {
             return XCTFail("Expected live frame command")
         }
         XCTAssertEqual(frameTarget, target)
-        guard case .events(.live(let eventsTarget), limit: 25, json: false) = try CLI.parse([
+        guard case .events(.live(let eventsTarget), limit: 25, json: false, after: nil) = try CLI.parse([
             "events", "--app", "Notes", "--limit", "25",
         ]) else {
             return XCTFail("Expected live events command")

@@ -3,6 +3,7 @@ import ApplicationServices
 import Foundation
 
 struct LiveAccessibilityHistory {
+    let sessionID = UUID()
     private(set) var currentNodes: [String: AXNode] = [:]
     private(set) var steps: [ReplayAccessibilityStep] = []
     private(set) var nextStepID = 0
@@ -53,6 +54,26 @@ struct LiveAccessibilityHistory {
         steps.first { $0.id == id }
     }
 
+    func reference(for step: ReplayAccessibilityStep) -> String {
+        "LIVE-\(sessionID.uuidString)/\(step.reference)"
+    }
+
+    func step(reference: String) throws -> ReplayAccessibilityStep {
+        let prefix = "LIVE-\(sessionID.uuidString)/A11Y-"
+        let value = reference.uppercased()
+        guard value.hasPrefix(prefix), let ordinal = Int(value.dropFirst(prefix.count)), ordinal > 0,
+              let step = step(id: ordinal - 1) else {
+            throw RecordingError.staleContext("The live frame reference is stale or no longer retained. Read fresh frames for this target.")
+        }
+        return step
+    }
+
+    func requireCurrentFrame(_ reference: String) throws {
+        guard let latest = steps.last, reference.uppercased() == self.reference(for: latest) else {
+            throw RecordingError.staleContext("The live frame context changed. Inspect the application again before acting.")
+        }
+    }
+
     private static func flatten(
         nodes: [String: AXNode],
         rootID: String?
@@ -73,20 +94,32 @@ struct LiveAccessibilityHistory {
     }
 }
 
+@MainActor
 public final class PabloLiveInspectionManager {
     private var sessions: [pid_t: LiveInspectionSession] = [:]
     private let maximumSessions = 8
 
     public init() {}
 
+    public func observationStates() -> [PabloLiveObservationState] {
+        pruneTerminatedSessions()
+        return sessions.values.compactMap(\.observationState).sorted { $0.id.uuidString < $1.id.uuidString }
+    }
+
+    public func stopAllObservations() {
+        for session in sessions.values { session.invalidate() }
+        sessions.removeAll()
+    }
+
     public func perform(_ request: PabloLiveInspectionRequest) throws -> String {
+        try request.validate()
         pruneTerminatedSessions()
         let target = try TargetApplication.resolve(
             pid: request.target.pid,
             bundleIdentifier: request.target.bundleIdentifier,
             appName: request.target.appName
         )
-        let session = session(for: target)
+        let session = try session(for: target, expectedSessionID: request.target.sessionID)
 
         switch request.kind {
         case .inspect:
@@ -102,8 +135,18 @@ public final class PabloLiveInspectionManager {
             let step = try session.step(reference: reference)
             return try session.frameOutput(step, changedOnly: request.changedOnly)
         case .events:
-            try session.startEventObservation()
-            return try session.eventsOutput(limit: request.limit)
+            return try session.readEvents(limit: request.limit, after: request.after, includeText: request.includeText)
+        case .observationStart:
+            try session.startEventObservation(includeText: request.includeText)
+            return try session.inspectOutput()
+        case .observationStatus:
+            return try session.inspectOutput()
+        case .observationStop:
+            session.stopEventObservation()
+            let output = try session.inspectOutput()
+            session.invalidate()
+            sessions.removeValue(forKey: target.pid)
+            return output
         case .annotations:
             return try session.annotationsOutput()
         }
@@ -113,27 +156,35 @@ public final class PabloLiveInspectionManager {
         for targetRequest: PabloLiveApplicationTarget,
         requiresSnapshot: Bool
     ) throws -> LiveActionContext {
+        try targetRequest.validate()
         pruneTerminatedSessions()
         let target = try TargetApplication.resolve(
             pid: targetRequest.pid,
             bundleIdentifier: targetRequest.bundleIdentifier,
             appName: targetRequest.appName
         )
-        let session = session(for: target)
+        let session = try session(for: target, expectedSessionID: targetRequest.sessionID)
         if requiresSnapshot, session.latestSnapshot == nil {
             try session.capture(reason: "live:action")
         }
-        return session.actionContext
+        try session.validateActionTarget(targetRequest)
+        return session.actionContext(for: targetRequest)
     }
 
-    private func session(for target: TargetApplication) -> LiveInspectionSession {
+    private func session(for target: TargetApplication, expectedSessionID: UUID?) throws -> LiveInspectionSession {
         if let existing = sessions[target.pid], existing.matches(target) {
+            guard expectedSessionID == nil || expectedSessionID == existing.sessionID else {
+                throw RecordingError.staleContext("The live inspection session changed. Read the target again before acting.")
+            }
             existing.lastAccess = Date()
             return existing
         }
+        guard expectedSessionID == nil else {
+            throw RecordingError.staleContext("The live inspection session expired or the target restarted. Read the target again before acting.")
+        }
         if sessions.count >= maximumSessions,
            let oldest = sessions.min(by: { $0.value.lastAccess < $1.value.lastAccess })?.key {
-            sessions.removeValue(forKey: oldest)
+            sessions.removeValue(forKey: oldest)?.invalidate()
         }
         let session = LiveInspectionSession(target: target)
         sessions[target.pid] = session
@@ -141,19 +192,24 @@ public final class PabloLiveInspectionManager {
     }
 
     private func pruneTerminatedSessions() {
-        sessions = sessions.filter { pid, _ in
-            NSRunningApplication(processIdentifier: pid) != nil
+        for (pid, session) in sessions where !session.matchesRunningProcess {
+            session.invalidate()
+            sessions.removeValue(forKey: pid)
         }
+
     }
 }
 
 struct LiveActionContext {
+    let sessionID: UUID
+    let frameReference: String?
     let target: TargetApplication
     let reader: AccessibilityTreeReader
     let snapshot: AXTreeSnapshot?
+    let validate: @MainActor () throws -> Void
 }
 
-private final class LiveInspectionSession {
+final class LiveInspectionSession {
     private struct Summary: Codable {
         struct Target: Codable {
             let pid: Int32
@@ -162,6 +218,12 @@ private final class LiveInspectionSession {
         }
 
         let live: Bool
+        let sessionID: UUID
+        let observing: Bool
+        let capturesText: Bool
+        let latestFrameReference: String?
+        let windows: [LiveWindowSummary]
+        let actionCapabilities: LiveActionCapabilities
         let startedAt: String
         let elapsedNanoseconds: UInt64
         let target: Target
@@ -170,38 +232,56 @@ private final class LiveInspectionSession {
         let annotationCount: Int
     }
 
-    private struct IndexedEvent {
-        let index: Int
-        let record: InputEventRecord
-    }
-
     private let target: TargetApplication
+    private let requireEventAccess: () throws -> Void
     private let clock = SessionClock()
     private let startedAt = Date()
+    private let targetLaunchDate: Date?
     private let reader: AccessibilityTreeReader
     private let registry = RecordingApplicationRegistry()
     private let application: RecordingApplication
     private var accessibilityHistory = LiveAccessibilityHistory()
     private let eventLock = NSLock()
-    private var indexedEvents: [IndexedEvent] = []
-    private var nextEventIndex = 1
-    private let maximumEvents = 10_000
+    private var eventHistory = LiveEventHistory()
+    private var capturesText = false
+    private var invalidated = false
+    var sessionID: UUID { accessibilityHistory.sessionID }
     private var inputRecorder: InputRecorder?
     private(set) var latestSnapshot: AXTreeSnapshot?
     var lastAccess = Date()
 
-    init(target: TargetApplication) {
+    init(target: TargetApplication, requireEventAccess: (() throws -> Void)? = nil) {
         self.target = target
+        self.requireEventAccess = requireEventAccess ?? {
+            guard CGPreflightListenEventAccess() else {
+                throw RecordingError.permission(
+                    "Input Monitoring access is required to inspect live input events. " +
+                    "Enable Pablo in System Settings > Privacy & Security > Input Monitoring."
+                )
+            }
+        }
+        targetLaunchDate = NSRunningApplication(processIdentifier: target.pid)?.launchDate
         application = registry.application(for: target.pid, timestampNs: 0)!
-        reader = AccessibilityTreeReader(pid: target.pid, applicationID: application.id)
+        reader = AccessibilityTreeReader(pid: target.pid, applicationID: "LIVE-\(accessibilityHistory.sessionID.uuidString):\(application.id)", captureActions: true)
     }
 
     deinit {
         inputRecorder?.stop()
     }
 
+    var matchesRunningProcess: Bool {
+        guard !invalidated, let current = NSRunningApplication(processIdentifier: target.pid), !current.isTerminated else { return false }
+        return current.bundleIdentifier == target.bundleIdentifier && current.launchDate == targetLaunchDate
+    }
+
     func matches(_ candidate: TargetApplication) -> Bool {
-        target.pid == candidate.pid && target.bundleIdentifier == candidate.bundleIdentifier
+        target.pid == candidate.pid && target.bundleIdentifier == candidate.bundleIdentifier && matchesRunningProcess
+    }
+
+    var observationState: PabloLiveObservationState? {
+        guard inputRecorder != nil else { return nil }
+        return .init(id: sessionID, pid: target.pid, applicationName: target.name,
+                     bundleIdentifier: target.bundleIdentifier, capturesText: capturesText)
     }
 
     func capture(reason: String) throws {
@@ -222,53 +302,72 @@ private final class LiveInspectionSession {
         lastAccess = Date()
     }
 
-    var actionContext: LiveActionContext {
-        LiveActionContext(target: target, reader: reader, snapshot: latestSnapshot)
+    func validateActionTarget(_ request: PabloLiveApplicationTarget) throws {
+        try Task.checkCancellation()
+        guard matches(target) else { throw RecordingError.staleContext("The live target process changed. Inspect the application again.") }
+        if let reference = request.frameReference {
+            try accessibilityHistory.requireCurrentFrame(reference)
+        }
+        if let windowID = request.windowID, reader.windowFrame(id: windowID) == nil {
+            throw RecordingError.staleContext("The selected live window is stale or unavailable. Inspect the application again.")
+        }
+    }
+
+    func actionContext(for request: PabloLiveApplicationTarget) -> LiveActionContext {
+        LiveActionContext(sessionID: sessionID, frameReference: accessibilityHistory.steps.last.map { accessibilityHistory.reference(for: $0) }, target: target, reader: reader, snapshot: latestSnapshot, validate: { try self.validateActionTarget(request) })
     }
 
     func step(reference: String) throws -> ReplayAccessibilityStep {
-        let id = try Self.frameID(reference)
-        if accessibilityHistory.steps.isEmpty || id == accessibilityHistory.nextStepID {
-            try capture(reason: "live:frame")
-        }
-        guard let step = accessibilityHistory.step(id: id) else {
-            let first = accessibilityHistory.steps.first?.reference ?? "none"
-            let last = accessibilityHistory.steps.last?.reference ?? "none"
-            throw RecordingError.usage(
-                "Frame \(reference) is not retained for this live app; available frames are \(first) through \(last)."
-            )
-        }
-        return step
+        try accessibilityHistory.step(reference: reference)
     }
 
-    func startEventObservation() throws {
-        if inputRecorder != nil { return }
-        guard CGPreflightListenEventAccess() else {
-            throw RecordingError.permission(
-                "Input Monitoring access is required to inspect live input events. " +
-                "Enable Pablo in System Settings > Privacy & Security > Input Monitoring."
-            )
+    func invalidate() {
+        invalidated = true
+        stopEventObservation()
+    }
+
+    func stopEventObservation() {
+        inputRecorder?.stop()
+        inputRecorder = nil
+        eventLock.withLock { eventHistory = LiveEventHistory() }
+        capturesText = false
+    }
+
+    func startEventObservation(includeText: Bool?) throws {
+        if inputRecorder != nil {
+            guard includeText == nil || includeText == capturesText else {
+                throw RecordingError.usage("Stop the current observation before changing text capture.")
+            }
+            return
         }
+        try requireEventAccess()
         if accessibilityHistory.steps.isEmpty { try capture(reason: "live:events") }
         let recorder = InputRecorder(
             scope: .application,
             selectedPID: target.pid,
             registry: registry,
             clock: clock,
-            includeText: true,
+            includeText: includeText ?? true,
             targetFrame: { [weak self] in self?.largestWindowFrame() }
         ) { [weak self] record in
             self?.appendEvent(record)
         }
         try recorder.start()
         inputRecorder = recorder
+        capturesText = includeText ?? true
         lastAccess = Date()
     }
 
     func inspectOutput() throws -> String {
-        let eventCount = eventLock.withLock { indexedEvents.count }
+        let eventCount = eventLock.withLock { eventHistory.events.count }
         return try jsonString(Summary(
             live: true,
+            sessionID: sessionID,
+            observing: inputRecorder != nil,
+            capturesText: capturesText,
+            latestFrameReference: accessibilityHistory.steps.last.map { accessibilityHistory.reference(for: $0) },
+            windows: accessibilityHistory.steps.last?.nodes.filter { $0.role == "AXWindow" }.map(LiveWindowSummary.init) ?? [],
+            actionCapabilities: LiveActionCapabilities(),
             startedAt: ISO8601DateFormatter.recordingFormatter.string(from: startedAt),
             elapsedNanoseconds: clock.nowNanoseconds(),
             target: .init(
@@ -282,16 +381,42 @@ private final class LiveInspectionSession {
         ))
     }
 
+    private struct LiveWindowSummary: Codable {
+        let id: String
+        let title: String?
+        let frame: ReplayAccessibilityFrame?
+        init(_ node: ReplayAccessibilityNode) { id = node.id; title = node.title; frame = node.frame }
+    }
+
+    private struct LiveActionCapabilities: Codable {
+        var backgroundClickAction = "AXPress"
+        var foregroundActionsRequireUnlock = true
+        var availableNodeActionsField = "actions"
+        var framePreconditionSupported = true
+        var explicitWindowSupported = true
+    }
+
+    private struct FrameOutput: Encodable {
+        let actionCapabilities = LiveActionCapabilities()
+        let sessionID: UUID
+        let reference: String
+        let frame: ReplayAccessibilityStep
+    }
+
     func framesOutput() throws -> String {
-        try jsonString(accessibilityHistory.steps)
+        try jsonString(accessibilityHistory.steps.map {
+            FrameOutput(sessionID: sessionID, reference: accessibilityHistory.reference(for: $0), frame: $0)
+        })
     }
 
     func frameOutput(
         _ step: ReplayAccessibilityStep,
         changedOnly: Bool
     ) throws -> String {
-        guard changedOnly else { return try jsonString(step) }
-        return try jsonString(ReplayAccessibilityStep(
+        guard changedOnly else {
+            return try jsonString(FrameOutput(sessionID: sessionID, reference: accessibilityHistory.reference(for: step), frame: step))
+        }
+        let changed = ReplayAccessibilityStep(
             id: step.id,
             timestampNs: step.timestampNs,
             reason: step.reason,
@@ -307,13 +432,23 @@ private final class LiveInspectionSession {
             removedNodeIDs: step.removedNodeIDs,
             totalNodeCount: step.totalNodeCount,
             truncated: step.truncated
-        ))
+        )
+        return try jsonString(FrameOutput(sessionID: sessionID, reference: accessibilityHistory.reference(for: step), frame: changed))
     }
 
-    func eventsOutput(limit: Int) throws -> String {
-        let allEvents = eventLock.withLock { indexedEvents }
-        let limited = Array(allEvents.prefix(limit))
-        return try jsonString(limited.map(\.record))
+    func readEvents(limit: Int, after: UInt64?, includeText: Bool?) throws -> String {
+        // Reject invalid reads before privacy checks or starting an input observer.
+        try eventLock.withLock { try eventHistory.validatePage(after: after, limit: limit) }
+        try startEventObservation(includeText: includeText)
+        return try eventsOutput(limit: limit, after: after)
+    }
+
+    private func eventsOutput(limit: Int, after: UInt64?) throws -> String {
+        var page = try eventLock.withLock { try eventHistory.page(after: after, limit: limit) }
+        page.sessionID = sessionID
+        page.observing = inputRecorder != nil
+        page.capturesText = capturesText
+        return try jsonString(page)
     }
 
     func annotationsOutput() throws -> String {
@@ -321,13 +456,7 @@ private final class LiveInspectionSession {
     }
 
     private func appendEvent(_ record: InputEventRecord) {
-        eventLock.withLock {
-            indexedEvents.append(IndexedEvent(index: nextEventIndex, record: record))
-            nextEventIndex += 1
-            if indexedEvents.count > maximumEvents {
-                indexedEvents.removeFirst(indexedEvents.count - maximumEvents)
-            }
-        }
+        eventLock.withLock { eventHistory.append(record) }
     }
 
     private func largestWindowFrame() -> CGRect? {
@@ -340,15 +469,7 @@ private final class LiveInspectionSession {
             .max { $0.width * $0.height < $1.width * $1.height }
     }
 
-    private static func frameID(_ reference: String) throws -> Int {
-        var value = reference.uppercased()
-        if value.hasPrefix("A11Y-") { value.removeFirst(5) }
-        if value.hasPrefix("#") { value.removeFirst() }
-        guard let number = Int(value), number > 0 else {
-            throw RecordingError.usage("Frame must look like A11Y-012 or 12.")
-        }
-        return number - 1
-    }
+
 }
 
 private func jsonString<Value: Encodable>(_ value: Value) throws -> String {

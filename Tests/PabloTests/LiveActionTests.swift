@@ -181,3 +181,13 @@ func accessibilityTraversalSkipsClosedMenus() {
     #expect(emptyVisible.isEmpty)
     #expect(fallback == [1, 2, 3, 4])
 }
+
+@Test("Native text input batches never split a Unicode surrogate pair")
+func liveTextChunksPreserveUnicode() {
+    let text = String(repeating: "a", count: 19) + "🙂" + String(repeating: "🦊", count: 21) + "e\u{301}"
+    let chunks = LiveTextInput.chunks(text)
+    #expect(chunks.allSatisfy { $0.count <= 20 && !$0.isEmpty })
+    let decoded = chunks.map { String(decoding: $0, as: UTF16.self) }.joined()
+    #expect(decoded == text)
+    #expect(!decoded.contains("\u{FFFD}"))
+}

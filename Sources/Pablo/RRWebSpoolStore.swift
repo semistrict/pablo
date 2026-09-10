@@ -42,7 +42,13 @@ public struct PabloRRWebSpoolStore: Sendable {
         }
         let chunks = recordingDirectory(recordingID: recordingID)
             .appendingPathComponent("Chunks", isDirectory: true)
-        try fileManager.createDirectory(at: chunks, withIntermediateDirectories: true)
+        // Only prepare owns the recording directory. Late delivery must never recreate a removed spool.
+        guard fileManager.fileExists(atPath: chunks.deletingLastPathComponent().path) else {
+            throw PabloRRWebSpoolError.inactiveRecording
+        }
+        if !fileManager.fileExists(atPath: chunks.path) {
+            try fileManager.createDirectory(at: chunks, withIntermediateDirectories: false)
+        }
         let filename = String(format: "%012lld.json", sequence)
         try data.write(to: chunks.appendingPathComponent(filename), options: .atomic)
     }
@@ -53,7 +59,9 @@ public struct PabloRRWebSpoolStore: Sendable {
         fileManager: FileManager = .default
     ) throws {
         let directory = recordingDirectory(recordingID: recordingID)
-        try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        guard fileManager.fileExists(atPath: directory.path) else {
+            throw PabloRRWebSpoolError.inactiveRecording
+        }
         var data = Data()
         for scalar in message.unicodeScalars {
             let bytes = Data(String(scalar).utf8)
@@ -68,19 +76,40 @@ public struct PabloRRWebSpoolStore: Sendable {
 
     public func eventBatches(
         recordingID: UUID,
+        expectedNextSequence: Int64? = nil,
+        expectedEventCount: Int? = nil,
         fileManager: FileManager = .default
     ) throws -> [Data] {
         let chunks = recordingDirectory(recordingID: recordingID)
             .appendingPathComponent("Chunks", isDirectory: true)
-        guard fileManager.fileExists(atPath: chunks.path) else { return [] }
-        return try fileManager.contentsOfDirectory(
+        let files = try fileManager.fileExists(atPath: chunks.path) ? fileManager.contentsOfDirectory(
             at: chunks,
             includingPropertiesForKeys: nil,
             options: [.skipsHiddenFiles]
-        )
+        ) : []
+        let ordered = files
         .filter { $0.pathExtension == "json" }
         .sorted { $0.lastPathComponent < $1.lastPathComponent }
-        .map { try Data(contentsOf: $0) }
+        if let expectedNextSequence {
+            guard (0...Self.maximumSequence + 1).contains(expectedNextSequence),
+                  ordered.count == expectedNextSequence,
+                  ordered.enumerated().allSatisfy({ index, file in
+                      file.lastPathComponent == String(format: "%012lld.json", Int64(index))
+                  }) else {
+                throw PabloRRWebSpoolError.incompleteDelivery
+            }
+        }
+        let batches = try ordered.map { try Data(contentsOf: $0) }
+        if let expectedEventCount {
+            let count = try batches.reduce(0) { count, data in
+                guard let events = try JSONSerialization.jsonObject(with: data) as? [Any] else {
+                    throw PabloRRWebSpoolError.invalidEventBatch
+                }
+                return count + events.count
+            }
+            guard count == expectedEventCount else { throw PabloRRWebSpoolError.incompleteDelivery }
+        }
+        return batches
     }
 
     public func recordingError(
@@ -100,6 +129,8 @@ public struct PabloRRWebSpoolStore: Sendable {
 public enum PabloRRWebSpoolError: LocalizedError {
     case invalidEventBatch
     case oversizedEventBatch
+    case inactiveRecording
+    case incompleteDelivery
 
     public var errorDescription: String? {
         switch self {
@@ -107,6 +138,10 @@ public enum PabloRRWebSpoolError: LocalizedError {
             "The Safari bridge received an invalid rrweb event batch."
         case .oversizedEventBatch:
             "The Safari bridge rejected an rrweb event batch larger than 16 MiB."
+        case .inactiveRecording:
+            "The Safari recording spool is no longer active."
+        case .incompleteDelivery:
+            "The Safari recording spool does not contain all acknowledged events and batches."
         }
     }
 }

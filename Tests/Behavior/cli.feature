@@ -88,9 +88,9 @@ Feature: Parse and run the Pablo command-line interface predictably
     When the tester runs `inspect --app <name>`
     Then the output identifies the live target and the in-memory observation counts
     When the tester runs `frames --app <name>` repeatedly
-    Then each observation receives a stable `A11Y-###` reference
-    When the tester runs `frame A11Y-001 --app <name>`
-    Then the accessibility tree uses the same text shape as a recorded frame
+    Then each observation receives a qualified `LIVE-<session UUID>/A11Y-###` reference
+    When the tester requests the exact returned reference with its live target
+    Then a session-qualified envelope contains the recorded-frame tree shape
     And live output is always pretty-printed JSON
     And `--changed` behaves as it does for a recording
 
@@ -111,8 +111,10 @@ Feature: Parse and run the Pablo command-line interface predictably
     Then Pablo reports that no input has been observed yet
     And begins observing input directed to that target
     When the user interacts with the target and the tester runs the command again
-    Then the output uses stable `EVT-####` references
-    And `--limit` behaves as it does for recorded events
+    Then the output contains indexed event records and a session-qualified next cursor
+    And `--limit` bounds the page
+    When the tester passes the returned session ID and cursor to the next read
+    Then only later events are returned, with an explicit gap if retention has advanced
     And live output is always pretty-printed JSON
     And the history remains only in memory
 
@@ -130,3 +132,29 @@ Feature: Parse and run the Pablo command-line interface predictably
     When an inspection command runs
     Then it returns a clear error
     And it does not fabricate output or create a recording
+
+  @automated
+  # LiveInspectionTests.liveReferencesRejectReplacementSessions
+  Scenario: A reference cannot move to a replacement live session
+    Given two live histories begin their own first observation
+    Then their qualified frame references differ
+    And each history rejects the other history's reference
+    And an unqualified recorded frame reference is rejected as a live reference
+
+  @automated
+  # LiveInspectionTests.liveEventCursorPagesAndRetention
+  Scenario: Live event pages advance explicitly through bounded retention
+    Given a live event history retains three events
+    When the reader consumes two events and a later event arrives
+    Then the next cursor page contains only the later events
+    And a cursor older than retained evidence reports a gap
+    And an empty page preserves its cursor
+
+  @signed-app @human-approval @manual
+  Scenario: The human can inspect and stop live observation
+    Given an approved caller started input observation with or without typed text
+    Then the recorder window and menu identify the target and text capture setting
+    And record.status reports that active observation
+    When the human chooses Stop Live Observation
+    Then input capture stops and the inspection session is forgotten
+    And old frame and node references cannot be reused

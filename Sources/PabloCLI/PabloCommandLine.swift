@@ -6,6 +6,12 @@ struct PabloCommandLine {
     static func main() async {
         do {
             switch try CLI.parse(Array(CommandLine.arguments.dropFirst())) {
+            case .review(let request):
+                print(try CLI.sendReview(request))
+            case .reviewEvidenceFile(let url):
+                print(try CLI.sendReviewEvidenceFile(url))
+            case .reviewCommandFile(let url):
+                print(try CLI.sendReviewCommandFile(url))
             case .record(let options):
                 print(CLI.formatControlResult(try CLI.sendControl(method: .startRecording, options: options)))
             case .status:
@@ -31,12 +37,14 @@ struct PabloCommandLine {
                     changedOnly: changedOnly,
                     json: json
                 ))
-            case .events(let source, let limit, let json):
-                print(try CLI.events(source, limit: limit, json: json))
+            case .events(let source, let limit, let json, let after):
+                print(try CLI.events(source, limit: limit, json: json, after: after))
             case .workspace(let recording, let json):
                 print(try CLI.workspace(recording, json: json))
             case .annotations(let source, let json):
                 print(try CLI.annotations(source, json: json))
+            case .liveObservation(let inspection):
+                print(try CLI.inspectLive(inspection))
             case .liveAction(let action):
                 print(try CLI.performLiveAction(action))
             case .annotate(let options):

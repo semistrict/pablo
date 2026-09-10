@@ -2,7 +2,7 @@ Feature: Keep recording control and consent inside the Pablo app
   Local callers can request actions, but Pablo verifies the real calling application and the user remains the authority.
 
   @automated
-  # ControlProtocolTests.approvalLastsForOneCallingApplicationAndOneCalendarDay
+  # ControlProtocolTests.approvalIsScopedToApplicationAndDay
   Scenario: Verified approval lasts for one application identity for one local day
     Given a verified application and developer identity is approved today
     When the same identity requests another action today
@@ -12,9 +12,8 @@ Feature: Keep recording control and consent inside the Pablo app
     When the application or developer identity changes
     Then Pablo asks again
 
-  @automated
-  # ControlProtocolTests.callerIdentityComesFromNearestInvokingApplication
-  Scenario: Caller identity comes from the invoking application rather than the HTTP helper
+  @signed-app @human-approval @manual
+  Scenario: Live caller identity and the approval dialog identify the invoking application
     Given curl was launched by a signed foreground application
     When Pablo walks the process ancestry
     Then a signed app-bundled helper may resolve to its running owning application when their live signing teams match
@@ -24,7 +23,8 @@ Feature: Keep recording control and consent inside the Pablo app
     And the approval dialog names that application and its verified developer
 
   @automated
-  # ControlProtocolTests.localControlSocketHandlesOneRequestPerConnectionAndIsPrivate
+  # ControlProtocolTests.controlSocketRoundTrip
+  # ControlProtocolTests.controlSocketAcceptsCurlJSON, ControlProtocolTests.controlSocketAcceptsInlineCurlData
   Scenario: Local control socket is private and bounded
     Given the control service is running
     Then its parent directory mode is `0700`
@@ -33,11 +33,11 @@ Feature: Keep recording control and consent inside the Pablo app
     Then one connection handles one HTTP JSON request
     And the JSON body is accepted without a `Content-Type` header
     And the method comes from the URL rather than a JSON field
-    And clients do not send protocol versions or request IDs
+    And method payloads do not include a transport protocol version
+    And review operations use their explicit caller-bound operation IDs
     And the HTTP verb does not affect routing
     And live inspection output is pretty-printed structured JSON rather than an escaped string
-    And JSON request bodies larger than 64 KiB fail closed
-    And peer credentials must match the current user
+
 
   @automated
   # ControlProtocolTests.controlSocketServesOpenAPI
@@ -88,3 +88,36 @@ Feature: Keep recording control and consent inside the Pablo app
     Then the command reads the package directly
     And Pablo does not launch
     And no approval dialog appears
+
+  @automated
+  # ControlProtocolTests.controlRejectsInvalidBoundsBeforeDispatch
+  Scenario: Invalid native bounds fail before dispatch
+    Given recording and live inspection requests contain invalid targets or numeric bounds
+    When they cross the HTTP boundary
+    Then they fail before reaching the app handler
+    And a later valid status request still works
+
+  @automated
+  # ControlProtocolTests.controlPendingHandlerDoesNotBlockReads
+  # ControlProtocolTests.controlSlowReaderAndMutationSerialization
+  Scenario: Pending operations and slow readers leave discovery responsive
+    Given a handler is pending or a client is slowly reading a large response
+    When another same-user client requests OpenAPI
+    Then discovery completes without waiting for the pending operation or response
+    And read-only status can run while a mutation is pending
+    And a second mutation waits until the first mutation finishes
+
+  @automated
+  # ControlProtocolTests.controlDoesNotRepeatDeliveredMutation
+  Scenario: An ambiguously delivered mutation is never automatically repeated
+    Given the app applies a mutation and response delivery fails
+    When the client receives the transport failure
+    Then it reports an unknown outcome
+    And it neither relaunches the app nor sends the mutation again
+
+  @signed-app @manual
+  Scenario: Real peer credentials and body bounds fail closed
+    Given a control service is running with verified local-user socket permissions
+    When a client sends a request body larger than 64 KiB
+    Then the request fails before app dispatch
+    And a connection from another user is rejected by permissions or peer credential verification

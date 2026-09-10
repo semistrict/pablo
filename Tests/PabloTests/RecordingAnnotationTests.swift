@@ -135,6 +135,34 @@ func annotationAnchorsAreValidated() throws {
     }
 }
 
+@Test("Node anchors require membership in an explicit materialized frame and completed time bounds")
+func annotationRequiresActualNodeAndTimeAnchors() throws {
+    let package = try makeAnnotationTestPackage()
+    defer { try? FileManager.default.removeItem(at: package) }
+    for draft in [
+        RecordingAnnotationDraft(kind: .issue, text: "Invented node", accessibilityReferences: ["A11Y-001"],
+                                 accessibilityNodeIDs: ["APP-001:nonexistent"]),
+        RecordingAnnotationDraft(kind: .issue, text: "Unqualified node", accessibilityNodeIDs: ["APP-001:button"]),
+        RecordingAnnotationDraft(kind: .issue, text: "Beyond end", startTimestampNs: 2_000_000_001),
+    ] {
+        #expect(throws: RecordingError.self) { try RecordingAnnotationStore.add(to: package, draft: draft, author: .localHuman) }
+    }
+    let removal = AXSnapshotRecord(schemaVersion: 3, timestampNs: 500_000_000, reason: "removed", kind: "delta",
+        application: testApplication, rootID: "APP-001:root", upserts: [], removed: ["APP-001:button"], truncated: false)
+    let url = package.appendingPathComponent("accessibility.pb")
+    var data = try Data(contentsOf: url)
+    data.append(try PabloProtobufCodec.encode(removal))
+    try data.write(to: url)
+    #expect(throws: RecordingError.self) {
+        try RecordingAnnotationStore.add(to: package, draft: .init(kind: .issue, text: "Removed node",
+            accessibilityReferences: ["A11Y-002"], accessibilityNodeIDs: ["APP-001:button"]), author: .localHuman)
+    }
+    let historical = try RecordingAnnotationStore.add(to: package, draft: .init(kind: .observation, text: "Earlier observation",
+        startTimestampNs: 800_000_000, accessibilityReferences: ["A11Y-001"], accessibilityNodeIDs: ["APP-001:button"]), author: .localHuman)
+    #expect(historical.accessibilityReferences == ["A11Y-001"])
+    #expect(historical.startTimestampNs == 800_000_000)
+}
+
 @Test("Paused traces are one-frame shapes and moving traces reveal through time")
 func traceTemporalSlicing() {
     let paused = RecordingAnnotationTrace(samples: [

@@ -54,27 +54,66 @@ struct RRWebPlayerWebView: NSViewRepresentable {
             run("window.pabloPlayer?.setSpeed(\(rate))")
         }
 
+        func observedPlayback() async throws -> RRWebObservedPlayback {
+            guard ready, let webView else { throw RecordingError.capture("The web renderer is not ready.") }
+            let value = try await webView.evaluateJavaScript(
+                "({time: (window.pabloTime || 0) / 1000, playing: !!window.pabloPlaying, error: window.pabloPlayerError || null})")
+            guard let state = value as? [String: Any], let time = (state["time"] as? NSNumber)?.doubleValue else {
+                throw RecordingError.capture("The web renderer did not return playback state.")
+            }
+            if let error = state["error"] as? String { throw RecordingError.capture(error) }
+            return RRWebObservedPlayback(time: time, playing: state["playing"] as? Bool ?? false)
+        }
+
+        func snapshot(maxPixelDimension: Int) async throws -> NSImage {
+            guard ready, let webView, let model, !model.isPlaying else {
+                throw RecordingError.capture("Pause and settle the web renderer before exporting a frame.")
+            }
+            let before = try await observedPlayback()
+            guard !before.playing else { throw RecordingError.capture("The web renderer is still playing.") }
+            let value = try await webView.evaluateJavaScript("(() => { const r = document.querySelector('iframe')?.getBoundingClientRect(); return r ? {x:r.x,y:r.y,width:r.width,height:r.height} : null; })()")
+            guard let rect = value as? [String: Double], let x = rect["x"], let y = rect["y"],
+                  let width = rect["width"], let height = rect["height"], width > 0, height > 0 else {
+                throw RecordingError.capture("The recorded web viewport is unavailable.")
+            }
+            let region = CGRect(x: x, y: y, width: width, height: height).intersection(webView.bounds)
+            guard !region.isNull, !region.isEmpty else { throw RecordingError.capture("The recorded web viewport is not visible.") }
+            let configuration = WKSnapshotConfiguration()
+            configuration.rect = region
+            configuration.snapshotWidth = NSNumber(value: min(Double(maxPixelDimension), Double(maxPixelDimension) * region.width / region.height))
+            let snapshot = try await webView.takeSnapshot(configuration: configuration)
+            let after = try await observedPlayback()
+            guard !after.playing, abs(after.time - before.time) < 0.001 else { throw CancellationError() }
+            return snapshot
+        }
+
         @objc private func poll() {
             webView?.evaluateJavaScript(
-                "({ready: !!window.pabloPlayer, time: (window.pabloTime || 0) / 1000, playing: !!window.pabloPlaying})"
+                "({ready: !!window.pabloPlayer, time: (window.pabloTime || 0) / 1000, playing: !!window.pabloPlaying, error: window.pabloPlayerError || null})"
             ) { [weak self] value, _ in
                 Task { @MainActor in
                     guard let self, let state = value as? [String: Any] else { return }
                     let isReady = state["ready"] as? Bool ?? false
+                    self.model?.updateWebRenderer(ready: isReady, error: state["error"] as? String)
                     if isReady && !self.ready {
                         self.ready = true
                         self.run("window.pabloPlayer.setSpeed(\(self.desiredRate)); window.pabloPlayer.goto(\(self.desiredTime * 1000), \(self.desiredPlaying ? "true" : "false"))")
+                        return
                     }
                     let time = (state["time"] as? NSNumber)?.doubleValue ?? 0
                     let playing = state["playing"] as? Bool ?? false
-                    self.model?.updateWebPlayback(time: time, playing: playing)
+                    if self.ready { self.model?.updateWebPlayback(time: time, playing: playing) }
                 }
             }
         }
 
         private func run(_ script: String) {
             guard ready else { return }
-            webView?.evaluateJavaScript(script)
+            webView?.evaluateJavaScript(script) { [weak self] _, error in
+                if let error {
+                    Task { @MainActor in self?.model?.updateWebRenderer(ready: false, error: error.localizedDescription) }
+                }
+            }
         }
 
         deinit {
@@ -102,6 +141,7 @@ struct RRWebPlayerWebView: NSViewRepresentable {
             DispatchQueue.main.async {
                 guard let ruleList else {
                     let detail = error?.localizedDescription ?? "unknown content-rule error"
+                    coordinator.model?.updateWebRenderer(ready: false, error: detail)
                     webView.loadHTMLString(
                         "<html><body><p>Could not secure offline playback: \(Self.htmlEscaped(detail))</p></body></html>",
                         baseURL: nil
@@ -154,6 +194,7 @@ struct RRWebPlayerWebView: NSViewRepresentable {
                 allowingReadAccessTo: directory
             )
         } catch {
+            coordinator.model?.updateWebRenderer(ready: false, error: error.localizedDescription)
             webView.loadHTMLString(
                 "<html><body><p>Could not load rrweb recording: \(Self.htmlEscaped(error.localizedDescription))</p></body></html>",
                 baseURL: nil
@@ -211,6 +252,7 @@ struct RRWebPlayerWebView: NSViewRepresentable {
               height: Math.max(240, window.innerHeight),
             }));
         } catch (error) {
+          window.pabloPlayerError = String(error);
           document.getElementById("player").textContent = `Could not load recording: ${error}`;
         }
       </script>

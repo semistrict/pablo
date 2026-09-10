@@ -64,6 +64,9 @@ message LiveApplicationTarget {
   optional int32 pid = 1;
   optional string bundle_identifier = 2;
   optional string app_name = 3;
+  optional string session_id = 4;
+  optional string window_id = 5;
+  optional string frame_reference = 6;
 }
 
 enum LiveActionKind {
@@ -134,6 +137,7 @@ message SafariDOMCommand {
   uint32 max_depth = 8;
   optional int64 tab_id = 9;
   optional string recording_id = 10;
+  optional string document_generation = 11;
 }
 
 message SafariDOMResponse {
@@ -149,6 +153,13 @@ message AutomationCaller {
   optional string developer_name = 3;
   optional string developer_team_identifier = 4;
   bool verified = 5;
+}
+
+message SafariAutomationTarget {
+  optional int64 tab_id = 1;
+  optional string document_generation = 2;
+  optional string node_id = 3;
+  optional string selector = 4;
 }
 
 message AutomationActionTrace {
@@ -176,6 +187,7 @@ message AutomationActionTrace {
   bool recording_was_paused = 22;
   optional string resolved_application_id = 23;
   bool foreground_actions_unlocked = 24;
+  optional SafariAutomationTarget safari_target = 25;
 }
 
 message InputEventRecord {
@@ -212,6 +224,8 @@ message AccessibilityNode {
   optional bool focused = 12;
   optional Point position = 13;
   optional Size size = 14;
+  repeated string actions = 15;
+  bool actions_observed = 16;
 }
 
 message AccessibilitySnapshotRecord {

@@ -6,7 +6,7 @@ Audited 2026-09-10 against commit de56748 and the existing uncommitted replay re
 
 The audit examines whether a human and an agent can observe the same context, perform the same meaningful operations, detect conflicting changes, and verify outcomes. It includes recording, live native actions, Safari, web recording, replay, annotations, transport, accessibility, and verification coverage.
 
-Status: analysis complete; findings are not implemented. No application source was changed during the audit. Earlier replay changes remain separate working-tree changes.
+Status: analysis complete; implementation is in progress. [Track implementation and verification](agent-pairing-progress.md). No application source was changed during the audit itself.
 
 Recommended order:
 

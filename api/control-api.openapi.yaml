@@ -17,6 +17,11 @@ x-request-body-maximum-bytes: 65536
 x-response-body-maximum-bytes: 16777216
 x-content-type-optional: true
 x-http-methods: any
+x-connection-limit: 32
+x-read-deadline-seconds: 10
+x-operation-deadline-seconds: 60
+x-response-write-deadline-seconds: 10
+x-receipt-retention-seconds: 300
 paths:
   /openapi.json:
     get:
@@ -29,6 +34,70 @@ paths:
             application/vnd.oai.openapi+json:
               schema:
                 type: object
+  /operation.execute:
+    post:
+      operationId: executeOperation
+      summary: Execute one caller-bound mutation with a recoverable receipt
+      description: >-
+        Requires a verified calling application and normal human approval for the nested
+        command. Payload is the ordinary method body. Repeated identical requests return
+        the retained receipt; a different caller or payload cannot reuse the key. Only a
+        payload digest is retained, never the typed input. Requests expire after 300 seconds
+        and serviceID changes on app restart. Never replay expired or unknown operations.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationExecuteRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /operation.status:
+    post:
+      operationId: operationStatus
+      summary: Read this verified caller's retained operation, including while approval is pending
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationLookupRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /operation.cancel:
+    post:
+      operationId: cancelOperation
+      summary: Request cancellation of this caller's operation without undoing dispatched effects
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/OperationLookupRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /service.info:
+    post:
+      operationId: serviceInfo
+      summary: Read build, methods, privacy readiness, and this caller's approval state without prompting
+      description: >-
+        Available before daily approval. Does not expose workspace paths, target inventory,
+        other callers, or captured content. Privacy checks never request a grant. Readiness
+        is advisory and is revalidated at action time. Safari grants require safari.tabs.
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /targets.list:
+    post:
+      operationId: listTargets
+      summary: List current application PIDs and connected display IDs after daily approval
+      description: >-
+        Application windows and their live session IDs are discovered with inspect.live
+        using a returned PID. Safari grants are discovered with safari.tabs. Discovery
+        never starts observation or recording. Targets can disappear after discovery.
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
   /record.start:
     post:
       operationId: startRecording
@@ -134,7 +203,7 @@ paths:
               accessibilityTree:
                 value: {kind: dumpAccessibilityTree}
               clickNode:
-                value: {kind: click, nodeID: "#submit"}
+                value: {kind: click, selector: "#submit", documentGeneration: "01234567-89ab-cdef-0123-456789abcdef"}
       responses:
         "200": {$ref: "#/components/responses/CallResponse"}
         "400": {$ref: "#/components/responses/BadRequest"}
@@ -145,6 +214,34 @@ paths:
         List the active tab in each Safari window for which the user has clicked
         the Pablo Safari toolbar button since the most recent navigation. The
         operation neither activates Safari nor requests persistent website access.
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /rrweb.recover:
+    post:
+      operationId: recoverRRWeb
+      summary: Select an unresolved package or explicitly save interrupted evidence
+      description: >-
+        Requires recordingID from rrweb.recordings. Other packages and spools remain
+        intact. A healthy current recording must be stopped first. After selection,
+        use rrweb.status or rrweb.stop to retrieve Safari's acknowledgment. Missing
+        acknowledgments remain recovery-needed; selection never implies completion.
+        With recoveryAction finishInterrupted, the matching selected package must
+        already need recovery. Close its original Safari tab first: this action cannot
+        stop an unreachable recorder. It saves received events as interrupted,
+        retains the spool for late delivery, and clears the active recovery state.
+        It never reports complete evidence. Use an operation envelope for safe retries.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [recordingID]
+              additionalProperties: false
+              properties:
+                recordingID: {type: string, format: uuid}
+                recoveryAction: {type: string, enum: [select, finishInterrupted], default: select}
       responses:
         "200": {$ref: "#/components/responses/CallResponse"}
         "400": {$ref: "#/components/responses/BadRequest"}
@@ -215,12 +312,133 @@ paths:
       description: >-
         Open a schema-v3 .pablo package in the normal Pablo player. Native and
         rrweb event sources use the same review window and transport controls.
-        Pablo has no fallback decoder for older or alternate package formats.
+        The output is a ReviewState with the review ID and current renderer readiness.
+        Loading video may still be in progress when the window opens.
       requestBody:
         required: true
         content:
           application/json:
             schema: {$ref: "#/components/schemas/RecordingOpenRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /review.list:
+    post:
+      operationId: listReviews
+      description: >-
+        Return coherent states of open review windows in most-recent activation order.
+        Reading does not activate a window. Each output item has the ReviewState shape.
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /review.state:
+    post:
+      operationId: readReviewState
+      description: >-
+        Read one ReviewState from the same model used by the human review UI.
+        A closed or unknown review ID fails. No live application is targeted.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReviewStateRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /review.command:
+    post:
+      operationId: commandReview
+      description: >-
+        Apply a semantic command to one open review and return ReviewOperation in output.
+        The exact request and operation ID can be retried for five minutes after issuedAt;
+        deduplication is bound to the verified caller and complete request payload.
+        The service ID changes after restart. Expired requests fail before dispatch.
+        Renderer commands complete only after observed playback settles. Human context
+        changes interrupt a pending command. Unsaved human drafts block context changes.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReviewCommandRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /review.evidence:
+    post:
+      operationId: readReviewEvidence
+      description: >-
+        Read source-qualified recorded evidence without changing selection or playback.
+        Point coordinates are normalized inside the current native viewport. Timeline
+        cursors are offsets in the same bounded range and revision; restart a query after
+        context changes. Image export requires a paused, settled renderer and returns
+        bounded PNG bytes with source, time, crop and observation provenance. Native images
+        use the video composition; web images contain the rendered recorded viewport.
+        No evidence file is modified. Native AX point queries are unsupported for web sources.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ReviewEvidenceRequest"}
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /review.operation:
+    post:
+      operationId: readReviewOperation
+      description: >-
+        Read a caller-bound ReviewOperation while it is running or after completion.
+        Receipts expire five minutes after issuedAt. Unavailable or expired does not
+        prove that a command was not executed; inspect current state before deciding
+        on any new operation. Unverified caller receipts are restricted to the same process.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serviceID, operationID]
+              properties:
+                serviceID: {type: string, format: uuid}
+                operationID: {type: string, format: uuid}
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /review.cancel:
+    post:
+      operationId: cancelReviewOperation
+      description: >-
+        Request cancellation of a caller-bound operation without waiting behind its mutation.
+        Returns cancellationRequested until the pending command stops. Already completed
+        effects are not undone; terminal receipts are returned unchanged.
+        Receipts expire five minutes after issuedAt. Unavailable or expired does not
+        prove that a command was not executed; inspect current state before deciding
+        on any new operation. Unverified caller receipts are restricted to the same process.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [serviceID, operationID]
+              properties:
+                serviceID: {type: string, format: uuid}
+                operationID: {type: string, format: uuid}
+      responses:
+        "200": {$ref: "#/components/responses/CallResponse"}
+        "400": {$ref: "#/components/responses/BadRequest"}
+  /changes.watch:
+    post:
+      operationId: watchChanges
+      description: >-
+        Return a bounded ChangePage of review, renderer, and operation changes.
+        Retains 256 events and admits at most four concurrent watchers. Ordinary
+        playback ticks are omitted; changes within one model turn are coalesced.
+        On resyncRequired, reread current state before issuing context-dependent commands.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: "#/components/schemas/ChangeWatchRequest"}
       responses:
         "200": {$ref: "#/components/responses/CallResponse"}
         "400": {$ref: "#/components/responses/BadRequest"}
@@ -237,14 +455,378 @@ components:
         application/json:
           schema: {$ref: "#/components/schemas/HTTPError"}
   schemas:
+    OperationExecuteRequest:
+      type: object
+      required: [serviceID, operationID, issuedAt, method, payload]
+      properties:
+        serviceID: {type: string, format: uuid}
+        operationID: {type: string, format: uuid}
+        issuedAt: {type: string, format: date-time}
+        method:
+          enum: [record.start, record.pause, record.resume, record.stop, annotation.add, annotation.resolve, action.live, safari.dom, rrweb.start, rrweb.pause, rrweb.resume, rrweb.stop, rrweb.recover, recording.open]
+        payload:
+          type: object
+          description: The chosen method's normal request schema; use an empty object for methods without a body. Only mutation kinds are supported for safari.dom.
+    OperationLookupRequest:
+      type: object
+      required: [serviceID, operationID]
+      properties:
+        serviceID: {type: string, format: uuid}
+        operationID: {type: string, format: uuid}
+    OperationReceipt:
+      type: object
+      required: [serviceID, operationID, method, status, expiresAt, resultOmitted]
+      properties:
+        serviceID: {type: string, format: uuid}
+        operationID: {type: string, format: uuid}
+        method: {type: string}
+        status: {enum: [awaitingHuman, running, cancellationRequested, completed, rejected, interrupted, outcomeUnknown]}
+        expiresAt: {type: string, format: date-time}
+        response: {$ref: "#/components/schemas/CallResponse"}
+        resultOmitted:
+          type: boolean
+          description: A response larger than 256 KiB is omitted from bounded receipt storage; status remains authoritative and current state must be inspected.
+      description: >-
+        Up to 64 receipts are retained. Active operations remain observable after their
+        nominal expiry until they settle. Completed means the method completed; live action
+        effects remain unverified. Status/cancel disclose only this verified caller's prior
+        result and do not bypass approval for new commands.
+    ControlFailure:
+      type: object
+      required: [code, dispatchStatus]
+      properties:
+        code: {enum: [invalidRequest, denied, awaitingHuman, permissionRequired, targetUnavailable, staleContext, busy, cancelled, interrupted, failed, outcomeUnknown]}
+        dispatchStatus: {enum: [notDispatched, outcomeUnknown]}
+        humanAction: {type: string}
+      description: >-
+        notDispatched guarantees the requested operation did not start. outcomeUnknown
+        requires state inspection; never automatically retry a mutation. Permission
+        readiness cannot grant access. The error string provides the human-readable detail.
+    ServiceInfoOutput:
+      type: object
+      required: [serviceID, version, build, methods, permissions, approval, safariHumanAction]
+      properties:
+        serviceID: {type: string, format: uuid}
+        version: {type: string}
+        build: {type: string}
+        methods: {type: array, items: {type: string}}
+        permissions:
+          type: array
+          items:
+            type: object
+            required: [permission, state]
+            properties:
+              permission: {enum: [accessibility, inputMonitoring, screenRecording, postEvents]}
+              state: {enum: [granted, humanActionRequired]}
+              humanAction: {type: string}
+        approval:
+          type: object
+          required: [state, verified]
+          properties:
+            state: {enum: [granted, humanActionRequired, awaitingHuman]}
+            verified: {type: boolean}
+            humanAction: {type: string}
+        safariHumanAction: {type: string}
+    TargetsOutput:
+      type: object
+      required: [applications, applicationsTruncated, displays, displaysTruncated, safariDiscoveryMethod]
+      properties:
+        applicationsTruncated: {type: boolean}
+        displaysTruncated: {type: boolean}
+        safariDiscoveryMethod: {const: safari.tabs}
+        applications:
+          type: array
+          maxItems: 512
+          items:
+            type: object
+            required: [pid, name, bundleIdentifier, frontmost, windowDiscoveryMethod]
+            properties:
+              pid: {type: integer, minimum: 1}
+              name: {type: string}
+              bundleIdentifier: {type: [string, "null"]}
+              frontmost: {type: boolean}
+              windowDiscoveryMethod: {const: inspect.live}
+        displays:
+          type: array
+          maxItems: 64
+          items:
+            type: object
+            required: [displayID, main, frame]
+            properties:
+              displayID: {type: integer, minimum: 0}
+              main: {type: boolean}
+              frame:
+                type: object
+                required: [x, y, width, height]
+                properties:
+                  x: {type: number}
+                  y: {type: number}
+                  width: {type: number}
+                  height: {type: number}
+    ChangeWatchRequest:
+      type: object
+      properties:
+        serviceID: {type: string, format: uuid}
+        after: {type: integer, minimum: 0, default: 0}
+        limit: {type: integer, minimum: 1, maximum: 100, default: 100}
+        waitMs: {type: integer, minimum: 0, maximum: 25000, default: 0}
+    ReviewChange:
+      type: object
+      required: [sequence, kind, origin]
+      properties:
+        sequence: {type: integer, minimum: 1}
+        kind: {type: string}
+        origin: {type: string, enum: [human, application, renderer, system, mixed]}
+        reviewID: {type: string, format: uuid}
+        sourceID: {type: string}
+        sourceGeneration: {type: string, format: uuid}
+        revision: {type: integer, minimum: 0}
+        operationID: {type: string, format: uuid}
+        detail: {type: string, maxLength: 1024}
+    ChangePage:
+      type: object
+      required: [serviceID, events, nextCursor, oldestSequence, newestSequence, resyncRequired]
+      properties:
+        serviceID: {type: string, format: uuid}
+        events: {type: array, maxItems: 100, items: {$ref: "#/components/schemas/ReviewChange"}}
+        nextCursor: {type: integer, minimum: 0}
+        oldestSequence: {type: integer, minimum: 1}
+        newestSequence: {type: integer, minimum: 0}
+        resyncRequired: {type: boolean}
+    ReviewEvidenceRequest:
+      type: object
+      required: [reviewID, serviceID, expectedSourceGeneration, expectedRevision, kind]
+      properties:
+        reviewID: {type: string, format: uuid}
+        serviceID: {type: string, format: uuid}
+        expectedSourceGeneration: {type: string, format: uuid}
+        expectedRevision: {type: integer, minimum: 0}
+        kind: {type: string, enum: [point, timeline, image]}
+        x: {type: number, minimum: 0, maximum: 1}
+        y: {type: number, minimum: 0, maximum: 1}
+        fromSeconds: {type: number, minimum: 0, maximum: 9223372036}
+        toSeconds: {type: number, minimum: 0, maximum: 9223372036}
+        after: {type: integer, minimum: 0, default: 0}
+        limit: {type: integer, minimum: 1, maximum: 200, default: 100}
+        maxPixelDimension: {type: integer, minimum: 64, maximum: 2048, default: 1600}
+    ReviewObservation:
+      type: object
+      required: [reference, applicationID, timestampNs, ageNanoseconds, truncated]
+      properties:
+        reference: {type: string}
+        applicationID: {type: string}
+        timestampNs: {type: integer, minimum: 0}
+        ageNanoseconds: {type: integer, minimum: 0}
+        truncated: {type: boolean}
+    ReviewEvidence:
+      type: object
+      required: [state, items, nextCursor, hasMore]
+      properties:
+        state: {$ref: "#/components/schemas/ReviewState"}
+        node: {type: object}
+        observation: {$ref: "#/components/schemas/ReviewObservation"}
+        region:
+          type: object
+          description: Node bounds normalized within state.viewport.
+        items: {type: array, maxItems: 200, items: {type: object}}
+        nextCursor: {type: integer, minimum: 0}
+        hasMore: {type: boolean}
+        image:
+          type: object
+          required: [mimeType, base64, width, height, renderedSeconds]
+          properties:
+            mimeType: {type: string, const: image/png}
+            base64: {type: string, contentEncoding: base64, contentMediaType: image/png, maxLength: 11184812}
+            width: {type: integer, minimum: 1, maximum: 2048}
+            height: {type: integer, minimum: 1, maximum: 2048}
+            renderedSeconds: {type: number, minimum: 0}
+    ReviewCommandRequest:
+      type: object
+      required: [reviewID, serviceID, operationID, issuedAt, expectedSourceGeneration, expectedRevision, command]
+      properties:
+        reviewID: {type: string, format: uuid}
+        serviceID: {type: string, format: uuid}
+        operationID: {type: string, format: uuid}
+        issuedAt: {type: string, format: date-time}
+        expectedSourceGeneration: {type: string, format: uuid}
+        expectedRevision: {type: integer, minimum: 0}
+        command: {$ref: "#/components/schemas/ReviewCommand"}
+    ReviewCommand:
+      type: object
+      required: [kind]
+      properties:
+        kind:
+          type: string
+          enum: [seek, play, pause, rate, focusWindow, selectFrame, selectNode, selectEvent, selectAnnotation, clearSelection, tool, showInspector, activate, close, annotate, inspectPoint]
+        x: {type: number, minimum: 0, maximum: 1}
+        y: {type: number, minimum: 0, maximum: 1}
+        seconds: {type: number, minimum: 0, maximum: 9223372036}
+        rate: {type: number, minimum: 0.5, maximum: 8}
+        reference:
+          type: string
+          description: Source-qualified A11Y frame, timeline item ID, or NOTE reference as appropriate for kind.
+        nodeID: {type: string}
+        windowID:
+          type: string
+          description: Recorded window ID; omit for the full recording canvas.
+        tool: {type: string, enum: [inspect, notes, pen, comment]}
+        visible: {type: boolean}
+        text: {type: string, minLength: 1}
+        timestampNs:
+          type: integer
+          minimum: 0
+          description: Explicit note anchor on the session timeline; never inferred from a moving playhead.
+        annotationKind: {type: string, enum: [issue, observation, question, highlight], default: observation}
+      allOf:
+        - if: {properties: {kind: {const: annotate}}}
+          then: {required: [text, timestampNs]}
+        - if: {properties: {kind: {const: seek}}}
+          then: {required: [seconds]}
+        - if: {properties: {kind: {const: rate}}}
+          then: {required: [rate]}
+        - if: {properties: {kind: {enum: [selectFrame, selectNode, selectEvent, selectAnnotation]}}}
+          then: {required: [reference]}
+        - if: {properties: {kind: {const: selectNode}}}
+          then: {required: [nodeID]}
+        - if: {properties: {kind: {const: tool}}}
+          then: {required: [tool]}
+        - if: {properties: {kind: {const: showInspector}}}
+          then: {required: [visible]}
+    ReviewOperation:
+      type: object
+      required: [operationID, reviewID, status, expiresAt]
+      properties:
+        operationID: {type: string, format: uuid}
+        reviewID: {type: string, format: uuid}
+        status: {type: string, enum: [running, cancellationRequested, completed, failed, staleContext, draftConflict, interrupted]}
+        error: {type: string}
+        state: {$ref: "#/components/schemas/ReviewState"}
+        annotation: {type: object}
+        annotationReference: {type: string}
+        expiresAt: {type: string, format: date-time}
+    ReviewStateRequest:
+      type: object
+      required: [reviewID]
+      properties:
+        reviewID: {type: string, format: uuid}
+    ReviewSource:
+      type: object
+      required: [sourceID, generation, recordingPath, dataSource]
+      properties:
+        sourceID:
+          type: string
+          description: SHA-256 of the loaded manifest; copied evidence retains this identity.
+        generation:
+          type: string
+          format: uuid
+          description: New for every load, including replacement at the same path.
+        recordingPath: {type: string}
+        dataSource: {type: string, enum: [native, rrweb]}
+    ReviewSelection:
+      type: object
+      required: [kind, reference]
+      properties:
+        kind: {type: string, enum: [annotation, event, frame, node]}
+        reference: {type: string}
+        applicationID: {type: string}
+        nodeID: {type: string}
+        timestampNs: {type: integer, minimum: 0}
+    ReviewDraftState:
+      type: object
+      required: [owner, text, kind, sampleCount]
+      properties:
+        draftID: {type: string, format: uuid}
+        sourceGeneration: {type: string, format: uuid}
+        anchorTimestampNs: {type: integer, minimum: 0}
+        accessibilityReference: {type: string}
+        applicationID: {type: string}
+        nodeID: {type: string}
+        coordinateFrame: {type: object}
+        owner: {type: string, const: human}
+        text: {type: string}
+        kind: {type: string}
+        characterCount: {type: integer, minimum: 0}
+        textTruncated: {type: boolean}
+        sampleCount: {type: integer, minimum: 0}
+        startTimestampNs: {type: integer, minimum: 0}
+        endTimestampNs: {type: integer, minimum: 0}
+    ReviewState:
+      type: object
+      required: [reviewID, revision, isActive, playheadSeconds, durationSeconds, sessionTimestampNs, playing, playbackRate, renderer, focusedWindowAvailable, tool, inspectorVisible, annotationCount]
+      properties:
+        reviewID: {type: string, format: uuid}
+        serviceID:
+          type: string
+          format: uuid
+          description: App-process receipt namespace; changes on restart.
+        revision:
+          type: integer
+          minimum: 0
+          description: Logical context revision; ordinary playback clock ticks do not advance it.
+        isActive: {type: boolean}
+        source: {$ref: "#/components/schemas/ReviewSource"}
+        playheadSeconds: {type: number, minimum: 0}
+        renderedSeconds:
+          type: number
+          minimum: 0
+          description: Last renderer-observed time; absent until a renderer reports it.
+        durationSeconds: {type: number, minimum: 0}
+        sessionTimestampNs: {type: integer, minimum: 0}
+        playing: {type: boolean}
+        playbackRate: {type: number}
+        renderer: {type: string, enum: [empty, loading, ready, seeking, failed]}
+        rendererError: {type: string}
+        selection: {$ref: "#/components/schemas/ReviewSelection"}
+        focusedWindowID: {type: string}
+        focusedWindowAvailable: {type: boolean}
+        viewport:
+          type: object
+          required: [x, y, width, height]
+          properties:
+            x: {type: number}
+            y: {type: number}
+            width: {type: number}
+            height: {type: number}
+        tool: {type: string, enum: [inspect, notes, pen, comment]}
+        inspectorVisible: {type: boolean}
+        inspectorSection: {type: string, enum: [elements, activity, notes]}
+        draft: {$ref: "#/components/schemas/ReviewDraftState"}
+        videoAvailability:
+          type: string
+          enum: [available, unavailable, unsupported]
+          description: Native track coverage at this time; separate from renderer readiness or decoding errors.
+        accessibilityAvailability: {type: string, enum: [available, unavailable, unsupported]}
+        observations: {type: array, items: {$ref: "#/components/schemas/ReviewObservation"}}
+        pinnedEvidence: {$ref: "#/components/schemas/ReviewSelection"}
+        hoveredEvidence: {$ref: "#/components/schemas/ReviewSelection"}
+        streamIssues: {type: array, maxItems: 5, items: {$ref: "#/components/schemas/RecordingStreamIssue"}}
+        annotationCount: {type: integer, minimum: 0}
+        error: {type: string}
     ApplicationTarget:
       type: object
-      description: Supply exactly one target selector.
+      description: Supply exactly one application selector. Action window/frame preconditions require sessionID.
       oneOf:
         - required: [pid]
         - required: [bundleIdentifier]
         - required: [appName]
+      dependentRequired:
+        windowID: [sessionID]
+        frameReference: [sessionID]
       properties:
+        sessionID:
+          type: string
+          format: uuid
+          description: Expected live inspection session; a mismatch or eviction rejects the request before capture or dispatch.
+        windowID:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: Live AX window ID from inspect/frames. Actions fail if it closes or loses focus; there is no fallback.
+        frameReference:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: Optional action precondition requiring this to remain the latest live frame.
         pid:
           type: integer
           format: int32
@@ -286,15 +868,20 @@ components:
         duration:
           type: number
           exclusiveMinimum: 0
+          maximum: 9223372036
         snapshotInterval:
           type: number
           default: 1
+          minimum: 0
+          maximum: 9223372036
         captureText:
           type: boolean
           default: true
         framesPerSecond:
           type: integer
           default: 30
+          minimum: 1
+          maximum: 60
     AnnotationRequest:
       type: object
       required: [recordingPath]
@@ -377,20 +964,40 @@ components:
     LiveInspectionRequest:
       type: object
       required: [kind, target]
+      description: >-
+        Live frames have LIVE-sessionUUID/A11Y-ordinal references. Unqualified recording
+        references are not live references. frames returns reference/session/frame envelopes;
+        frame returns one envelope. events returns sessionID, observing, capturesText, indexed
+        events, nextCursor, oldestSequence, newestSequence, and resyncRequired. Supply the
+        returned sessionID with every subsequent cursor. observationStop stops input and
+        forgets the entire inspection session, expiring all its frames and node IDs.
+        inspect includes windows and actionCapabilities; frame nodes include observed
+        actions (nil means unavailable, empty means none). A node's AXPress permits a
+        background click; other foreground input requires an explicit unlock.
+        target.windowID and target.frameReference are action-only preconditions.
       properties:
         kind:
           type: string
-          enum: [inspect, frames, frame, events, annotations]
+          enum: [inspect, frames, frame, events, annotations, observationStart, observationStatus, observationStop]
         target:
           $ref: "#/components/schemas/ApplicationTarget"
         reference:
           type: string
+        after:
+          type: integer
+          minimum: 0
+          description: Last consumed event sequence; requires target.sessionID. Omit for the latest page.
+        includeText:
+          type: boolean
+          description: Observation text capture setting; defaults to true at start and preserves the active setting thereafter.
         changedOnly:
           type: boolean
           default: false
         limit:
           type: integer
           default: 100
+          minimum: 1
+          maximum: 10000
     LiveActionRequest:
       type: object
       required: [kind, target]
@@ -481,26 +1088,53 @@ components:
             NOT RECOMMENDED. Allows Pablo to activate the target for pointer,
             scroll, drag, typing, key, and fallback click input. Agents must leave
             this false unless the user explicitly accepts the focus change.
+    LiveActionOutput:
+      type: object
+      required: [actionID, target, dispatchMethod, dispatchStatus, effectStatus, summary]
+      properties:
+        actionID: {type: string, format: uuid}
+        target:
+          type: object
+          required: [pid, applicationName, sessionID]
+          properties:
+            pid: {type: integer, format: int32}
+            bundleIdentifier: {type: string}
+            applicationName: {type: string}
+            sessionID: {type: string, format: uuid}
+            windowID: {type: string}
+            inspectionFrameReference: {type: string}
+        dispatchMethod: {type: string, enum: [accessibility, foregroundInput]}
+        dispatchStatus: {type: string, const: dispatched}
+        effectStatus: {type: string, const: unverified}
+        characterCount: {type: integer, minimum: 0}
+        summary: {type: string}
+      description: >-
+        Successful dispatch with resolved application context. actionID matches any
+        recorded automation evidence. A dispatched event or successful AX call does
+        not verify the application's resulting effect. Typed text is never returned.
     SafariDOMRequest:
       type: object
       required: [kind]
       description: >-
         A bounded command for the active Safari tab explicitly unlocked through
-        the extension toolbar button. Use nodeID values from a fresh dump; nodeID
-        is a CSS selector and is invalid after navigation or DOM replacement.
+        the extension toolbar button. Actions require documentGeneration from a fresh
+        dump. Opaque nodeID values refer to exact nodes in that document and expire
+        after replacement, navigation, or bounded-history eviction. A dispatched
+        action reports effectStatus unverified. Dumps are bounded to 1 MiB and
+        count every visited node, including text and hidden nodes.
       oneOf:
         - properties:
             kind: {enum: [dumpDOM, dumpAccessibilityTree]}
           required: [kind]
         - properties:
             kind: {enum: [click, focus, scrollIntoView]}
-          required: [kind]
+          required: [kind, documentGeneration]
           oneOf:
             - required: [selector]
             - required: [nodeID]
         - properties:
             kind: {const: setValue}
-          required: [kind, value]
+          required: [kind, value, documentGeneration]
           oneOf:
             - required: [selector]
             - required: [nodeID]
@@ -515,7 +1149,11 @@ components:
         nodeID:
           type: string
           minLength: 1
-          description: CSS-selector node ID returned by the latest DOM or accessibility dump.
+          description: Opaque node ID returned by a fresh DOM or accessibility dump.
+        documentGeneration:
+          type: string
+          format: uuid
+          description: Required for actions; optional freshness condition for dumps.
         value:
           type: string
           maxLength: 32768
@@ -599,7 +1237,7 @@ components:
         - inputsMasked
         - rrwebVersion
       properties:
-        schemaVersion: {type: integer, const: 1}
+        schemaVersion: {type: integer, const: 3}
         recordingID: {type: string, format: uuid}
         tab: {$ref: "#/components/schemas/SafariTab"}
         startedAt: {type: string, format: date-time}
@@ -619,13 +1257,22 @@ components:
         manifest: {$ref: "#/components/schemas/RRWebRecordingManifest"}
     RRWebStatusOutput:
       type: object
-      required: [eventCount]
+      required: [eventCount, recoveryNeeded]
       properties:
         active:
           oneOf:
             - {$ref: "#/components/schemas/RRWebRecording"}
             - {type: "null"}
         eventCount: {type: integer, minimum: 0}
+        transition:
+          type: string
+          enum: [starting, pausing, resuming, stopping, checking]
+        recoveryNeeded: {type: boolean}
+        recoveryError: {type: string}
+      description: >-
+        Unknown lifecycle acknowledgments preserve the active package and spool.
+        A new start or pause/resume is blocked until status confirms the recorder;
+        stop can retrieve a retained stop acknowledgment to finish recovery.
     RRWebRecordingsOutput:
       type: object
       required: [recordings]
@@ -655,6 +1302,7 @@ components:
           $ref: "#/components/schemas/ControlResult"
         error:
           type: string
+        failure: {$ref: "#/components/schemas/ControlFailure"}
     ControlResult:
       type: object
       required: [state, applicationIDs, elapsedNanoseconds]
@@ -670,22 +1318,65 @@ components:
           minimum: 0
         annotation:
           type: object
+        liveObservations:
+          type: array
+          description: Active in-memory native input observations. Stop them through observationStop or the human Stop Live Observation control.
+          items:
+            type: object
+            required: [id, pid, applicationName, capturesText]
+            properties:
+              id: {type: string, format: uuid}
+              pid: {type: integer, format: int32}
+              applicationName: {type: string}
+              bundleIdentifier: {type: string}
+              capturesText: {type: boolean}
+        streamIssues:
+          type: array
+          maxItems: 5
+          items: {$ref: "#/components/schemas/RecordingStreamIssue"}
+          description: Sticky active recording failures; a later successful write does not erase missing evidence.
+        lastRecordingCompletion:
+          $ref: "#/components/schemas/RecordingCompletion"
         output:
           description: >-
-            Pretty-printed structured JSON for live inspection, or a string for
-            live action output. Safari and rrweb operations use the documented
-            output object schemas.
+            Structured inspection, live action, Safari, rrweb, and review results.
+            Live action output separates dispatch from observed application effect.
           anyOf:
+            - {$ref: "#/components/schemas/OperationReceipt"}
+            - {$ref: "#/components/schemas/ServiceInfoOutput"}
+            - {$ref: "#/components/schemas/TargetsOutput"}
             - {$ref: "#/components/schemas/SafariTabsOutput"}
+            - {$ref: "#/components/schemas/LiveActionOutput"}
             - {$ref: "#/components/schemas/RRWebStatusOutput"}
             - {$ref: "#/components/schemas/RRWebRecordingsOutput"}
             - {$ref: "#/components/schemas/RRWebInspectionOutput"}
             - {type: object}
             - {type: array}
             - {type: string}
+    RecordingStreamIssue:
+      type: object
+      required: [stream, failureCount, firstFailureTimestampNs, lastFailureTimestampNs, lastError]
+      properties:
+        stream: {type: string, enum: [input, accessibility, workspace, video, manifest]}
+        failureCount: {type: integer, minimum: 1}
+        firstFailureTimestampNs: {type: integer, minimum: 0}
+        lastFailureTimestampNs: {type: integer, minimum: 0}
+        lastError: {type: string, maxLength: 1024}
+    RecordingCompletion:
+      type: object
+      required: [source, state, finishedAt]
+      properties:
+        source: {type: string, enum: [native, rrweb]}
+        recordingPath: {type: string}
+        state: {type: string, enum: [complete, interrupted, failed]}
+        error: {type: string}
+        streamIssues: {type: array, maxItems: 5, items: {$ref: "#/components/schemas/RecordingStreamIssue"}}
+        finishedAt: {type: string, format: date-time}
+      description: Retained outcome of the latest recording start failure or finalization, including a recoverable package path when available.
     HTTPError:
       type: object
       required: [error]
       properties:
+        failure: {$ref: "#/components/schemas/ControlFailure"}
         error:
           type: string

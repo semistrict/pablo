@@ -153,40 +153,55 @@ enum ProtobufStream {
 final class ProtobufStreamWriter<Value> {
     private let handle: FileHandle
     private let encode: (Value) throws -> Data
+    private let onFailure: ((Error) -> Void)?
     private let lock = NSLock()
     private(set) var count = 0
 
-    init(url: URL, encode: @escaping (Value) throws -> Data) throws {
+    init(url: URL, encode: @escaping (Value) throws -> Data, onFailure: ((Error) -> Void)? = nil) throws {
         FileManager.default.createFile(atPath: url.path, contents: nil)
         handle = try FileHandle(forWritingTo: url)
         self.encode = encode
+        self.onFailure = onFailure
     }
 
     func append(_ value: Value) throws {
-        let data = try encode(value)
-        try lock.withLock {
-            try handle.write(contentsOf: data)
-            count += 1
+        do {
+            let data = try encode(value)
+            try lock.withLock {
+                try handle.write(contentsOf: data)
+                count += 1
+            }
+        } catch {
+            onFailure?(error)
+            throw error
         }
     }
 
     func close() throws {
-        try lock.withLock {
-            try handle.synchronize()
-            try handle.close()
+        do {
+            try lock.withLock {
+                try handle.synchronize()
+                try handle.close()
+            }
+        } catch {
+            onFailure?(error)
+            throw error
         }
     }
+
 }
 
 public enum RecordingError: LocalizedError {
     case usage(String)
+    case staleContext(String)
+    case interrupted(String)
     case targetNotFound(String)
     case permission(String)
     case capture(String)
 
     public var errorDescription: String? {
         switch self {
-        case .usage(let message), .targetNotFound(let message), .permission(let message),
+        case .usage(let message), .staleContext(let message), .interrupted(let message), .targetNotFound(let message), .permission(let message),
              .capture(let message):
             return message
         }

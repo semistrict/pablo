@@ -2,23 +2,35 @@ const NATIVE_APPLICATION = "com.ramon.pablo";
 const COMMAND_MESSAGE = "dom-command";
 const RRWEB_MESSAGE = "pablo-rrweb";
 const activeRecordings = new Map();
+// Safari can retain activeTab across same-origin navigation. Pablo grants one Document.
+const tabGrants = new Map();
 const textEncoder = new TextEncoder();
 const textDecoder = new TextDecoder();
 let nativePort;
 let nativeReconnectTimer;
+let nativeHeartbeatTimer;
 
 browser.action.onClicked.addListener(async (tab) => {
   if (!tab.id) return;
   connectNativePort();
+  const token = crypto.randomUUID();
+  tabGrants.set(tab.id, token);
   try {
     await browser.scripting.executeScript({
       target: { tabId: tab.id },
-      func: () => true,
+      func: (token) => {
+        globalThis.__pabloTabGrant = { document, token };
+        return true;
+      },
+      args: [token],
     });
+    if (tabGrants.get(tab.id) !== token) return;
     await browser.action.setBadgeBackgroundColor({ tabId: tab.id, color: "#1769FF" });
     await browser.action.setBadgeText({ tabId: tab.id, text: "ON" });
     await browser.action.setTitle({ tabId: tab.id, title: "Pablo can control this tab until it navigates" });
   } catch (error) {
+    if (tabGrants.get(tab.id) !== token) return;
+    tabGrants.delete(tab.id);
     await browser.action.setBadgeBackgroundColor({ tabId: tab.id, color: "#B42318" });
     await browser.action.setBadgeText({ tabId: tab.id, text: "!" });
   }
@@ -26,6 +38,7 @@ browser.action.onClicked.addListener(async (tab) => {
 
 browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
   if (changeInfo.status === "loading" || changeInfo.url) {
+    tabGrants.delete(tabId);
     reportInterruptedRecording(tabId, "The Safari tab navigated while rrweb recording was active.");
     browser.action.setBadgeText({ tabId, text: "" });
     browser.action.setTitle({ tabId, title: "Unlock this tab for Pablo" });
@@ -33,6 +46,7 @@ browser.tabs.onUpdated.addListener((tabId, changeInfo) => {
 });
 
 browser.tabs.onRemoved.addListener((tabId) => {
+  tabGrants.delete(tabId);
   reportInterruptedRecording(tabId, "The Safari tab closed while rrweb recording was active.");
 });
 
@@ -68,10 +82,29 @@ function connectNativePort() {
       }
     });
     port.onDisconnect.addListener(() => {
-      if (nativePort === port) nativePort = undefined;
+      if (nativePort !== port) return;
+      nativePort = undefined;
+      clearTimeout(nativeHeartbeatTimer);
+      nativeHeartbeatTimer = undefined;
       scheduleNativeReconnect();
     });
+    maintainNativePort(port);
   } catch (_) {
+    scheduleNativeReconnect();
+  }
+}
+
+function maintainNativePort(port) {
+  if (nativePort !== port) return;
+  try {
+    // Safari may unload an idle event page without waking it for dispatchMessage.
+    // Port traffic keeps the enabled native bridge reachable without reading a page.
+    port.postMessage({ kind: "bridge-ping" });
+    nativeHeartbeatTimer = setTimeout(() => maintainNativePort(port), 20000);
+  } catch (_) {
+    nativePort = undefined;
+    nativeHeartbeatTimer = undefined;
+    try { port.disconnect(); } catch (_) {}
     scheduleNativeReconnect();
   }
 }
@@ -135,10 +168,11 @@ async function handleSerializedCommand(base64) {
       ? await browser.tabs.get(command.tabID)
       : (await browser.tabs.query({ active: true, currentWindow: true }))[0];
     if (!tab?.id) throw new Error("Safari has no active tab.");
+    const accessToken = await requireTabAccess(tab.id);
     const results = await browser.scripting.executeScript({
       target: { tabId: tab.id },
       func: executeDOMCommand,
-      args: [command],
+      args: [{ ...command, accessToken }],
     });
     const result = results?.[0]?.result;
     if (!result) throw new Error("The active tab did not return a result.");
@@ -151,13 +185,36 @@ async function handleSerializedCommand(base64) {
   } catch (error) {
     const detail = String(error?.message || error);
     const activeTabHint = detail.toLowerCase().includes("permission")
-      ? " Click Pablo’s Safari toolbar button on the tab, then retry."
+      ? " Inspect the current tab grant and page state before deciding on another command."
       : "";
     return nativeResponse(command.id, encodeResponse({
       id: command.id,
       success: false,
       error: `${detail}${activeTabHint}`,
+      payload: error?.pabloErrorCode === "permissionRequired"
+        ? { errorCode: "permissionRequired", dispatchStatus: "notDispatched", humanAction: detail }
+        : undefined,
     }));
+  }
+}
+
+async function requireTabAccess(tabID) {
+  // Probe access before submitting a DOM action or recorder command. A later transport
+  // failure still remains outcome-unknown because the requested action may have run.
+  try {
+    const token = tabGrants.get(tabID);
+    if (!token) throw new Error("No tab grant");
+    const result = await browser.scripting.executeScript({
+      target: { tabId: tabID },
+      func: (token) => globalThis.__pabloTabGrant?.document === document && globalThis.__pabloTabGrant.token === token,
+      args: [token],
+    });
+    if (result?.[0]?.result !== true || tabGrants.get(tabID) !== token) throw new Error("No access observation");
+    return token;
+  } catch (_) {
+    const error = new Error('Safari cannot access the intended tab. Make it active and click "Unlock this tab for Pablo" in the toolbar, then handle any Safari permission prompt.');
+    error.pabloErrorCode = "permissionRequired";
+    throw error;
   }
 }
 
@@ -170,6 +227,7 @@ async function handleRRWebCommand(command) {
         const status = await browser.tabs.sendMessage(tab.id, {
           type: RRWEB_MESSAGE,
           command: "status",
+          accessToken: await requireTabAccess(tab.id),
         });
         if (status?.recordingID) recordings.push({ ...status, tabID: tab.id });
       } catch (_) {
@@ -188,6 +246,7 @@ async function handleRRWebCommand(command) {
     12: "status",
   };
   const commandName = commandNames[command.kind];
+  const accessToken = await requireTabAccess(command.tabID);
   if (commandName === "start") {
     await browser.scripting.executeScript({
       target: { tabId: command.tabID },
@@ -198,6 +257,7 @@ async function handleRRWebCommand(command) {
     type: RRWEB_MESSAGE,
     command: commandName,
     recordingID: command.recordingID,
+    accessToken,
   });
   if (commandName === "start") activeRecordings.set(command.tabID, command.recordingID);
   if (commandName === "stop") activeRecordings.delete(command.tabID);
@@ -210,12 +270,15 @@ async function accessibleActiveTabs() {
   for (const tab of tabs) {
     if (!tab.id) continue;
     try {
+      const token = await requireTabAccess(tab.id);
       const results = await browser.scripting.executeScript({
         target: { tabId: tab.id },
-        func: () => ({ title: document.title, url: location.href }),
+        func: (token) => globalThis.__pabloTabGrant?.document === document && globalThis.__pabloTabGrant.token === token
+          ? { title: document.title, url: location.href } : null,
+        args: [token],
       });
       const metadata = results?.[0]?.result;
-      if (!metadata) continue;
+      if (!metadata || tabGrants.get(tab.id) !== token) continue;
       accessible.push({
         id: tab.id,
         windowID: tab.windowId,
@@ -236,48 +299,89 @@ function nativeResponse(id, bytes) {
 function executeDOMCommand(command) {
   const maximumNodes = Math.max(1, Math.min(command.maxNodes || 2000, 10000));
   const maximumDepth = Math.max(1, Math.min(command.maxDepth || 20, 50));
-  const state = { count: 0, truncated: false };
+  const maximumBytes = 1024 * 1024;
+  const state = { count: 0, visited: 0, bytes: 16384, truncated: false, byteBudgetReached: false };
+  const encoder = new TextEncoder();
 
   function clipped(value, length = 2048) {
     if (value == null) return undefined;
     const string = String(value);
-    return string.length > length ? `${string.slice(0, length)}…` : string;
+    if (string.length <= length) return string;
+    state.truncated = true;
+    return `${string.slice(0, length)}…`;
   }
 
-  function cssEscape(value) {
-    if (globalThis.CSS?.escape) return CSS.escape(value);
-    return String(value).replace(/[^a-zA-Z0-9_-]/g, (character) => `\\${character}`);
-  }
-
-  function nodeID(element) {
-    if (element.id) return `#${cssEscape(element.id)}`;
-    const parts = [];
-    let current = element;
-    while (current && current.nodeType === Node.ELEMENT_NODE && current !== document.documentElement) {
-      let part = current.localName;
-      const parent = current.parentElement;
-      if (parent) {
-        const siblings = Array.from(parent.children).filter((child) => child.localName === current.localName);
-        if (siblings.length > 1) part += `:nth-of-type(${siblings.indexOf(current) + 1})`;
-      }
-      parts.unshift(part);
-      current = parent;
+  // Isolated-world state follows this exact Document and never reuses an expired ID.
+  const documentKey = "__pabloDOMIdentity";
+  let identity = globalThis[documentKey];
+  if (!identity || identity.document !== document) {
+    identity = { document, generation: crypto.randomUUID(), nextID: 0, ids: new WeakMap(), nodes: new Map() };
+    globalThis[documentKey] = identity;
+    if (!globalThis.__pabloDOMPageShowInstalled) {
+      globalThis.__pabloDOMPageShowInstalled = true;
+      addEventListener("pageshow", (event) => {
+        if (event.persisted) globalThis[documentKey] = undefined;
+      });
     }
-    parts.unshift("html");
-    return parts.join(" > ");
+  }
+  function nodeID(node) {
+    let id = identity.ids.get(node);
+    if (!id || !identity.nodes.has(id)) {
+      id = `DOM-${identity.generation}:${++identity.nextID}`;
+      identity.ids.set(node, id);
+      identity.nodes.set(id, new WeakRef(node));
+      if (identity.nodes.size > 20000) identity.nodes.delete(identity.nodes.keys().next().value);
+    }
+    return id;
+  }
+
+  function enter(depth) {
+    if (state.byteBudgetReached || state.visited >= maximumNodes || depth > maximumDepth) {
+      state.truncated = true;
+      return false;
+    }
+    state.visited += 1;
+    return true;
+  }
+
+  function childrenOf(element, depth, visit) {
+    const children = [];
+    for (let child = element.firstChild; child; child = child.nextSibling) {
+      if (state.byteBudgetReached || state.visited >= maximumNodes || depth + 1 > maximumDepth) {
+        state.truncated = true;
+        break;
+      }
+      const result = visit(child, depth + 1);
+      if (Array.isArray(result)) children.push(...result);
+      else if (result) children.push(result);
+    }
+    return children;
   }
 
   function elementForCommand() {
-    const selector = command.selector || command.nodeID;
+    if (command.nodeID) {
+      const node = identity.nodes.get(command.nodeID)?.deref();
+      if (!node || !node.isConnected || node.nodeType !== Node.ELEMENT_NODE) {
+        throw staleContext("This node reference is unavailable. Inspect the current document before acting.");
+      }
+      return node;
+    }
+    const selector = command.selector;
     if (!selector) throw new Error("This command requires selector or nodeID.");
     let element;
     try {
       element = document.querySelector(selector);
     } catch (_) {
-      throw new Error(`Invalid selector: ${selector}`);
+      throw new Error("Invalid DOM selector.");
     }
-    if (!element) throw new Error(`No DOM element matches ${selector}. Dump a fresh tree and retry.`);
+    if (!element) throw new Error("No DOM element matches this selector. Inspect the current document before acting.");
     return element;
+  }
+
+  function staleContext(message) {
+    const error = new Error(message);
+    error.pabloErrorCode = "staleContext";
+    return error;
   }
 
   function isHidden(element) {
@@ -316,32 +420,66 @@ function executeDOMCommand(command) {
     return undefined;
   }
 
+  function boundedLabelText(root) {
+    let result = "";
+    let remaining = 32;
+    function read(node, depth) {
+      if (remaining-- <= 0 || result.length >= 512) { state.truncated = true; return; }
+      if (!enter(depth)) return;
+      if (node.nodeType === Node.TEXT_NODE) {
+        result += node.substringData(0, 512 - result.length);
+      } else if (node.nodeType === Node.ELEMENT_NODE && !isHidden(node)) {
+        for (let child = node.firstChild; child; child = child.nextSibling) {
+          if (remaining <= 0 || result.length >= 512 || state.visited >= maximumNodes) {
+            state.truncated = true;
+            break;
+          }
+          read(child, depth + 1);
+        }
+      }
+    }
+    if (root) read(root, 0);
+    return result.replace(/\s+/g, " ").trim();
+  }
+
   function accessibleName(element) {
-    const direct = element.getAttribute("aria-label");
-    if (direct) return clipped(direct.trim());
-    const labelledBy = element.getAttribute("aria-labelledby");
+    const direct = clipped(element.getAttribute("aria-label"), 512);
+    if (direct) return direct.trim();
+    const labelledBy = clipped(element.getAttribute("aria-labelledby"), 512);
     if (labelledBy) {
-      const text = labelledBy.split(/\s+/).map((id) => document.getElementById(id)?.textContent || "").join(" ").trim();
-      if (text) return clipped(text);
+      const ids = labelledBy.split(/\s+/).slice(0, 8);
+      const text = ids.map((id) => boundedLabelText(document.getElementById(id))).join(" ");
+      if (text.trim()) return clipped(text.trim(), 512);
     }
     if (element.labels?.length) {
-      const text = Array.from(element.labels).map((label) => label.textContent || "").join(" ").trim();
-      if (text) return clipped(text);
+      let text = "";
+      for (let index = 0; index < Math.min(element.labels.length, 8) && text.length < 512; index++) {
+        text += `${boundedLabelText(element.labels[index])} `;
+      }
+      if (text.trim()) return clipped(text.trim(), 512);
     }
     const alternate = element.getAttribute("alt") || element.getAttribute("title") || element.getAttribute("placeholder");
-    if (alternate) return clipped(alternate.trim());
-    if (["button", "a", "summary", "option"].includes(element.localName)) {
-      const text = element.innerText?.trim();
-      if (text) return clipped(text);
+    return alternate ? clipped(alternate, 512).trim() : undefined;
+  }
+
+  function emit(node) {
+    // Charge each node once, excluding descendants. Reserve covers wrapper metadata.
+    const cost = encoder.encode(JSON.stringify(node)).length + 2;
+    if (state.bytes + cost > maximumBytes) {
+      state.truncated = true;
+      state.byteBudgetReached = true;
+      return undefined;
     }
-    return undefined;
+    state.bytes += cost;
+    state.count += 1;
+    return node;
   }
 
   function stateAttributes(element) {
     const states = {};
     for (const name of ["checked", "selected", "expanded", "pressed", "current", "required", "invalid", "readonly"]) {
       const value = element.getAttribute(`aria-${name}`);
-      if (value != null) states[name] = value;
+      if (value != null) states[name] = clipped(value, 512);
     }
     if (element.matches(":disabled") || element.getAttribute("aria-disabled") === "true") states.disabled = true;
     if (document.activeElement === element) states.focused = true;
@@ -363,68 +501,105 @@ function executeDOMCommand(command) {
   }
 
   function visitDOM(node, depth) {
-    if (state.count >= maximumNodes || depth > maximumDepth) {
-      state.truncated = true;
-      return undefined;
-    }
+    if (!enter(depth)) return undefined;
     if (node.nodeType === Node.TEXT_NODE) {
-      const text = node.textContent?.replace(/\s+/g, " ").trim();
-      return text ? { type: "text", text: clipped(text, 512) } : undefined;
+      const text = node.substringData(0, 512).replace(/\s+/g, " ");
+      if (node.length > 512) state.truncated = true;
+      return text.trim() ? emit({ type: "text", nodeID: nodeID(node), text }) : undefined;
     }
     if (node.nodeType !== Node.ELEMENT_NODE) return undefined;
     const element = node;
     if (!command.includeHidden && isHidden(element)) return undefined;
-    state.count += 1;
-    const attributes = {};
-    for (const attribute of element.attributes) {
-      const lower = attribute.name.toLowerCase();
+    const attributes = Object.create(null);
+    for (let index = 0; index < Math.min(element.attributes.length, 32); index++) {
+      const attribute = element.attributes[index];
+      const name = clipped(attribute.name, 128);
+      const lower = name.toLowerCase();
       if (lower === "value" && (element.getAttribute("type") || "").toLowerCase() === "password") {
-        attributes[attribute.name] = "[redacted]";
+        attributes[name] = "[redacted]";
       } else if (!lower.startsWith("on")) {
-        attributes[attribute.name] = clipped(attribute.value, 1024);
+        attributes[name] = clipped(attribute.value, 1024);
       }
     }
-    return {
-      type: "element",
-      nodeID: nodeID(element),
-      tag: element.localName,
-      attributes,
-      children: Array.from(element.childNodes).map((child) => visitDOM(child, depth + 1)).filter(Boolean),
-    };
+    if (element.attributes.length > 32) state.truncated = true;
+    const result = emit({ type: "element", nodeID: nodeID(element), tag: clipped(element.localName, 128), attributes, children: [] });
+    if (result) result.children = childrenOf(element, depth, visitDOM);
+    return result;
   }
 
   function visitAccessibility(element, depth) {
-    if (state.count >= maximumNodes || depth > maximumDepth) {
-      state.truncated = true;
-      return [];
+    if (!enter(depth)) return [];
+    if (element.nodeType === Node.TEXT_NODE) {
+      const text = element.substringData(0, 512).replace(/\s+/g, " ");
+      if (element.length > 512) state.truncated = true;
+      const result = text.trim() ? emit({ nodeID: nodeID(element), role: "text", text }) : undefined;
+      return result ? [result] : [];
     }
+    if (element.nodeType !== Node.ELEMENT_NODE) return [];
     if (!command.includeHidden && isHidden(element)) return [];
-    const children = Array.from(element.children).flatMap((child) => visitAccessibility(child, depth + 1));
-    const role = element.getAttribute("role")?.split(/\s+/)[0] || implicitRole(element);
+    const role = clipped(element.getAttribute("role"), 128)?.split(/\s+/)[0] || implicitRole(element);
     const name = accessibleName(element);
     const meaningful = element === document.documentElement || role || name || element.tabIndex >= 0;
-    if (!meaningful) return children;
-    state.count += 1;
-    return [{
+    if (!meaningful) return childrenOf(element, depth, visitAccessibility);
+    const result = emit({
       nodeID: nodeID(element),
       role: element === document.documentElement ? "document" : (role || "generic"),
       name,
       states: stateAttributes(element),
       frame: geometry(element),
-      children,
-    }];
+      children: [],
+    });
+    if (!result) return [];
+    result.children = childrenOf(element, depth, visitAccessibility);
+    if (!result.name && ["button", "link", "heading", "option", "cell", "columnheader"].includes(result.role)) {
+      let label = "";
+      let remaining = 64;
+      function collect(nodes) {
+        for (const node of nodes) {
+          if (remaining-- <= 0 || label.length >= 512) { state.truncated = true; break; }
+          if (node.text) label += node.text.slice(0, 512 - label.length);
+          else if (node.children) collect(node.children);
+        }
+      }
+      collect(result.children);
+      label = label.trim();
+      const cost = encoder.encode(JSON.stringify({ name: label })).length;
+      if (label && state.bytes + cost <= maximumBytes) {
+        result.name = label;
+        state.bytes += cost;
+      } else if (label) {
+        state.truncated = true;
+        state.byteBudgetReached = true;
+      }
+    }
+    return [result];
   }
 
+  let dispatchStarted = false;
   try {
+    if (!command.accessToken || globalThis.__pabloTabGrant?.document !== document ||
+        globalThis.__pabloTabGrant.token !== command.accessToken) {
+      const error = new Error('This document is locked. Click "Unlock this tab for Pablo" in Safari.');
+      error.pabloErrorCode = "permissionRequired";
+      throw error;
+    }
+    const mutation = command.kind >= 3 && command.kind <= 6;
+    if ((mutation && !command.documentGeneration) ||
+        (command.documentGeneration && command.documentGeneration.toLowerCase() !== identity.generation.toLowerCase())) {
+      throw staleContext("The document context is stale or missing. Inspect the current document before acting.");
+    }
     let payload;
     switch (command.kind) {
       case 1:
         payload = {
           kind: "dom",
-          url: location.href,
-          title: document.title,
+          url: clipped(location.href, 2048),
+          title: clipped(document.title, 1024),
           root: visitDOM(document.documentElement, 0),
           nodeCount: state.count,
+          visitedNodeCount: state.visited,
+          byteBudget: maximumBytes,
+          byteBudgetReached: state.byteBudgetReached,
           truncated: state.truncated,
         };
         break;
@@ -432,21 +607,26 @@ function executeDOMCommand(command) {
         payload = {
           kind: "accessibility",
           source: "dom-derived",
-          url: location.href,
-          title: document.title,
+          url: clipped(location.href, 2048),
+          title: clipped(document.title, 1024),
           root: visitAccessibility(document.documentElement, 0)[0],
           nodeCount: state.count,
+          visitedNodeCount: state.visited,
+          byteBudget: maximumBytes,
+          byteBudgetReached: state.byteBudgetReached,
           truncated: state.truncated,
         };
         break;
       case 3: {
         const element = elementForCommand();
+        dispatchStarted = true;
         element.click();
         payload = { action: "click", nodeID: nodeID(element) };
         break;
       }
       case 4: {
         const element = elementForCommand();
+        dispatchStarted = true;
         element.focus({ preventScroll: true });
         payload = { action: "focus", nodeID: nodeID(element) };
         break;
@@ -456,6 +636,7 @@ function executeDOMCommand(command) {
         if (!("value" in element)) throw new Error("The selected element has no settable value.");
         const prototype = Object.getPrototypeOf(element);
         const setter = Object.getOwnPropertyDescriptor(prototype, "value")?.set;
+        dispatchStarted = true;
         if (setter) setter.call(element, command.value || "");
         else element.value = command.value || "";
         element.dispatchEvent(new InputEvent("input", { bubbles: true, inputType: "insertText", data: null }));
@@ -465,6 +646,7 @@ function executeDOMCommand(command) {
       }
       case 6: {
         const element = elementForCommand();
+        dispatchStarted = true;
         element.scrollIntoView({ block: "center", inline: "center", behavior: "auto" });
         payload = { action: "scrollIntoView", nodeID: nodeID(element) };
         break;
@@ -472,9 +654,14 @@ function executeDOMCommand(command) {
       default:
         throw new Error(`Unsupported DOM command kind ${command.kind}.`);
     }
+    payload.documentGeneration = identity.generation;
+    if (mutation) {
+      payload.dispatchStatus = "dispatched";
+      payload.effectStatus = "unverified";
+    }
     return { success: true, payload };
   } catch (error) {
-    return { success: false, error: String(error?.message || error) };
+    return { success: false, payload: { documentGeneration: identity.generation, errorCode: error?.pabloErrorCode, dispatchStatus: dispatchStarted ? "attempted" : "notDispatched", effectStatus: "unverified" }, error: clipped(error?.message || error, 2048) };
   }
 }
 
@@ -495,6 +682,7 @@ function decodeCommand(bytes) {
     else if (field === 8) command.maxDepth = reader.varint();
     else if (field === 9) command.tabID = reader.varint();
     else if (field === 10) command.recordingID = reader.string();
+    else if (field === 11) command.documentGeneration = reader.string();
     else reader.skip(wire);
   }
   if (!command.id) throw new Error("missing command id");
@@ -561,7 +749,8 @@ function writeVarintField(output, field, value) {
 function writeBytes(output, field, bytes) {
   writeVarint(output, (field << 3) | 2);
   writeVarint(output, bytes.length);
-  output.push(...bytes);
+  // Dumps may approach 1 MiB, beyond the engine's function-argument limit.
+  for (const byte of bytes) output.push(byte);
 }
 
 function writeString(output, field, value) {

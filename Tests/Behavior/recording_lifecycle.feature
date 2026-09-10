@@ -207,3 +207,23 @@ Feature: Record one Mac application on a single monotonic timeline
     Then the review window zooms to its standard maximum frame
     When the user double-clicks the same header area again
     Then the review window returns to its previous frame
+
+  @automated
+  # RecordingHealthTests.recordingStreamFailuresRemainDegraded
+  # RecordingHealthTests.recordingStatusExposesStreamDegradation
+  Scenario: Stream failures remain visible through finalization
+    Given an evidence writer fails to encode or append a record
+    When later writes succeed
+    Then the stream retains its failure count and first failure timestamp
+    And control status identifies degraded evidence
+    When recording stop returns without another storage error
+    Then the app still reports interrupted completeness and retains the package path
+    And finalized native manifests can retain the stream diagnostics
+
+  @automated
+  # RecordingHealthTests.inputStopDrainsPendingDelivery
+  Scenario: Input stop drains a pending event handler
+    Given an input callback is still delivering an event
+    When input stop is requested
+    Then stop waits for that callback to finish
+    And callbacks arriving after stop cannot deliver more records

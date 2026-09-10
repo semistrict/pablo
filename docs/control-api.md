@@ -121,18 +121,29 @@ curl -fsS --unix-socket "$PABLO_SOCKET" \
   -d '{"kind":"dumpAccessibilityTree"}' http://localhost/safari.dom
 ```
 
-The dump returns CSS-selector `nodeID` values. Refresh the tree immediately
-before an action, then target one of those IDs:
+The dump returns a `documentGeneration` UUID and opaque `nodeID` values.
+Refresh the tree immediately before an action, then include that generation
+and the selected node ID (or a CSS selector):
 
 ```sh
 curl -fsS --unix-socket "$PABLO_SOCKET" \
-  -d '{"kind":"click","nodeID":"#submit"}' http://localhost/safari.dom
+  -d '{"kind":"click","selector":"#submit","documentGeneration":"01234567-89ab-cdef-0123-456789abcdef"}' http://localhost/safari.dom
 ```
 
 Supported kinds are `dumpDOM`, `dumpAccessibilityTree`, `click`, `focus`,
 `setValue`, and `scrollIntoView`. Dumps accept `includeHidden`, `maxNodes`, and
 `maxDepth`. Actions require exactly one `selector` or `nodeID`; `setValue` also
-requires `value`. The accessibility result is a semantic projection derived
+requires `value`. Navigation, back/forward restoration, disconnected nodes, and
+expired node references invalidate prior context. Selectors also require a
+matching document generation. A successful action reports `dispatchStatus:
+dispatched` and `effectStatus: unverified`; inspect again to establish the page's
+resulting state.
+
+Dumps count every visited node, including text, hidden nodes, and generic
+containers. Output includes `visitedNodeCount`, emitted `nodeCount`,
+`truncated`, and a 1 MiB `byteBudget`. Attributes, labels, and text samples have
+individual limits; `byteBudgetReached` identifies exhaustion of the aggregate
+limit. Ordinary prose is retained as ordered text leaves. The accessibility result is a semantic projection derived
 from standard DOM and ARIA data, not WebKit's private native accessibility tree.
 
 Pablo and its extension exchange serialized protobuf commands using Apple's
@@ -155,6 +166,15 @@ recording UUID and package path:
 curl -fsS --unix-socket "$PABLO_SOCKET" \
   -d '{"tabID":42}' http://localhost/rrweb.start
 ```
+
+Lifecycle transitions serialize in both the app and extension. Status exposes
+`transition`, `recoveryNeeded`, and `recoveryError`. An unknown start or stop
+acknowledgment retains the active package and spool. Status failures never prove
+the recorder stopped and never finalize its evidence. Pause/resume and another
+start stay blocked during recovery; check status, or use stop to retrieve the
+extension's retained stop acknowledgment. The extension retains its eight most
+recent stop receipts until the document is replaced. Lost documents or evicted
+receipts may need manual recovery; available evidence remains on disk.
 
 Use `/rrweb.pause`, `/rrweb.resume`, `/rrweb.stop`, and `/rrweb.status` without
 a body. `/rrweb.recordings` discovers saved `.pablo` packages whose declared
@@ -189,3 +209,69 @@ Unsupported method URLs, malformed HTTP, and malformed JSON return HTTP 400.
 The app obtains caller identity from socket peer credentials and process
 ancestry. Requests cannot supply a trusted identity. Approval remains in the
 app, and callers must not interact with Pablo's approval dialog.
+
+### Readiness and recoverable operations
+
+`service.info` is available without a prompt and returns runtime version/build, the
+service UUID, method inventory, nonprompting privacy checks, and the calling app's
+approval readiness. It contains no recording paths, target inventory, or another
+caller's identity. Readiness is advisory; the app revalidates consent and permissions
+before dispatch. `targets.list` requires daily approval and lists current application
+PIDs and display IDs. Use `inspect.live` with a returned PID for session-bound windows
+and observed node actions; `safari.tabs` lists only human-unlocked tabs.
+
+For recording lifecycle, annotation writes, native actions, Safari mutations, and
+opening a recording, verified callers can use `operation.execute`:
+
+```json
+{
+  "serviceID": "<UUID from service.info>",
+  "operationID": "<new caller-generated UUID>",
+  "issuedAt": "<current ISO-8601 date>",
+  "method": "record.stop",
+  "payload": {}
+}
+```
+
+The nested payload has exactly the ordinary method's shape and receives the same
+human approval. The receipt is bound to the app-verified caller and a digest of the
+entire request. Typed input is not retained in the receipt. Native and Safari action
+evidence uses the operation UUID; ordinary action calls use their response UUID.
+Review commands retain their existing `review.command` receipt contract.
+
+Read or cancel with `operation.status` or `operation.cancel`, supplying `serviceID`
+and `operationID`. These endpoints disclose only that verified caller's receipt,
+including while approval is pending, and cannot grant access for a new command.
+Cancellation stops waiting and further cooperative dispatch; it cannot undo effects
+already sent. A completed native/Safari action proves dispatch, while its application
+effect remains unverified until inspected.
+
+The app retains at most 64 operation receipts for five minutes, with at most 256 KiB
+of response per receipt. An oversized response sets `resultOmitted`; inspect current
+state. Running operations remain observable until they settle. A service restart,
+expired request, or unavailable receipt never establishes that the operation did not
+run. Do not replay it. An exact repeated request within its service/time window can
+retrieve the prior result; never create a fresh key merely because a response was lost.
+
+Failures include a `failure.code`, `failure.dispatchStatus`, and, where applicable,
+a precise `humanAction`. `notDispatched` guarantees no requested operation started;
+`outcomeUnknown` requires inspection. Approval denial, another pending prompt,
+missing permission, malformed input, and busy admission are distinct. No endpoint
+changes privacy grants or grants daily approval. The human can revoke approvals and
+stop live observation from the recorder window.
+
+`rrweb.recover` selects a retained unfinished recording by `recordingID` from
+`rrweb.recordings`. Selection alone does not contact Safari, finalize evidence, or
+remove any spool. Stop a healthy current recording first. If the current package is
+already recovery-needed, another unresolved package can be selected; all others remain
+retained. `rrweb.status` and `rrweb.stop` operate on the selected package and require a
+matching acknowledgment before finalization. The recorder window exposes the same
+recovery selection. If the recorder was destroyed by navigation, tab closure, or a
+browser restart, select its package and call `rrweb.recover` with that `recordingID`
+and `recoveryAction: "finishInterrupted"`. Close the original tab first: this cannot
+stop an unreachable recorder. Pablo saves received events as interrupted, retains
+the spool for late delivery, and permits a new recording. Unreadable evidence leaves
+recovery active. The recorder and menu expose **Save Received Events as Interrupted**.
+Use an operation envelope to recover the result safely if the response is lost.
+
+Safari checks tab access with a read-only probe before submitting a DOM or recorder command. A failed probe reports `permissionRequired` with the toolbar-unlock instructions in `humanAction`. A later dispatch failure remains an unknown outcome; a successful probe is not an action acknowledgment. The caller must obtain the tab grant through the human and then read fresh state.

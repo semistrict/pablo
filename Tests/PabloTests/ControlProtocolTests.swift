@@ -16,21 +16,147 @@ private final class LockedCount: @unchecked Sendable {
     }
 }
 
+private actor PendingControlHandler {
+    private var continuation: CheckedContinuation<Void, Never>?
+    var entered = false
+    func wait() async {
+        entered = true
+        await withCheckedContinuation { continuation = $0 }
+    }
+    func release() { continuation?.resume(); continuation = nil }
+}
+
+@Test("Discovery and status remain responsive while another operation is pending")
+func controlPendingHandlerDoesNotBlockReads() async throws {
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-concurrent-\(UUID().uuidString.prefix(8))")
+    let socketPath = root.appendingPathComponent("control.sock").path
+    let pending = PendingControlHandler()
+    let server = PabloControlServer(socketPath: socketPath) { request, _ in
+        if request.method == .pauseRecording { await pending.wait() }
+        if request.method == .cancelReviewOperation { await pending.release() }
+        return PabloControlResponse(id: request.id, result: PabloControlResult(
+            state: "idle", scopeName: nil, applicationIDs: [], recordingPath: nil, elapsedNanoseconds: 0))
+    }
+    defer { server.stop(); try? FileManager.default.removeItem(at: root) }
+    try server.start()
+    let mutation = Task.detached {
+        try PabloControlClient.send(.init(method: .pauseRecording), socketPath: socketPath)
+    }
+    for _ in 0..<100 {
+        if await pending.entered { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    #expect(await pending.entered)
+    let discovery = try runCurl(socketPath: socketPath, arguments: [
+        "--max-time", "1", "http://localhost/openapi.json"
+    ])
+    #expect(discovery.status == 0)
+    let status = try runCurl(socketPath: socketPath, arguments: [
+        "--max-time", "1", "http://localhost/record.status"
+    ])
+    #expect(status.status == 0)
+    let cancellation = try runCurl(socketPath: socketPath, arguments: [
+        "--max-time", "1", "--data", "{\"serviceID\":\"\(UUID().uuidString)\",\"operationID\":\"\(UUID().uuidString)\"}",
+        "http://localhost/review.cancel"
+    ])
+    #expect(cancellation.status == 0)
+    await pending.release()
+    _ = try await mutation.value
+}
+
+@Test("A slow response reader does not stall discovery, and mutations remain serialized")
+func controlSlowReaderAndMutationSerialization() async throws {
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-slow-\(UUID().uuidString.prefix(8))")
+    let socketPath = root.appendingPathComponent("control.sock").path
+    let pending = PendingControlHandler()
+    let mutations = LockedCount()
+    let reads = LockedCount()
+    let server = PabloControlServer(socketPath: socketPath) { request, _ in
+        if request.method == .pauseRecording { mutations.increment(); await pending.wait() }
+        if request.method == .resumeRecording { mutations.increment() }
+        if request.method == .status { reads.increment() }
+        return PabloControlResponse(id: request.id, result: PabloControlResult(
+            state: "idle", scopeName: nil, applicationIDs: [], recordingPath: nil, elapsedNanoseconds: 0,
+            output: request.method == .status ? .string(String(repeating: "x", count: 8_000_000)) : nil))
+    }
+    defer { server.stop(); try? FileManager.default.removeItem(at: root) }
+    try server.start()
+    let first = Task.detached { try PabloControlClient.send(.init(method: .pauseRecording), socketPath: socketPath) }
+    for _ in 0..<100 {
+        if await pending.entered { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let second = Task.detached { try PabloControlClient.send(.init(method: .resumeRecording), socketPath: socketPath) }
+    let slowReader = Task.detached {
+        try runCurl(socketPath: socketPath, arguments: ["--max-time", "2", "--limit-rate", "1", "http://localhost/record.status"])
+    }
+    for _ in 0..<100 {
+        if reads.current > 0 { break }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+    let discovery = try runCurl(socketPath: socketPath, arguments: ["--max-time", "1", "http://localhost/openapi.json"])
+    #expect(discovery.status == 0)
+    #expect(mutations.current == 1)
+    await pending.release()
+    _ = try await first.value
+    _ = try await second.value
+    #expect(mutations.current == 2)
+    _ = try await slowReader.value
+}
+
+@Test("Review context and commands retain their typed identity across the HTTP boundary")
+func reviewControlRoundTrip() throws {
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-review-\(UUID().uuidString.prefix(8))")
+    let socketPath = root.appendingPathComponent("control.sock").path
+    let reviewID = UUID()
+    let serviceID = UUID()
+    let sourceGeneration = UUID()
+    let command = PabloReviewCommandRequest(reviewID: reviewID, serviceID: serviceID,
+        issuedAt: Date(timeIntervalSince1970: 1_789_050_000), expectedSourceGeneration: sourceGeneration,
+        expectedRevision: 42, command: .init(kind: .seek, seconds: 1.25))
+    let server = PabloControlServer(socketPath: socketPath) { request, _ in
+        if request.method == .reviewCommand { #expect(request.reviewCommandRequest == command) }
+        if request.method == .reviewState { #expect(request.reviewStateRequest?.reviewID == reviewID) }
+        var state = PabloReviewState(reviewID: reviewID)
+        state.serviceID = serviceID
+        state.revision = 42
+        return PabloControlResponse(id: request.id, result: PabloControlResult(
+            state: "idle", scopeName: nil, applicationIDs: [], recordingPath: nil, elapsedNanoseconds: 0,
+            output: try! JSONDecoder().decode(PabloControlOutput.self, from: JSONEncoder().encode(state))))
+    }
+    defer { server.stop(); try? FileManager.default.removeItem(at: root) }
+    try server.start()
+    for request in [PabloControlRequest(method: .reviewCommand, reviewCommandRequest: command),
+                    PabloControlRequest(method: .reviewState, reviewStateRequest: .init(reviewID: reviewID))] {
+        let response = try PabloControlClient.send(request, socketPath: socketPath)
+        let output = try #require(response.result?.output)
+        let state = try JSONDecoder().decode(PabloReviewState.self, from: JSONEncoder().encode(output))
+        #expect(state.reviewID == reviewID)
+        #expect(state.serviceID == serviceID)
+        #expect(state.revision == 42)
+    }
+}
+
 private func runCurl(
     socketPath: String,
     arguments: [String],
     input: Data? = nil
 ) throws -> (status: Int32, output: Data) {
     let inputPipe = Pipe()
-    let outputPipe = Pipe()
+    // The OpenAPI body can exceed a pipe buffer. Let curl finish independently
+    // of this synchronous fixture reader, including while tests run in parallel.
+    let outputURL = FileManager.default.temporaryDirectory.appendingPathComponent("pablo-curl-\(UUID().uuidString)")
+    FileManager.default.createFile(atPath: outputURL.path, contents: nil)
+    let output = try FileHandle(forWritingTo: outputURL)
+    defer { try? output.close(); try? FileManager.default.removeItem(at: outputURL) }
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/bin/curl")
     process.arguments = [
         "--silent", "--show-error", "--fail-with-body", "--unix-socket", socketPath,
     ] + arguments
     process.standardInput = inputPipe
-    process.standardOutput = outputPipe
-    process.standardError = outputPipe
+    process.standardOutput = output
+    process.standardError = output
     try process.run()
     if let input {
         try inputPipe.fileHandleForWriting.write(contentsOf: input)
@@ -39,8 +165,108 @@ private func runCurl(
     process.waitUntilExit()
     return (
         process.terminationStatus,
-        try outputPipe.fileHandleForReading.readToEnd() ?? Data()
+        try Data(contentsOf: outputURL)
     )
+}
+
+@Test("Malformed live and recording requests are rejected before dispatch and leave control usable")
+func controlRejectsInvalidBoundsBeforeDispatch() throws {
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-bounds-\(UUID().uuidString.prefix(8))")
+    let socketPath = root.appendingPathComponent("control.sock").path
+    let dispatched = LockedCount()
+    let server = PabloControlServer(socketPath: socketPath) { request, _ in
+        dispatched.increment()
+        return PabloControlResponse(id: request.id, result: PabloControlResult(
+            state: "idle", scopeName: nil, applicationIDs: [], recordingPath: nil, elapsedNanoseconds: 0
+        ))
+    }
+    defer {
+        server.stop()
+        try? FileManager.default.removeItem(at: root)
+    }
+    try server.start()
+    let invalid: [(String, String)] = [
+        ("inspect.live", #"{"kind":"events","target":{"pid":123},"limit":-1}"#),
+        ("inspect.live", #"{"kind":"events","target":{"pid":123},"limit":0}"#),
+        ("inspect.live", #"{"kind":"events","target":{"pid":123},"limit":10001}"#),
+        ("inspect.live", #"{"kind":"inspect","target":{}}"#),
+        ("inspect.live", #"{"kind":"inspect","target":{"pid":123,"appName":"Notes"}}"#),
+        ("inspect.live", #"{"kind":"inspect","target":{"appName":"  "}}"#),
+        ("record.start", #"{"scope":"display","framesPerSecond":9223372036854775807}"#),
+        ("record.start", #"{"scope":"display","framesPerSecond":0}"#),
+        ("record.start", #"{"scope":"display","duration":-1}"#),
+        ("record.start", #"{"scope":"display","duration":1e100}"#),
+        ("record.start", #"{"scope":"display","snapshotInterval":-1}"#),
+        ("record.start", #"{"scope":"display","pid":123}"#),
+        ("record.start", #"{"scope":"application"}"#),
+    ]
+    for (endpoint, body) in invalid {
+        let response = try runCurl(socketPath: socketPath, arguments: [
+            "--data-binary", "@-", "http://localhost/\(endpoint)",
+        ], input: Data(body.utf8))
+        #expect(response.status == 22, "Expected HTTP rejection for \(body)")
+    }
+    #expect(dispatched.current == 0)
+    let status = try PabloControlClient.send(PabloControlRequest(method: .status), socketPath: socketPath)
+    #expect(status.result?.state == "idle")
+    #expect(dispatched.current == 1)
+}
+
+@Test("A lost mutation response is never retried by automatic app startup")
+func controlDoesNotRepeatDeliveredMutation() throws {
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-retry-\(UUID().uuidString.prefix(8))")
+    let socketPath = root.appendingPathComponent("control.sock").path
+    let mutations = LockedCount()
+    let launches = LockedCount()
+    let server = PabloControlServer(socketPath: socketPath) { request, _ in
+        mutations.increment()
+        // Fail response encoding only after the first mutation took place.
+        return PabloControlResponse(id: request.id, result: PabloControlResult(
+            state: "idle", scopeName: nil, applicationIDs: [], recordingPath: nil,
+            elapsedNanoseconds: 0, output: mutations.current == 1 ? .number(.nan) : .null
+        ))
+    }
+    defer {
+        server.stop()
+        try? FileManager.default.removeItem(at: root)
+    }
+    try server.start()
+    do {
+        _ = try PabloControlClient.sendStartingAppIfNeeded(
+            PabloControlRequest(method: .stopRecording), socketPath: socketPath,
+            startApp: { launches.increment() }
+        )
+        Issue.record("An unacknowledged mutation must report an unknown outcome.")
+    } catch PabloControlTransportError.outcomeUnknown {
+        // The operation happened once, and callers are explicitly told not to retry it.
+    }
+    #expect(mutations.current == 1)
+    #expect(launches.current == 0)
+}
+
+@Test("Automatic app startup retries only a connection that has not delivered a request")
+func controlStartsUnavailableAppWithoutRepeatingRequests() throws {
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-start-\(UUID().uuidString.prefix(8))")
+    let socketPath = root.appendingPathComponent("control.sock").path
+    let requests = LockedCount()
+    var launches = 0
+    let server = PabloControlServer(socketPath: socketPath) { request, _ in
+        requests.increment()
+        return PabloControlResponse(id: request.id, result: PabloControlResult(
+            state: "idle", scopeName: nil, applicationIDs: [], recordingPath: nil, elapsedNanoseconds: 0
+        ))
+    }
+    defer {
+        server.stop()
+        try? FileManager.default.removeItem(at: root)
+    }
+    let response = try PabloControlClient.sendStartingAppIfNeeded(
+        PabloControlRequest(method: .status), socketPath: socketPath,
+        startApp: { launches += 1; try server.start() }
+    )
+    #expect(response.result?.state == "idle")
+    #expect(requests.current == 1)
+    #expect(launches == 1)
 }
 
 @Test("Approval lasts for one calling application and one calendar day")
@@ -66,6 +292,14 @@ func approvalIsScopedToApplicationAndDay() throws {
     #expect(approvals.isApprovedToday(applicationIdentity: firstDeveloper, now: evening))
     #expect(!approvals.isApprovedToday(applicationIdentity: otherDeveloper, now: evening))
     #expect(!approvals.isApprovedToday(applicationIdentity: firstDeveloper, now: tomorrow))
+    approvals.approveForToday(applicationIdentity: otherDeveloper, now: morning)
+    #expect(approvals.approvedIdentities(now: evening) == [firstDeveloper, otherDeveloper])
+    approvals.revoke(applicationIdentity: firstDeveloper)
+    #expect(!approvals.isApprovedToday(applicationIdentity: firstDeveloper, now: evening))
+    #expect(approvals.isApprovedToday(applicationIdentity: otherDeveloper, now: evening))
+    #expect(approvals.approvedIdentities(now: tomorrow).isEmpty)
+    approvals.revokeAll()
+    #expect(approvals.approvedIdentities(now: evening).isEmpty)
 }
 
 @Test("Caller identity comes from the nearest invoking application, not the helper process")
@@ -117,7 +351,10 @@ func controlSocketRoundTrip() throws {
                 scopeName: nil,
                 applicationIDs: [],
                 recordingPath: nil,
-                elapsedNanoseconds: 0
+                elapsedNanoseconds: 0,
+                lastRecordingCompletion: .init(
+                    source: .native, recordingPath: "/tmp/Fixture.pablo", state: .failed, error: "fixture finalization failed"
+                )
             )
         )
     }
@@ -138,6 +375,9 @@ func controlSocketRoundTrip() throws {
 
     #expect(first.result?.state == "idle")
     #expect(second.result?.state == "idle")
+    #expect(first.result?.lastRecordingCompletion?.state == .failed)
+    #expect(first.result?.lastRecordingCompletion?.recordingPath == "/tmp/Fixture.pablo")
+    #expect(first.result?.lastRecordingCompletion?.error == "fixture finalization failed")
     #expect(requestCount.current == 2)
     let directoryMode = try #require(
         FileManager.default.attributesOfItem(atPath: root.path)[.posixPermissions] as? NSNumber
@@ -325,6 +565,11 @@ func controlSocketServesOpenAPI() throws {
     #expect(rrwebStart["required"] as? [String] == ["tabID"])
     let rrwebManifest = try #require(schemas["RRWebRecordingManifest"] as? [String: Any])
     let rrwebProperties = try #require(rrwebManifest["properties"] as? [String: Any])
+    let version = try #require(rrwebProperties["schemaVersion"] as? [String: Any])
+    let runtimeManifest = PabloRRWebRecordingManifest(
+        recordingID: UUID(), tab: .init(id: 42, title: "Fixture", url: "https://example.test"), startedAt: Date()
+    )
+    #expect(version["const"] as? Int == runtimeManifest.schemaVersion)
     let masked = try #require(rrwebProperties["inputsMasked"] as? [String: Any])
     #expect(masked["const"] as? Bool == true)
     #expect(schemas["SafariTabsOutput"] != nil)
@@ -591,4 +836,44 @@ func liveActionControlRoundTrip() throws {
     )
 
     #expect(response.result?.output == .string("typed  Editor  characters=5"))
+}
+
+@Test("Transport invalid requests have a structured pre-dispatch rejection")
+func transportInvalidRequestFailure() throws {
+    let root = URL(fileURLWithPath: "/private/tmp/pablo-failure-\(UUID().uuidString.prefix(8))")
+    let socketPath = root.appendingPathComponent("control.sock").path
+    defer { try? FileManager.default.removeItem(at: root) }
+    let calls = LockedCount()
+    let server = PabloControlServer(socketPath: socketPath) { request, _ in
+        calls.increment()
+        return PabloControlResponse(id: request.id, error: "Unexpected dispatch")
+    }
+    defer { server.stop() }
+    try server.start()
+    let response = try runCurl(socketPath: socketPath, arguments: [
+        "--stderr", "/dev/null", "--data-binary", "{}", "http://localhost/action.live"
+    ])
+    let object = try #require(JSONSerialization.jsonObject(with: response.output) as? [String: Any])
+    let failure = try #require(object["failure"] as? [String: Any])
+    #expect(failure["code"] as? String == "invalidRequest")
+    #expect(failure["dispatchStatus"] as? String == "notDispatched")
+    #expect(calls.current == 0)
+}
+
+@Test("Explicit interrupted web recovery is scoped to its recording and method")
+func rrwebInterruptedRecoveryContract() throws {
+    let recordingID = UUID()
+    let payload = PabloRRWebControlRequest(recordingID: recordingID, recoveryAction: .finishInterrupted)
+    let decoded = try PabloControlJSONCodec.decode(PabloRRWebControlRequest.self,
+        from: PabloControlJSONCodec.encode(payload))
+    #expect(decoded.recordingID == recordingID)
+    #expect(decoded.recoveryAction == .finishInterrupted)
+    try decoded.validate(for: .rrwebRecover)
+    #expect(throws: RecordingError.self) { try decoded.validate(for: .rrwebInspect) }
+    #expect(throws: RecordingError.self) {
+        try PabloRRWebControlRequest(recoveryAction: .finishInterrupted).validate(for: .rrwebRecover)
+    }
+    #expect(throws: RecordingError.self) {
+        try PabloRRWebControlRequest(tabID: 42, recoveryAction: .select).validate(for: .rrwebStart)
+    }
 }

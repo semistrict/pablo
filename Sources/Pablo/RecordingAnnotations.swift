@@ -291,7 +291,8 @@ public enum RecordingAnnotationStore {
 
     private static func append(_ annotation: RecordingAnnotation, to packageURL: URL) throws {
         let url = packageURL.appendingPathComponent(filename)
-        var data = (try? Data(contentsOf: url, options: .mappedIfSafe)) ?? Data()
+        var data = FileManager.default.fileExists(atPath: url.path)
+            ? try Data(contentsOf: url, options: .mappedIfSafe) : Data()
         data.append(try PabloProtobufCodec.encode(annotation))
         try data.write(to: url, options: .atomic)
     }
@@ -335,6 +336,30 @@ public enum RecordingAnnotationStore {
             }
         }
         let manifest = try RecordingManifest.load(from: packageURL)
+        let records = manifest.dataSource == .native ? try accessibilityRecords(in: packageURL, manifest: manifest) : []
+        let timestamps = [draft.startTimestampNs, draft.endTimestampNs,
+                          draft.trace?.startTimestampNs, draft.trace?.endTimestampNs].compactMap { $0 }
+        if !timestamps.isEmpty {
+            let watermark: UInt64
+            if manifest.endedAt != nil {
+                guard let duration = manifest.durationNs else {
+                    throw RecordingError.usage("The completed recording has no duration for a time anchor.")
+                }
+                watermark = duration
+            } else if manifest.dataSource == .rrweb {
+                let replay = try PabloRRWebReplayData(recording: PabloRRWebRecordingStorage.load(packageURL))
+                watermark = replay.events.map(\.timestampNs).max() ?? 0
+            } else {
+                let events = try RecordingStreamReader.events(at: manifest.fileURL(for: "events", in: packageURL))
+                let workspace = try RecordingStreamReader.workspace(at: manifest.fileURL(for: "workspace", in: packageURL))
+                watermark = max(records.map(\.timestampNs).max() ?? 0,
+                                events.map(\.timestampNs).max() ?? 0,
+                                workspace.map(\.timestampNs).max() ?? 0)
+            }
+            guard timestamps.allSatisfy({ $0 <= watermark }) else {
+                throw RecordingError.usage("The annotation time is beyond the recording's durable evidence boundary.")
+            }
+        }
         if let frame = draft.trace?.coordinateFrame,
            !manifest.capture.frame.cgRect.contains(frame.cgRect) {
             throw RecordingError.usage("The trace coordinate frame lies outside the recording canvas.")
@@ -355,7 +380,7 @@ public enum RecordingAnnotationStore {
             }
             return
         }
-        let records = try accessibilityRecords(in: packageURL, manifest: manifest)
+        let materialized = ReplayRecording.materializeAccessibility(records)
         let frameCount = records.count
         for reference in normalizedReferences(draft.accessibilityReferences) {
             guard let index = accessibilityIndex(reference), index < frameCount else {
@@ -370,7 +395,14 @@ public enum RecordingAnnotationStore {
                 )
             }
         }
+        let referencedSteps = normalizedReferences(draft.accessibilityReferences).compactMap { reference -> ReplayAccessibilityStep? in
+            guard let index = accessibilityIndex(reference), materialized.indices.contains(index) else { return nil }
+            return materialized[index]
+        }
         for nodeID in uniqueNonempty(draft.accessibilityNodeIDs) {
+            guard referencedSteps.contains(where: { $0.nodes.contains(where: { $0.id == nodeID }) }) else {
+                throw RecordingError.usage("Accessibility node \(nodeID) must exist in an explicitly referenced materialized frame.")
+            }
             guard let separator = nodeID.firstIndex(of: ":") else {
                 throw RecordingError.usage("Accessibility node \(nodeID) has no application namespace.")
             }

@@ -15,6 +15,8 @@ public final class RecordingSession {
     private let applicationRegistry = RecordingApplicationRegistry()
     public let packageURL: URL
     private let clock = SessionClock()
+    private let health = RecordingHealthTracker()
+    public var streamIssues: [PabloRecordingStreamIssue] { health.issues }
     private var inputWriter: ProtobufStreamWriter<InputEventRecord>?
     private var accessibilityWriter: ProtobufStreamWriter<AXSnapshotRecord>?
     private var workspaceWriter: ProtobufStreamWriter<WorkspaceSnapshotRecord>?
@@ -33,6 +35,7 @@ public final class RecordingSession {
     public var applicationIDs: [String] { applicationRegistry.allApplications().map(\.id) }
 
     public init(options: RecordOptions) throws {
+        try options.validate()
         self.options = options
         let selectedApplication = options.scope == .application ? try TargetApplication.resolve(
             pid: options.pid,
@@ -56,17 +59,22 @@ public final class RecordingSession {
         let manifestURL = packageURL.appendingPathComponent("manifest.json")
         self.manifestURL = manifestURL
 
+        let health = self.health
+        let clock = self.clock
         let inputWriter = try ProtobufStreamWriter<InputEventRecord>(
             url: inputURL,
-            encode: PabloProtobufCodec.encode
+            encode: PabloProtobufCodec.encode,
+            onFailure: { health.recordFailure(stream: .input, timestampNs: clock.nowNanoseconds(), error: $0) }
         )
         let accessibilityWriter = try ProtobufStreamWriter<AXSnapshotRecord>(
             url: accessibilityURL,
-            encode: PabloProtobufCodec.encode
+            encode: PabloProtobufCodec.encode,
+            onFailure: { health.recordFailure(stream: .accessibility, timestampNs: clock.nowNanoseconds(), error: $0) }
         )
         let workspaceWriter = try ProtobufStreamWriter<WorkspaceSnapshotRecord>(
             url: workspaceURL,
-            encode: PabloProtobufCodec.encode
+            encode: PabloProtobufCodec.encode,
+            onFailure: { health.recordFailure(stream: .workspace, timestampNs: clock.nowNanoseconds(), error: $0) }
         )
         self.inputWriter = inputWriter
         self.accessibilityWriter = accessibilityWriter
@@ -202,7 +210,10 @@ public final class RecordingSession {
         accessibility?.stop()
 
         var firstError: Error?
-        do { try await video?.stop() } catch { firstError = error }
+        do { try await video?.stop() } catch {
+            health.recordFailure(stream: .video, timestampNs: clock.nowNanoseconds(), error: error)
+            firstError = error
+        }
         do { try inputWriter?.close() } catch { firstError = firstError ?? error }
         do { try accessibilityWriter?.close() } catch { firstError = firstError ?? error }
         do { try workspaceWriter?.close() } catch { firstError = firstError ?? error }
@@ -212,11 +223,16 @@ public final class RecordingSession {
         if let video { manifest?.capture = video.capture }
         manifest?.applications = applicationRegistry.allApplications()
         manifest?.displays = RecordingDisplays.current()
+        manifest?.streamIssues = health.issues
         if let manifest, let manifestURL {
-            do { try writeManifest(manifest, to: manifestURL) } catch { firstError = firstError ?? error }
+            do { try writeManifest(manifest, to: manifestURL) } catch {
+                health.recordFailure(stream: .manifest, timestampNs: clock.nowNanoseconds(), error: error)
+                firstError = firstError ?? error
+            }
         }
         state = .stopped
         if let firstError { throw firstError }
+        try health.requireComplete()
     }
 
     public func run() async throws {

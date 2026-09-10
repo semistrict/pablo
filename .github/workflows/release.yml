@@ -62,6 +62,7 @@ jobs:
       - name: Validate rrweb assets
         run: |
           pnpm --dir SafariExtension/JavaScript install --frozen-lockfile
+          pnpm --dir SafariExtension/JavaScript test
           ./scripts/build-rrweb-assets.sh
           if [[ -n "$(git status --porcelain -- SafariExtension/Generated Sources/PabloApp/Resources/RRWebPlayer)" ]]; then
             git diff -- SafariExtension/Generated Sources/PabloApp/Resources/RRWebPlayer

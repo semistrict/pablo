@@ -50,6 +50,7 @@ struct RecordingManifest: Codable {
     var capture: Capture
     let files: [String: String]
     var web: Web?
+    var streamIssues: [PabloRecordingStreamIssue]? = nil
 
 }
 
@@ -203,6 +204,27 @@ public struct PabloAutomationCaller: Codable, Sendable {
     }
 }
 
+public struct PabloSafariAutomationTarget: Codable, Sendable {
+    public let tabID: Int64?
+    public let documentGeneration: UUID?
+    public let nodeID: String?
+    public let selector: String?
+
+    public init(_ request: PabloSafariDOMRequest) {
+        tabID = request.tabID
+        documentGeneration = request.documentGeneration
+        nodeID = request.nodeID
+        selector = request.selector
+    }
+
+    init(tabID: Int64?, documentGeneration: UUID?, nodeID: String?, selector: String?) {
+        self.tabID = tabID
+        self.documentGeneration = documentGeneration
+        self.nodeID = nodeID
+        self.selector = selector
+    }
+}
+
 public struct PabloAutomationActionTrace: Codable, Sendable {
     public let actionID: UUID
     public let phase: PabloAutomationActionPhase
@@ -228,6 +250,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
     public let transport: String
     public let recordingWasPaused: Bool
     public let resolvedApplicationID: String?
+    public let safariTarget: PabloSafariAutomationTarget?
 
     public init(
         actionID: UUID,
@@ -236,7 +259,8 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         caller: PabloAutomationCaller,
         transport: String,
         recordingWasPaused: Bool,
-        resolvedApplicationID: String? = nil
+        resolvedApplicationID: String? = nil,
+        safariTarget: PabloSafariAutomationTarget? = nil
     ) {
         self.actionID = actionID
         self.phase = phase
@@ -262,6 +286,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         self.transport = transport
         self.recordingWasPaused = recordingWasPaused
         self.resolvedApplicationID = resolvedApplicationID
+        self.safariTarget = safariTarget
     }
 
     init(
@@ -288,7 +313,8 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         caller: PabloAutomationCaller,
         transport: String,
         recordingWasPaused: Bool,
-        resolvedApplicationID: String?
+        resolvedApplicationID: String?,
+        safariTarget: PabloSafariAutomationTarget? = nil
     ) {
         self.actionID = actionID
         self.phase = phase
@@ -314,6 +340,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         self.transport = transport
         self.recordingWasPaused = recordingWasPaused
         self.resolvedApplicationID = resolvedApplicationID
+        self.safariTarget = safariTarget
     }
 }
 
@@ -343,7 +370,8 @@ extension PabloAutomationActionTrace {
             caller: caller,
             transport: transport,
             recordingWasPaused: recordingWasPaused,
-            resolvedApplicationID: applicationID
+            resolvedApplicationID: applicationID,
+            safariTarget: safariTarget
         )
     }
 }
@@ -408,6 +436,7 @@ struct AXNode: Codable, Equatable {
     let focused: Bool?
     let position: Point?
     let size: Size?
+    var actions: [String]? = nil
 
     struct Point: Codable, Equatable {
         let x: Double
@@ -434,6 +463,7 @@ struct AXSnapshotRecord: Codable {
 
 struct SessionSummary: Codable {
     let manifest: RecordingManifest
+    var webEventCount: Int? = nil
     let inputEventCount: Int
     let workspaceRecordCount: Int
     let accessibilityRecordCount: Int

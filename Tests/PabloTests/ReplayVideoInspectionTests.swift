@@ -123,7 +123,7 @@ private func inspectionWindow(
 }
 
 @MainActor
-@Test func pinningVideoElementKeepsPlayheadAndDoesNotCreateMarkup() throws {
+@Test func pinningVideoElementKeepsPlayheadAndDoesNotCreateMarkup() async throws {
     let package = FileManager.default.temporaryDirectory.appendingPathComponent("pablo-inspection-\(UUID().uuidString).pablo")
     try FileManager.default.createDirectory(at: package, withIntermediateDirectories: true)
     defer { try? FileManager.default.removeItem(at: package) }
@@ -147,7 +147,16 @@ private func inspectionWindow(
     #expect(model.loadLatest(preferredURL: package, directory: package.deletingLastPathComponent()))
     model.seek(to: 0.65)
     let element = try #require(model.videoInspection.element(at: CGPoint(x: 0.5, y: 0.5)))
+    let observed = model.reviewState()
+    #expect(observed.videoAvailability == .available)
+    #expect(observed.accessibilityAvailability == .available)
+    #expect(observed.observations.first?.reference == element.step.reference)
+    #expect(observed.observations.first?.ageNanoseconds == 650_000_000)
+    model.hoverPoint = CGPoint(x: 0.5, y: 0.5)
+    #expect(model.reviewState().hoveredEvidence?.nodeID == "button")
+    model.inspectorSection = "Notes"
     model.pinVideoElement(element)
+    #expect(model.inspectorSection == "Elements")
     #expect(model.currentVideoTime == 0.65)
     #expect(model.selectedNodeID == "button")
     #expect(model.selectedStep?.timestampNs == 100_000_000)
@@ -155,8 +164,16 @@ private func inspectionWindow(
     #expect(model.draftTraceSamples.isEmpty)
     #expect(model.annotations.isEmpty)
     #expect(model.selectedNodeVideoRegion != nil)
+    #expect(model.reviewState().pinnedEvidence?.nodeID == "button")
+    let observations = model.reviewState().observations
+    try await model.performReviewCommand(.init(kind: .clearSelection))
+    #expect(model.reviewState().selection == nil)
+    #expect(model.reviewState().pinnedEvidence == nil)
+    #expect(model.reviewState().observations == observations)
+    #expect(model.currentVideoTime == 0.65)
     model.seek(to: model.duration)
     #expect(model.selectedNodeVideoRegion == nil)
+    #expect(model.reviewState().videoAvailability == .unavailable)
     model.togglePlayback()
     #expect(model.currentVideoTime == 0)
     #expect(model.draftTraceSamples.isEmpty)

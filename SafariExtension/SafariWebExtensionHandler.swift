@@ -9,6 +9,10 @@ final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
         let message = item?.userInfo?[SFExtensionMessageKey] as? [String: Any]
 
         do {
+            if message?["kind"] as? String == "bridge-ping" {
+                complete(context, response: ["kind": "bridge-pong"])
+                return
+            }
             if let kind = message?["kind"] as? String, kind == "rrweb-events" {
                 try storeRRWebEvents(message)
                 complete(context, response: ["accepted": true])

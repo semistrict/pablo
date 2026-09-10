@@ -141,7 +141,7 @@ Feature: Control a live Mac application through the approved Pablo bridge
   Scenario: Send a named key with modifiers
     Given the target application is active
     When `key --key return --modifiers command,shift` runs
-    Then Pablo posts key-down and key-up to the target process
+    Then Pablo posts key-down and key-up while the target retains foreground focus
     And both events carry command and shift flags
     And an unknown key produces no input
 
@@ -162,3 +162,53 @@ Feature: Control a live Mac application through the approved Pablo bridge
     Given the target has no accessible visible window
     When a coordinate action runs
     Then the command fails without targeting another application or display
+
+
+  @automated
+  # CLITests.testLiveActionsCarryExplicitWindowAndFrameContext, LiveInspectionTests.liveFrameCapabilitiesAndFreshness
+  Scenario: Live window and frame preconditions carry inspection identity
+    Given an inspection returns a session, windows, and a frame reference
+    When an action names a window or frame
+    Then it requires the inspection session
+    And a superseded frame precondition is rejected
+    And frame nodes expose observed action names without inventing unavailable capabilities
+
+  @automated
+  # LivePointerDispatchTests.livePointerUsesExplicitWindowWithoutFallback
+  Scenario: An explicit live window never falls back to the largest window
+    Given an action targets an observed window smaller than another application window
+    Then normalized points use the selected window's current bounds
+    When that window disappears
+    Then point resolution fails without choosing the larger window
+
+  @signed-app @manual
+  Scenario: A selected window and text field retain ownership during foreground input
+    Given the human explicitly unlocked foreground input to a selected live window
+    When the human moves focus to another window or text field during the action
+    Then remaining input is interrupted
+    And the API failure code is "interrupted" with uncertain partial effects
+    And held keys or buttons are released
+    And no action restarts an application that the human has quit
+
+  Scenario: The caller inspects readiness before requesting access
+    Given the calling application has no current daily approval
+    When it reads service.info
+    Then the result identifies human approval and any missing privacy prerequisites
+    And no permission prompt or recording is started
+    And no private recording path or other caller identity is returned
+
+  Scenario: The human revokes agent access
+    Given a verified caller has daily approval
+    And live input observation is active
+    When the human revokes approvals in the recorder window
+    Then active observation stops
+    And future control mutations require human approval again
+    And previously dispatched effects are not undone
+
+  @automated
+  # LiveInspectionTests.invalidLiveCursorDoesNotStartObservation
+  Scenario: A malformed event cursor does not start observation
+    Given a live inspection session has no active input observer
+    When an event read supplies a cursor beyond the session history
+    Then the cursor is rejected before input permission checks or observation starts
+    And no typed text is retained by that failed request

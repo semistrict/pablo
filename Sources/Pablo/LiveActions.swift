@@ -6,11 +6,11 @@ import Foundation
 public final class PabloLiveActionController {
     private let inspectionManager: PabloLiveInspectionManager
 
-    public init(inspectionManager: PabloLiveInspectionManager = PabloLiveInspectionManager()) {
-        self.inspectionManager = inspectionManager
+    public init(inspectionManager: PabloLiveInspectionManager? = nil) {
+        self.inspectionManager = inspectionManager ?? PabloLiveInspectionManager()
     }
 
-    public func perform(_ request: PabloLiveActionRequest) async throws -> String {
+    public func perform(_ request: PabloLiveActionRequest, actionID: UUID = UUID()) async throws -> PabloLiveActionResult {
         try PabloLiveActionValidator.validate(request)
         guard AXIsProcessTrusted() else {
             throw RecordingError.permission(
@@ -18,21 +18,31 @@ public final class PabloLiveActionController {
                 "Enable Pablo in System Settings > Privacy & Security > Accessibility."
             )
         }
-        let requiresSnapshot = LiveActionSnapshotPolicy.requiresSnapshot(for: request)
+        let requiresSnapshot = LiveActionSnapshotPolicy.requiresSnapshot(for: request) || request.target.windowID != nil || request.target.frameReference != nil
         let context = try inspectionManager.actionContext(
             for: request.target,
             requiresSnapshot: requiresSnapshot
         )
         let target = context.target
         let reader = context.reader
-        let snapshot = context.snapshot ?? AXTreeSnapshot(rootID: nil, nodes: [:], truncated: false)
+        func result(_ summary: String, method: PabloLiveActionResult.DispatchMethod) -> PabloLiveActionResult {
+            .init(actionID: actionID, target: .init(
+                pid: target.pid, bundleIdentifier: target.bundleIdentifier, applicationName: target.name,
+                sessionID: context.sessionID, windowID: request.target.windowID,
+                inspectionFrameReference: context.frameReference
+            ), dispatchMethod: method, characterCount: request.text?.count, summary: summary)
+        }
+        for nodeID in [request.nodeID, request.fromNodeID, request.toNodeID].compactMap({ $0 }) {
+            guard reader.validatedElement(id: nodeID, windowID: request.target.windowID) != nil else { throw missingNode(nodeID) }
+        }
+        try Task.checkCancellation()
 
         if request.kind == .perform {
-            return try performAccessibilityAction(request, target: target, reader: reader)
+            return result(try performAccessibilityAction(request, target: target, reader: reader), method: .accessibility)
         }
         if request.kind == .click,
-           let result = try performBackgroundClickIfAvailable(request, target: target, reader: reader) {
-            return result
+           let summary = try performBackgroundClickIfAvailable(request, target: target, reader: reader) {
+            return result(summary, method: .accessibility)
         }
 
         try LiveActionForegroundPolicy.requireUnlock(for: request)
@@ -45,19 +55,25 @@ public final class PabloLiveActionController {
         guard let application = NSRunningApplication(processIdentifier: target.pid) else {
             throw RecordingError.targetNotFound("The target application is no longer running.")
         }
-        try await activate(application)
-
         switch request.kind {
-        case .click:
-            return try await click(request, target: target, reader: reader, snapshot: snapshot)
-        case .drag:
-            return try await drag(request, target: target, reader: reader, snapshot: snapshot)
-        case .scroll:
-            return try scroll(request, target: target, reader: reader, snapshot: snapshot)
+        case .click, .drag, .scroll:
+            return result(try await LivePointerExecutor.perform(
+                request,
+                target: NativeLivePointerTarget(target: target, reader: reader, windowID: request.target.windowID, validateContext: context.validate, activation: {
+                    try await self.activate(application)
+                }),
+                events: NativeLivePointerEvents()
+            ), method: .foregroundInput)
         case .typeText:
-            return try await typeText(request, target: target, reader: reader)
+            try await activate(application)
+            try context.validate()
+            if let windowID = request.target.windowID { try reader.focusWindow(id: windowID) }
+            return result(try await typeText(request, target: target, reader: reader, validateContext: context.validate), method: .foregroundInput)
         case .key:
-            return try await pressKey(request, target: target)
+            try await activate(application)
+            try context.validate()
+            if let windowID = request.target.windowID { try reader.focusWindow(id: windowID) }
+            return result(try await pressKey(request, target: target, reader: reader, validateContext: context.validate), method: .foregroundInput)
         case .perform:
             preconditionFailure("Accessibility actions return before foreground activation")
         }
@@ -71,7 +87,7 @@ public final class PabloLiveActionController {
         guard let nodeID = request.nodeID,
               request.mouseButton == .left,
               request.clickCount == 1,
-              let element = reader.element(id: nodeID),
+              let element = reader.validatedElement(id: nodeID, windowID: request.target.windowID),
               availableActions(for: element).contains(kAXPressAction as String) else {
             return nil
         }
@@ -84,64 +100,12 @@ public final class PabloLiveActionController {
         return "clicked  \(target.name)  node=\(nodeID)  action=AXPress"
     }
 
-    private func click(
-        _ request: PabloLiveActionRequest,
-        target: TargetApplication,
-        reader: AccessibilityTreeReader,
-        snapshot: AXTreeSnapshot
-    ) async throws -> String {
-        let windowFrame = request.point == nil
-            ? .zero
-            : try largestWindowFrame(in: snapshot, reader: reader)
-        let point = try resolvedPoint(
-            nodeID: request.nodeID,
-            point: request.point,
-            snapshot: snapshot,
-            windowFrame: windowFrame
-        )
-        try await postClicks(
-            at: point,
-            button: request.mouseButton,
-            count: request.clickCount
-        )
-        return String(
-            format: "clicked  %@  at=(%.1f,%.1f)  button=%@  count=%d",
-            target.name,
-            point.x,
-            point.y,
-            request.mouseButton.rawValue,
-            request.clickCount
-        )
-    }
-
     private func activate(_ application: NSRunningApplication) async throws {
+        guard !application.isTerminated else { throw RecordingError.targetNotFound("The target application stopped running before activation.") }
         if application.isActive { return }
-        guard let bundleURL = application.bundleURL else {
-            throw RecordingError.capture("The target application has no launchable bundle URL.")
-        }
-        let configuration = NSWorkspace.OpenConfiguration()
-        configuration.activates = true
-        configuration.addsToRecentItems = false
-        configuration.createsNewApplicationInstance = false
-        configuration.promptsUserIfNeeded = false
-
-        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
-            NSWorkspace.shared.openApplication(
-                at: bundleURL,
-                configuration: configuration
-            ) { openedApplication, error in
-                if let error {
-                    continuation.resume(throwing: RecordingError.capture(
-                        "The target application could not be activated: \(error.localizedDescription)"
-                    ))
-                } else if openedApplication == nil {
-                    continuation.resume(throwing: RecordingError.capture(
-                        "The target application could not be activated."
-                    ))
-                } else {
-                    continuation.resume()
-                }
-            }
+        // Activate the existing process directly. Opening its bundle could restart an app the human just quit.
+        guard application.activate(options: []) else {
+            throw RecordingError.capture("The target application did not accept activation.")
         }
         for _ in 0..<20 {
             if application.isActive { return }
@@ -150,140 +114,17 @@ public final class PabloLiveActionController {
         throw RecordingError.capture("The target application did not become active.")
     }
 
-    private func drag(
-        _ request: PabloLiveActionRequest,
-        target: TargetApplication,
-        reader: AccessibilityTreeReader,
-        snapshot: AXTreeSnapshot
-    ) async throws -> String {
-        let windowFrame = request.fromPoint == nil && request.toPoint == nil
-            ? .zero
-            : try largestWindowFrame(in: snapshot, reader: reader)
-        let start = try resolvedPoint(
-            nodeID: request.fromNodeID,
-            point: request.fromPoint,
-            snapshot: snapshot,
-            windowFrame: windowFrame
-        )
-        let end = try resolvedPoint(
-            nodeID: request.toNodeID,
-            point: request.toPoint,
-            snapshot: snapshot,
-            windowFrame: windowFrame
-        )
-        let source = CGEventSource(stateID: .hidSystemState)
-        let eventTypes = mouseEventTypes(for: request.mouseButton)
-        guard let move = CGEvent(
-            mouseEventSource: source,
-            mouseType: .mouseMoved,
-            mouseCursorPosition: start,
-            mouseButton: eventTypes.button
-        ), let down = CGEvent(
-            mouseEventSource: source,
-            mouseType: eventTypes.down,
-            mouseCursorPosition: start,
-            mouseButton: eventTypes.button
-        ), let up = CGEvent(
-            mouseEventSource: source,
-            mouseType: eventTypes.up,
-            mouseCursorPosition: end,
-            mouseButton: eventTypes.button
-        ) else {
-            throw RecordingError.capture("Could not create drag events.")
-        }
-        move.post(tap: .cghidEventTap)
-        down.post(tap: .cghidEventTap)
-
-        let stepCount = max(2, min(600, Int(request.duration * 60)))
-        do {
-            for step in 1...stepCount {
-                let progress = Double(step) / Double(stepCount)
-                let point = CGPoint(
-                    x: start.x + (end.x - start.x) * progress,
-                    y: start.y + (end.y - start.y) * progress
-                )
-                guard let event = CGEvent(
-                    mouseEventSource: source,
-                    mouseType: eventTypes.dragged,
-                    mouseCursorPosition: point,
-                    mouseButton: eventTypes.button
-                ) else {
-                    throw RecordingError.capture("Could not create a drag event.")
-                }
-                event.post(tap: .cghidEventTap)
-                try await Task.sleep(for: .seconds(request.duration / Double(stepCount)))
-            }
-        } catch {
-            up.post(tap: .cghidEventTap)
-            throw error
-        }
-        up.post(tap: .cghidEventTap)
-        return String(
-            format: "dragged  %@  from=(%.1f,%.1f)  to=(%.1f,%.1f)",
-            target.name,
-            start.x,
-            start.y,
-            end.x,
-            end.y
-        )
-    }
-
-    private func scroll(
-        _ request: PabloLiveActionRequest,
-        target: TargetApplication,
-        reader: AccessibilityTreeReader,
-        snapshot: AXTreeSnapshot
-    ) throws -> String {
-        guard let direction = request.scrollDirection else {
-            throw RecordingError.usage("The scroll request did not include a direction.")
-        }
-        let windowFrame = request.point == nil && request.nodeID != nil
-            ? .zero
-            : try largestWindowFrame(in: snapshot, reader: reader)
-        let point: CGPoint
-        if request.nodeID != nil || request.point != nil {
-            point = try resolvedPoint(
-                nodeID: request.nodeID,
-                point: request.point,
-                snapshot: snapshot,
-                windowFrame: windowFrame
-            )
-        } else {
-            point = CGPoint(x: windowFrame.midX, y: windowFrame.midY)
-        }
-        let vertical: Int32
-        let horizontal: Int32
-        switch direction {
-        case .up: (vertical, horizontal) = (Int32(request.scrollAmount), 0)
-        case .down: (vertical, horizontal) = (-Int32(request.scrollAmount), 0)
-        case .left: (vertical, horizontal) = (0, Int32(request.scrollAmount))
-        case .right: (vertical, horizontal) = (0, -Int32(request.scrollAmount))
-        }
-        guard let event = CGEvent(
-            scrollWheelEvent2Source: CGEventSource(stateID: .hidSystemState),
-            units: .line,
-            wheelCount: 2,
-            wheel1: vertical,
-            wheel2: horizontal,
-            wheel3: 0
-        ) else {
-            throw RecordingError.capture("Could not create the scroll event.")
-        }
-        event.location = point
-        event.post(tap: .cghidEventTap)
-        return "scrolled  \(target.name)  direction=\(direction.rawValue)  amount=\(request.scrollAmount)"
-    }
-
     private func typeText(
         _ request: PabloLiveActionRequest,
         target: TargetApplication,
-        reader: AccessibilityTreeReader
+        reader: AccessibilityTreeReader,
+        validateContext: @MainActor () throws -> Void
     ) async throws -> String {
         guard let text = request.text, !text.isEmpty else {
             throw RecordingError.usage("The type request did not include text.")
         }
         if let nodeID = request.nodeID {
-            guard let element = reader.element(id: nodeID) else {
+            guard let element = reader.validatedElement(id: nodeID, windowID: request.target.windowID) else {
                 throw missingNode(nodeID)
             }
             let result = AXUIElementSetAttributeValue(
@@ -296,10 +137,12 @@ public final class PabloLiveActionController {
             }
         }
 
-        let utf16 = Array(text.utf16)
-        for offset in stride(from: 0, to: utf16.count, by: 20) {
-            try requireActiveTarget(target)
-            let chunk = Array(utf16[offset..<min(offset + 20, utf16.count)])
+        for chunk in LiveTextInput.chunks(text) {
+            try validateContext()
+            try requireActiveTarget(target, reader: reader, windowID: request.target.windowID)
+            if let nodeID = request.nodeID, !reader.isFocused(id: nodeID) {
+                throw RecordingError.interrupted("The selected live text field lost focus; typing was interrupted.")
+            }
             guard let down = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: true),
                   let up = CGEvent(keyboardEventSource: nil, virtualKey: 0, keyDown: false) else {
                 throw RecordingError.capture("Could not create keyboard events.")
@@ -315,7 +158,9 @@ public final class PabloLiveActionController {
 
     private func pressKey(
         _ request: PabloLiveActionRequest,
-        target: TargetApplication
+        target: TargetApplication,
+        reader: AccessibilityTreeReader,
+        validateContext: @MainActor () throws -> Void
     ) async throws -> String {
         guard let key = request.key,
               let keyCode = PabloLiveKeyMap.keyCode(for: key) else {
@@ -332,10 +177,13 @@ public final class PabloLiveActionController {
         }
         down.flags = flags
         up.flags = flags
-        try requireActiveTarget(target)
+        try validateContext()
+        try requireActiveTarget(target, reader: reader, windowID: request.target.windowID)
         down.post(tap: .cghidEventTap)
         do {
             try await Task.sleep(for: .milliseconds(30))
+            try validateContext()
+            try requireActiveTarget(target, reader: reader, windowID: request.target.windowID)
         } catch {
             up.post(tap: .cghidEventTap)
             throw error
@@ -353,7 +201,7 @@ public final class PabloLiveActionController {
         guard let nodeID = request.nodeID, let requested = request.accessibilityAction else {
             throw RecordingError.usage("The perform request requires a node and action.")
         }
-        guard let element = reader.element(id: nodeID) else { throw missingNode(nodeID) }
+        guard let element = reader.validatedElement(id: nodeID, windowID: request.target.windowID) else { throw missingNode(nodeID) }
         let actions = availableActions(for: element)
         guard let action = LiveAccessibilityActions.match(requested, in: actions) else {
             let available = actions.isEmpty ? "none" : actions.joined(separator: ", ")
@@ -368,49 +216,12 @@ public final class PabloLiveActionController {
         return "performed  \(target.name)  node=\(nodeID)  action=\(action)"
     }
 
-    private func resolvedPoint(
-        nodeID: String?,
-        point: PabloLivePoint?,
-        snapshot: AXTreeSnapshot,
-        windowFrame: CGRect
-    ) throws -> CGPoint {
-        if let nodeID {
-            guard let node = snapshot.nodes[nodeID],
-                  let position = node.position,
-                  let size = node.size,
-                  size.width > 0,
-                  size.height > 0 else {
-                throw missingNode(nodeID)
-            }
-            return CGPoint(x: position.x + size.width / 2, y: position.y + size.height / 2)
+    private func requireActiveTarget(_ target: TargetApplication, reader: AccessibilityTreeReader, windowID: String?) throws {
+        if let windowID, !reader.isFocusedWindow(id: windowID) {
+            throw RecordingError.interrupted("The selected live window lost focus; keyboard input was interrupted.")
         }
-        guard let point else {
-            throw RecordingError.usage("The action did not include a node or point.")
-        }
-        return LiveActionGeometry.absolute(point, in: windowFrame)
-    }
-
-    private func largestWindowFrame(
-        in snapshot: AXTreeSnapshot,
-        reader: AccessibilityTreeReader
-    ) throws -> CGRect {
-        let frames: [CGRect] = snapshot.nodes.values
-            .filter { $0.role == "AXWindow" && $0.position != nil && $0.size != nil }
-            .compactMap { node -> CGRect? in
-                guard let position = node.position, let size = node.size,
-                      size.width > 0, size.height > 0 else { return nil }
-                return CGRect(x: position.x, y: position.y, width: size.width, height: size.height)
-            }
-        guard let frame = frames.max(by: { $0.width * $0.height < $1.width * $1.height })
-                ?? reader.largestWindowFrame() else {
-            throw RecordingError.capture("The target application has no accessible visible window.")
-        }
-        return frame
-    }
-
-    private func requireActiveTarget(_ target: TargetApplication) throws {
         guard NSWorkspace.shared.frontmostApplication?.processIdentifier == target.pid else {
-            throw RecordingError.capture(
+            throw RecordingError.interrupted(
                 "The target application lost focus before keyboard input could be delivered."
             )
         }
@@ -429,44 +240,7 @@ public final class PabloLiveActionController {
         )
     }
 
-    private func postClicks(
-        at point: CGPoint,
-        button: PabloLiveMouseButton,
-        count: Int
-    ) async throws {
-        let source = CGEventSource(stateID: .hidSystemState)
-        let eventTypes = mouseEventTypes(for: button)
-        for click in 1...count {
-            guard let down = CGEvent(
-                mouseEventSource: source,
-                mouseType: eventTypes.down,
-                mouseCursorPosition: point,
-                mouseButton: eventTypes.button
-            ), let up = CGEvent(
-                mouseEventSource: source,
-                mouseType: eventTypes.up,
-                mouseCursorPosition: point,
-                mouseButton: eventTypes.button
-            ) else {
-                throw RecordingError.capture("Could not create mouse events.")
-            }
-            down.setIntegerValueField(.mouseEventClickState, value: Int64(click))
-            up.setIntegerValueField(.mouseEventClickState, value: Int64(click))
-            down.post(tap: .cghidEventTap)
-            up.post(tap: .cghidEventTap)
-            if click < count { try await Task.sleep(for: .milliseconds(80)) }
-        }
-    }
 
-    private func mouseEventTypes(
-        for button: PabloLiveMouseButton
-    ) -> (button: CGMouseButton, down: CGEventType, up: CGEventType, dragged: CGEventType) {
-        switch button {
-        case .left: return (.left, .leftMouseDown, .leftMouseUp, .leftMouseDragged)
-        case .right: return (.right, .rightMouseDown, .rightMouseUp, .rightMouseDragged)
-        case .middle: return (.center, .otherMouseDown, .otherMouseUp, .otherMouseDragged)
-        }
-    }
 }
 
 enum LiveActionForegroundPolicy {
@@ -487,16 +261,7 @@ enum LiveActionForegroundPolicy {
 
 enum PabloLiveActionValidator {
     static func validate(_ request: PabloLiveActionRequest) throws {
-        let targetCount = [
-            request.target.pid != nil,
-            request.target.bundleIdentifier?.isEmpty == false,
-            request.target.appName?.isEmpty == false,
-        ].filter { $0 }.count
-        guard targetCount == 1, request.target.pid.map({ $0 > 0 }) ?? true else {
-            throw RecordingError.usage(
-                "Choose exactly one live target with --app, --bundle-id, or --pid."
-            )
-        }
+        try request.target.validate()
         try validate(point: request.point)
         try validate(point: request.fromPoint)
         try validate(point: request.toPoint)
@@ -629,5 +394,22 @@ private extension PabloLiveKeyModifier {
         case .shift: return .maskShift
         case .function: return .maskSecondaryFn
         }
+    }
+}
+
+
+enum LiveTextInput {
+    static func chunks(_ text: String) -> [[UInt16]] {
+        let utf16 = Array(text.utf16)
+        var result: [[UInt16]] = []
+        var offset = 0
+        while offset < utf16.count {
+            var end = min(offset + 20, utf16.count)
+            // CGEvent receives UTF-16; keep each scalar intact across event pairs.
+            if end < utf16.count, (0xD800...0xDBFF).contains(utf16[end - 1]) { end -= 1 }
+            result.append(Array(utf16[offset..<end]))
+            offset = end
+        }
+        return result
     }
 }

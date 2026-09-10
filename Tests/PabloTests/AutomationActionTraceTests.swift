@@ -15,10 +15,11 @@ func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
         encode: PabloProtobufCodec.encode
     )
     let actionID = UUID()
+    let sessionID = UUID()
     let secretText = "do-not-store-this-text"
     let request = PabloLiveActionRequest(
         kind: .typeText,
-        target: .init(appName: "Notes"),
+        target: .init(appName: "Notes", sessionID: sessionID, windowID: "window-1", frameReference: "LIVE-\(sessionID.uuidString)/A11Y-001"),
         nodeID: "ax-editor",
         text: secretText,
         unlockForegroundActions: true
@@ -68,6 +69,7 @@ func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
     #expect(records.map(\.type) == ["automationAction", "automationAction"])
     #expect(records.compactMap { $0.automationAction?.phase } == [.requested, .succeeded])
     #expect(Set(records.compactMap { $0.automationAction?.actionID }) == Set([actionID]))
+    #expect(records.allSatisfy { $0.automationAction?.target == request.target })
     #expect(records.allSatisfy { $0.targetPID == 42 })
     #expect(records.allSatisfy { $0.applicationID == "APP-001" })
     #expect(records.allSatisfy { $0.automationAction?.resolvedApplicationID == "APP-001" })
@@ -76,4 +78,26 @@ func automationActionsAreExplicitAndRedactedInTheEventTrace() throws {
     #expect(records.allSatisfy { $0.automationAction?.foregroundActionsUnlocked == true })
     #expect(records.allSatisfy { $0.automationAction?.caller.verified == true })
     #expect(records.allSatisfy { $0.automationAction?.caller.developerName == "Example Developer" })
+}
+
+@Test("Safari action traces preserve the exact tab and document without retaining a typed value")
+func safariTracePreservesDocumentTarget() throws {
+    let generation = UUID()
+    let safari = PabloSafariDOMRequest(kind: .setValue, nodeID: "DOM-element",
+        value: "private input", tabID: 73, documentGeneration: generation)
+    let request = PabloLiveActionRequest(kind: .perform, target: .init(bundleIdentifier: "com.apple.Safari"),
+        nodeID: safari.nodeID, text: safari.value, accessibilityAction: "safari.dom.setValue")
+    let caller = PabloAutomationCaller(displayName: "Fixture", applicationIdentifier: "example.fixture",
+        developerName: "Fixture Developer", developerTeamIdentifier: "TEAM", verified: true)
+    let trace = PabloAutomationActionTrace(actionID: UUID(), phase: .requested, request: request,
+        caller: caller, transport: "http+unix", recordingWasPaused: true, safariTarget: .init(safari))
+    let event = InputEventRecord.automationAction(timestampNs: 4, targetPID: 100,
+        applicationID: "APP-001", trace: trace)
+    let bytes = try PabloProtobufCodec.encode(event)
+    let restored = try #require(PabloProtobufCodec.decodeEvents(from: bytes).first)
+    #expect(restored.automationAction?.safariTarget?.tabID == 73)
+    #expect(restored.automationAction?.safariTarget?.documentGeneration == generation)
+    #expect(restored.automationAction?.safariTarget?.nodeID == "DOM-element")
+    #expect(restored.automationAction?.textLength == 13)
+    #expect(bytes.range(of: Data("private input".utf8)) == nil)
 }

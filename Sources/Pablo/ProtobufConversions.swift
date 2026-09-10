@@ -63,14 +63,20 @@ private extension PabloLiveApplicationTarget {
             if let pid { $0.pid = pid }
             if let bundleIdentifier { $0.bundleIdentifier = bundleIdentifier }
             if let appName { $0.appName = appName }
+            if let sessionID { $0.sessionID = sessionID.uuidString }
+            if let windowID { $0.windowID = windowID }
+            if let frameReference { $0.frameReference = frameReference }
         }
     }
 
-    init(_ value: PabloV3LiveApplicationTarget) {
+    init(_ value: PabloV3LiveApplicationTarget) throws {
         self.init(
             pid: value.hasPid ? value.pid : nil,
             bundleIdentifier: value.hasBundleIdentifier ? value.bundleIdentifier : nil,
-            appName: value.hasAppName ? value.appName : nil
+            appName: value.hasAppName ? value.appName : nil,
+            sessionID: value.hasSessionID ? try requiredUUID(value.sessionID, field: "live session ID") : nil,
+            windowID: value.hasWindowID ? value.windowID : nil,
+            frameReference: value.hasFrameReference ? value.frameReference : nil
         )
     }
 }
@@ -196,6 +202,24 @@ private extension PabloAutomationCaller {
     }
 }
 
+private extension PabloSafariAutomationTarget {
+    var protobuf: PabloV3SafariAutomationTarget {
+        .with {
+            if let tabID { $0.tabID = tabID }
+            if let documentGeneration { $0.documentGeneration = documentGeneration.uuidString }
+            if let nodeID { $0.nodeID = nodeID }
+            if let selector { $0.selector = selector }
+        }
+    }
+
+    init(_ value: PabloV3SafariAutomationTarget) throws {
+        self.init(tabID: value.hasTabID ? value.tabID : nil,
+            documentGeneration: value.hasDocumentGeneration ? try requiredUUID(value.documentGeneration, field: "Safari document generation") : nil,
+            nodeID: value.hasNodeID ? value.nodeID : nil,
+            selector: value.hasSelector ? value.selector : nil)
+    }
+}
+
 private extension PabloAutomationActionTrace {
     var protobuf: PabloV3AutomationActionTrace {
         .with {
@@ -223,6 +247,7 @@ private extension PabloAutomationActionTrace {
             $0.transport = transport
             $0.recordingWasPaused = recordingWasPaused
             if let resolvedApplicationID { $0.resolvedApplicationID = resolvedApplicationID }
+            if let safariTarget { $0.safariTarget = safariTarget.protobuf }
         }
     }
 
@@ -231,7 +256,7 @@ private extension PabloAutomationActionTrace {
             actionID: try requiredUUID(value.actionID, field: "automation action ID"),
             phase: try PabloAutomationActionPhase(value.phase),
             kind: try PabloLiveActionKind(value.kind),
-            target: PabloLiveApplicationTarget(value.target),
+            target: try PabloLiveApplicationTarget(value.target),
             nodeID: value.hasNodeID ? value.nodeID : nil,
             point: value.hasPoint ? PabloLivePoint(value.point) : nil,
             fromNodeID: value.hasFromNodeID ? value.fromNodeID : nil,
@@ -251,7 +276,8 @@ private extension PabloAutomationActionTrace {
             caller: PabloAutomationCaller(value.caller),
             transport: value.transport,
             recordingWasPaused: value.recordingWasPaused,
-            resolvedApplicationID: value.hasResolvedApplicationID ? value.resolvedApplicationID : nil
+            resolvedApplicationID: value.hasResolvedApplicationID ? value.resolvedApplicationID : nil,
+            safariTarget: value.hasSafariTarget ? try PabloSafariAutomationTarget(value.safariTarget) : nil
         )
     }
 }
@@ -421,6 +447,7 @@ private extension AXNode {
             if let focused { $0.focused = focused }
             if let position { $0.position = position.protobuf }
             if let size { $0.size = size.protobuf }
+            if let actions { $0.actions = actions; $0.actionsObserved = true }
         }
     }
 
@@ -439,7 +466,8 @@ private extension AXNode {
             enabled: value.hasEnabled ? value.enabled : nil,
             focused: value.hasFocused ? value.focused : nil,
             position: value.hasPosition ? AXNode.Point(value.position) : nil,
-            size: value.hasSize ? AXNode.Size(value.size) : nil
+            size: value.hasSize ? AXNode.Size(value.size) : nil,
+            actions: value.actionsObserved ? value.actions : nil
         )
     }
 }

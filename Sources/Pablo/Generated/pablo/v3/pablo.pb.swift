@@ -687,6 +687,33 @@ nonisolated struct PabloV3LiveApplicationTarget: Sendable {
   /// Clears the value of `appName`. Subsequent reads from it will return its default value.
   mutating func clearAppName() {self._appName = nil}
 
+  var sessionID: String {
+    get {_sessionID ?? String()}
+    set {_sessionID = newValue}
+  }
+  /// Returns true if `sessionID` has been explicitly set.
+  var hasSessionID: Bool {self._sessionID != nil}
+  /// Clears the value of `sessionID`. Subsequent reads from it will return its default value.
+  mutating func clearSessionID() {self._sessionID = nil}
+
+  var windowID: String {
+    get {_windowID ?? String()}
+    set {_windowID = newValue}
+  }
+  /// Returns true if `windowID` has been explicitly set.
+  var hasWindowID: Bool {self._windowID != nil}
+  /// Clears the value of `windowID`. Subsequent reads from it will return its default value.
+  mutating func clearWindowID() {self._windowID = nil}
+
+  var frameReference: String {
+    get {_frameReference ?? String()}
+    set {_frameReference = newValue}
+  }
+  /// Returns true if `frameReference` has been explicitly set.
+  var hasFrameReference: Bool {self._frameReference != nil}
+  /// Clears the value of `frameReference`. Subsequent reads from it will return its default value.
+  mutating func clearFrameReference() {self._frameReference = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -694,6 +721,9 @@ nonisolated struct PabloV3LiveApplicationTarget: Sendable {
   fileprivate var _pid: Int32? = nil
   fileprivate var _bundleIdentifier: String? = nil
   fileprivate var _appName: String? = nil
+  fileprivate var _sessionID: String? = nil
+  fileprivate var _windowID: String? = nil
+  fileprivate var _frameReference: String? = nil
 }
 
 nonisolated struct PabloV3SafariDOMCommand: Sendable {
@@ -756,6 +786,15 @@ nonisolated struct PabloV3SafariDOMCommand: Sendable {
   /// Clears the value of `recordingID`. Subsequent reads from it will return its default value.
   mutating func clearRecordingID() {self._recordingID = nil}
 
+  var documentGeneration: String {
+    get {_documentGeneration ?? String()}
+    set {_documentGeneration = newValue}
+  }
+  /// Returns true if `documentGeneration` has been explicitly set.
+  var hasDocumentGeneration: Bool {self._documentGeneration != nil}
+  /// Clears the value of `documentGeneration`. Subsequent reads from it will return its default value.
+  mutating func clearDocumentGeneration() {self._documentGeneration = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -765,6 +804,7 @@ nonisolated struct PabloV3SafariDOMCommand: Sendable {
   fileprivate var _value: String? = nil
   fileprivate var _tabID: Int64? = nil
   fileprivate var _recordingID: String? = nil
+  fileprivate var _documentGeneration: String? = nil
 }
 
 nonisolated struct PabloV3SafariDOMResponse: Sendable {
@@ -845,6 +885,57 @@ nonisolated struct PabloV3AutomationCaller: Sendable {
   fileprivate var _applicationIdentifier: String? = nil
   fileprivate var _developerName: String? = nil
   fileprivate var _developerTeamIdentifier: String? = nil
+}
+
+nonisolated struct PabloV3SafariAutomationTarget: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var tabID: Int64 {
+    get {_tabID ?? 0}
+    set {_tabID = newValue}
+  }
+  /// Returns true if `tabID` has been explicitly set.
+  var hasTabID: Bool {self._tabID != nil}
+  /// Clears the value of `tabID`. Subsequent reads from it will return its default value.
+  mutating func clearTabID() {self._tabID = nil}
+
+  var documentGeneration: String {
+    get {_documentGeneration ?? String()}
+    set {_documentGeneration = newValue}
+  }
+  /// Returns true if `documentGeneration` has been explicitly set.
+  var hasDocumentGeneration: Bool {self._documentGeneration != nil}
+  /// Clears the value of `documentGeneration`. Subsequent reads from it will return its default value.
+  mutating func clearDocumentGeneration() {self._documentGeneration = nil}
+
+  var nodeID: String {
+    get {_nodeID ?? String()}
+    set {_nodeID = newValue}
+  }
+  /// Returns true if `nodeID` has been explicitly set.
+  var hasNodeID: Bool {self._nodeID != nil}
+  /// Clears the value of `nodeID`. Subsequent reads from it will return its default value.
+  mutating func clearNodeID() {self._nodeID = nil}
+
+  var selector: String {
+    get {_selector ?? String()}
+    set {_selector = newValue}
+  }
+  /// Returns true if `selector` has been explicitly set.
+  var hasSelector: Bool {self._selector != nil}
+  /// Clears the value of `selector`. Subsequent reads from it will return its default value.
+  mutating func clearSelector() {self._selector = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _tabID: Int64? = nil
+  fileprivate var _documentGeneration: String? = nil
+  fileprivate var _nodeID: String? = nil
+  fileprivate var _selector: String? = nil
 }
 
 nonisolated struct PabloV3AutomationActionTrace: @unchecked Sendable {
@@ -1024,6 +1115,15 @@ nonisolated struct PabloV3AutomationActionTrace: @unchecked Sendable {
     set {_uniqueStorage()._foregroundActionsUnlocked = newValue}
   }
 
+  var safariTarget: PabloV3SafariAutomationTarget {
+    get {_storage._safariTarget ?? PabloV3SafariAutomationTarget()}
+    set {_uniqueStorage()._safariTarget = newValue}
+  }
+  /// Returns true if `safariTarget` has been explicitly set.
+  var hasSafariTarget: Bool {_storage._safariTarget != nil}
+  /// Clears the value of `safariTarget`. Subsequent reads from it will return its default value.
+  mutating func clearSafariTarget() {_uniqueStorage()._safariTarget = nil}
+
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
@@ -1170,139 +1270,144 @@ nonisolated struct PabloV3InputEventRecord: Sendable {
   fileprivate var _automationAction: PabloV3AutomationActionTrace? = nil
 }
 
-nonisolated struct PabloV3AccessibilityNode: Sendable {
+nonisolated struct PabloV3AccessibilityNode: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
   // methods supported on all messages.
 
-  var id: String = String()
+  var id: String {
+    get {_storage._id}
+    set {_uniqueStorage()._id = newValue}
+  }
 
   var parentID: String {
-    get {_parentID ?? String()}
-    set {_parentID = newValue}
+    get {_storage._parentID ?? String()}
+    set {_uniqueStorage()._parentID = newValue}
   }
   /// Returns true if `parentID` has been explicitly set.
-  var hasParentID: Bool {self._parentID != nil}
+  var hasParentID: Bool {_storage._parentID != nil}
   /// Clears the value of `parentID`. Subsequent reads from it will return its default value.
-  mutating func clearParentID() {self._parentID = nil}
+  mutating func clearParentID() {_uniqueStorage()._parentID = nil}
 
-  var childIds: [String] = []
+  var childIds: [String] {
+    get {_storage._childIds}
+    set {_uniqueStorage()._childIds = newValue}
+  }
 
   var role: String {
-    get {_role ?? String()}
-    set {_role = newValue}
+    get {_storage._role ?? String()}
+    set {_uniqueStorage()._role = newValue}
   }
   /// Returns true if `role` has been explicitly set.
-  var hasRole: Bool {self._role != nil}
+  var hasRole: Bool {_storage._role != nil}
   /// Clears the value of `role`. Subsequent reads from it will return its default value.
-  mutating func clearRole() {self._role = nil}
+  mutating func clearRole() {_uniqueStorage()._role = nil}
 
   var subrole: String {
-    get {_subrole ?? String()}
-    set {_subrole = newValue}
+    get {_storage._subrole ?? String()}
+    set {_uniqueStorage()._subrole = newValue}
   }
   /// Returns true if `subrole` has been explicitly set.
-  var hasSubrole: Bool {self._subrole != nil}
+  var hasSubrole: Bool {_storage._subrole != nil}
   /// Clears the value of `subrole`. Subsequent reads from it will return its default value.
-  mutating func clearSubrole() {self._subrole = nil}
+  mutating func clearSubrole() {_uniqueStorage()._subrole = nil}
 
   var title: String {
-    get {_title ?? String()}
-    set {_title = newValue}
+    get {_storage._title ?? String()}
+    set {_uniqueStorage()._title = newValue}
   }
   /// Returns true if `title` has been explicitly set.
-  var hasTitle: Bool {self._title != nil}
+  var hasTitle: Bool {_storage._title != nil}
   /// Clears the value of `title`. Subsequent reads from it will return its default value.
-  mutating func clearTitle() {self._title = nil}
+  mutating func clearTitle() {_uniqueStorage()._title = nil}
 
   var label: String {
-    get {_label ?? String()}
-    set {_label = newValue}
+    get {_storage._label ?? String()}
+    set {_uniqueStorage()._label = newValue}
   }
   /// Returns true if `label` has been explicitly set.
-  var hasLabel: Bool {self._label != nil}
+  var hasLabel: Bool {_storage._label != nil}
   /// Clears the value of `label`. Subsequent reads from it will return its default value.
-  mutating func clearLabel() {self._label = nil}
+  mutating func clearLabel() {_uniqueStorage()._label = nil}
 
   var value: String {
-    get {_value ?? String()}
-    set {_value = newValue}
+    get {_storage._value ?? String()}
+    set {_uniqueStorage()._value = newValue}
   }
   /// Returns true if `value` has been explicitly set.
-  var hasValue: Bool {self._value != nil}
+  var hasValue: Bool {_storage._value != nil}
   /// Clears the value of `value`. Subsequent reads from it will return its default value.
-  mutating func clearValue() {self._value = nil}
+  mutating func clearValue() {_uniqueStorage()._value = nil}
 
   var identifier: String {
-    get {_identifier ?? String()}
-    set {_identifier = newValue}
+    get {_storage._identifier ?? String()}
+    set {_uniqueStorage()._identifier = newValue}
   }
   /// Returns true if `identifier` has been explicitly set.
-  var hasIdentifier: Bool {self._identifier != nil}
+  var hasIdentifier: Bool {_storage._identifier != nil}
   /// Clears the value of `identifier`. Subsequent reads from it will return its default value.
-  mutating func clearIdentifier() {self._identifier = nil}
+  mutating func clearIdentifier() {_uniqueStorage()._identifier = nil}
 
   var help: String {
-    get {_help ?? String()}
-    set {_help = newValue}
+    get {_storage._help ?? String()}
+    set {_uniqueStorage()._help = newValue}
   }
   /// Returns true if `help` has been explicitly set.
-  var hasHelp: Bool {self._help != nil}
+  var hasHelp: Bool {_storage._help != nil}
   /// Clears the value of `help`. Subsequent reads from it will return its default value.
-  mutating func clearHelp() {self._help = nil}
+  mutating func clearHelp() {_uniqueStorage()._help = nil}
 
   var enabled: Bool {
-    get {_enabled ?? false}
-    set {_enabled = newValue}
+    get {_storage._enabled ?? false}
+    set {_uniqueStorage()._enabled = newValue}
   }
   /// Returns true if `enabled` has been explicitly set.
-  var hasEnabled: Bool {self._enabled != nil}
+  var hasEnabled: Bool {_storage._enabled != nil}
   /// Clears the value of `enabled`. Subsequent reads from it will return its default value.
-  mutating func clearEnabled() {self._enabled = nil}
+  mutating func clearEnabled() {_uniqueStorage()._enabled = nil}
 
   var focused: Bool {
-    get {_focused ?? false}
-    set {_focused = newValue}
+    get {_storage._focused ?? false}
+    set {_uniqueStorage()._focused = newValue}
   }
   /// Returns true if `focused` has been explicitly set.
-  var hasFocused: Bool {self._focused != nil}
+  var hasFocused: Bool {_storage._focused != nil}
   /// Clears the value of `focused`. Subsequent reads from it will return its default value.
-  mutating func clearFocused() {self._focused = nil}
+  mutating func clearFocused() {_uniqueStorage()._focused = nil}
 
   var position: PabloV3Point {
-    get {_position ?? PabloV3Point()}
-    set {_position = newValue}
+    get {_storage._position ?? PabloV3Point()}
+    set {_uniqueStorage()._position = newValue}
   }
   /// Returns true if `position` has been explicitly set.
-  var hasPosition: Bool {self._position != nil}
+  var hasPosition: Bool {_storage._position != nil}
   /// Clears the value of `position`. Subsequent reads from it will return its default value.
-  mutating func clearPosition() {self._position = nil}
+  mutating func clearPosition() {_uniqueStorage()._position = nil}
 
   var size: PabloV3Size {
-    get {_size ?? PabloV3Size()}
-    set {_size = newValue}
+    get {_storage._size ?? PabloV3Size()}
+    set {_uniqueStorage()._size = newValue}
   }
   /// Returns true if `size` has been explicitly set.
-  var hasSize: Bool {self._size != nil}
+  var hasSize: Bool {_storage._size != nil}
   /// Clears the value of `size`. Subsequent reads from it will return its default value.
-  mutating func clearSize() {self._size = nil}
+  mutating func clearSize() {_uniqueStorage()._size = nil}
+
+  var actions: [String] {
+    get {_storage._actions}
+    set {_uniqueStorage()._actions = newValue}
+  }
+
+  var actionsObserved: Bool {
+    get {_storage._actionsObserved}
+    set {_uniqueStorage()._actionsObserved = newValue}
+  }
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
   init() {}
 
-  fileprivate var _parentID: String? = nil
-  fileprivate var _role: String? = nil
-  fileprivate var _subrole: String? = nil
-  fileprivate var _title: String? = nil
-  fileprivate var _label: String? = nil
-  fileprivate var _value: String? = nil
-  fileprivate var _identifier: String? = nil
-  fileprivate var _help: String? = nil
-  fileprivate var _enabled: Bool? = nil
-  fileprivate var _focused: Bool? = nil
-  fileprivate var _position: PabloV3Point? = nil
-  fileprivate var _size: PabloV3Size? = nil
+  fileprivate var _storage = _StorageClass.defaultInstance
 }
 
 nonisolated struct PabloV3AccessibilitySnapshotRecord: Sendable {
@@ -1961,7 +2066,7 @@ nonisolated extension PabloV3WorkspaceSnapshotRecord: SwiftProtobuf.Message, Swi
 
 nonisolated extension PabloV3LiveApplicationTarget: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".LiveApplicationTarget"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}pid\0\u{3}bundle_identifier\0\u{3}app_name\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}pid\0\u{3}bundle_identifier\0\u{3}app_name\0\u{3}session_id\0\u{3}window_id\0\u{3}frame_reference\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -1972,6 +2077,9 @@ nonisolated extension PabloV3LiveApplicationTarget: SwiftProtobuf.Message, Swift
       case 1: try { try decoder.decodeSingularInt32Field(value: &self._pid) }()
       case 2: try { try decoder.decodeSingularStringField(value: &self._bundleIdentifier) }()
       case 3: try { try decoder.decodeSingularStringField(value: &self._appName) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._sessionID) }()
+      case 5: try { try decoder.decodeSingularStringField(value: &self._windowID) }()
+      case 6: try { try decoder.decodeSingularStringField(value: &self._frameReference) }()
       default: break
       }
     }
@@ -1991,6 +2099,15 @@ nonisolated extension PabloV3LiveApplicationTarget: SwiftProtobuf.Message, Swift
     try { if let v = self._appName {
       try visitor.visitSingularStringField(value: v, fieldNumber: 3)
     } }()
+    try { if let v = self._sessionID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._windowID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 5)
+    } }()
+    try { if let v = self._frameReference {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 6)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -1998,6 +2115,9 @@ nonisolated extension PabloV3LiveApplicationTarget: SwiftProtobuf.Message, Swift
     if lhs._pid != rhs._pid {return false}
     if lhs._bundleIdentifier != rhs._bundleIdentifier {return false}
     if lhs._appName != rhs._appName {return false}
+    if lhs._sessionID != rhs._sessionID {return false}
+    if lhs._windowID != rhs._windowID {return false}
+    if lhs._frameReference != rhs._frameReference {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2005,7 +2125,7 @@ nonisolated extension PabloV3LiveApplicationTarget: SwiftProtobuf.Message, Swift
 
 nonisolated extension PabloV3SafariDOMCommand: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".SafariDOMCommand"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}kind\0\u{1}selector\0\u{3}node_id\0\u{1}value\0\u{3}include_hidden\0\u{3}max_nodes\0\u{3}max_depth\0\u{3}tab_id\0\u{3}recording_id\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{1}kind\0\u{1}selector\0\u{3}node_id\0\u{1}value\0\u{3}include_hidden\0\u{3}max_nodes\0\u{3}max_depth\0\u{3}tab_id\0\u{3}recording_id\0\u{3}document_generation\0")
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
     while let fieldNumber = try decoder.nextFieldNumber() {
@@ -2023,6 +2143,7 @@ nonisolated extension PabloV3SafariDOMCommand: SwiftProtobuf.Message, SwiftProto
       case 8: try { try decoder.decodeSingularUInt32Field(value: &self.maxDepth) }()
       case 9: try { try decoder.decodeSingularInt64Field(value: &self._tabID) }()
       case 10: try { try decoder.decodeSingularStringField(value: &self._recordingID) }()
+      case 11: try { try decoder.decodeSingularStringField(value: &self._documentGeneration) }()
       default: break
       }
     }
@@ -2063,6 +2184,9 @@ nonisolated extension PabloV3SafariDOMCommand: SwiftProtobuf.Message, SwiftProto
     try { if let v = self._recordingID {
       try visitor.visitSingularStringField(value: v, fieldNumber: 10)
     } }()
+    try { if let v = self._documentGeneration {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 11)
+    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
@@ -2077,6 +2201,7 @@ nonisolated extension PabloV3SafariDOMCommand: SwiftProtobuf.Message, SwiftProto
     if lhs.maxDepth != rhs.maxDepth {return false}
     if lhs._tabID != rhs._tabID {return false}
     if lhs._recordingID != rhs._recordingID {return false}
+    if lhs._documentGeneration != rhs._documentGeneration {return false}
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }
@@ -2185,9 +2310,58 @@ nonisolated extension PabloV3AutomationCaller: SwiftProtobuf.Message, SwiftProto
   }
 }
 
+nonisolated extension PabloV3SafariAutomationTarget: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".SafariAutomationTarget"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}tab_id\0\u{3}document_generation\0\u{3}node_id\0\u{1}selector\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularInt64Field(value: &self._tabID) }()
+      case 2: try { try decoder.decodeSingularStringField(value: &self._documentGeneration) }()
+      case 3: try { try decoder.decodeSingularStringField(value: &self._nodeID) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._selector) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._tabID {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._documentGeneration {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._nodeID {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._selector {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: PabloV3SafariAutomationTarget, rhs: PabloV3SafariAutomationTarget) -> Bool {
+    if lhs._tabID != rhs._tabID {return false}
+    if lhs._documentGeneration != rhs._documentGeneration {return false}
+    if lhs._nodeID != rhs._nodeID {return false}
+    if lhs._selector != rhs._selector {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AutomationActionTrace"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}action_id\0\u{1}phase\0\u{1}kind\0\u{1}target\0\u{3}node_id\0\u{1}point\0\u{3}from_node_id\0\u{3}from_point\0\u{3}to_node_id\0\u{3}to_point\0\u{3}mouse_button\0\u{3}click_count\0\u{1}duration\0\u{3}scroll_direction\0\u{3}scroll_amount\0\u{3}text_length\0\u{1}key\0\u{1}modifiers\0\u{3}accessibility_action\0\u{1}caller\0\u{1}transport\0\u{3}recording_was_paused\0\u{3}resolved_application_id\0\u{3}foreground_actions_unlocked\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}action_id\0\u{1}phase\0\u{1}kind\0\u{1}target\0\u{3}node_id\0\u{1}point\0\u{3}from_node_id\0\u{3}from_point\0\u{3}to_node_id\0\u{3}to_point\0\u{3}mouse_button\0\u{3}click_count\0\u{1}duration\0\u{3}scroll_direction\0\u{3}scroll_amount\0\u{3}text_length\0\u{1}key\0\u{1}modifiers\0\u{3}accessibility_action\0\u{1}caller\0\u{1}transport\0\u{3}recording_was_paused\0\u{3}resolved_application_id\0\u{3}foreground_actions_unlocked\0\u{3}safari_target\0")
 
   fileprivate class _StorageClass {
     var _actionID: String = String()
@@ -2214,6 +2388,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
     var _recordingWasPaused: Bool = false
     var _resolvedApplicationID: String? = nil
     var _foregroundActionsUnlocked: Bool = false
+    var _safariTarget: PabloV3SafariAutomationTarget? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -2248,6 +2423,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
       _recordingWasPaused = source._recordingWasPaused
       _resolvedApplicationID = source._resolvedApplicationID
       _foregroundActionsUnlocked = source._foregroundActionsUnlocked
+      _safariTarget = source._safariTarget
     }
   }
 
@@ -2290,6 +2466,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
         case 22: try { try decoder.decodeSingularBoolField(value: &_storage._recordingWasPaused) }()
         case 23: try { try decoder.decodeSingularStringField(value: &_storage._resolvedApplicationID) }()
         case 24: try { try decoder.decodeSingularBoolField(value: &_storage._foregroundActionsUnlocked) }()
+        case 25: try { try decoder.decodeSingularMessageField(value: &_storage._safariTarget) }()
         default: break
         }
       }
@@ -2374,6 +2551,9 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
       if _storage._foregroundActionsUnlocked != false {
         try visitor.visitSingularBoolField(value: _storage._foregroundActionsUnlocked, fieldNumber: 24)
       }
+      try { if let v = _storage._safariTarget {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 25)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -2407,6 +2587,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
         if _storage._recordingWasPaused != rhs_storage._recordingWasPaused {return false}
         if _storage._resolvedApplicationID != rhs_storage._resolvedApplicationID {return false}
         if _storage._foregroundActionsUnlocked != rhs_storage._foregroundActionsUnlocked {return false}
+        if _storage._safariTarget != rhs_storage._safariTarget {return false}
         return true
       }
       if !storagesAreEqual {return false}
@@ -2527,98 +2708,174 @@ nonisolated extension PabloV3InputEventRecord: SwiftProtobuf.Message, SwiftProto
 
 nonisolated extension PabloV3AccessibilityNode: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AccessibilityNode"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}parent_id\0\u{3}child_ids\0\u{1}role\0\u{1}subrole\0\u{1}title\0\u{1}label\0\u{1}value\0\u{1}identifier\0\u{1}help\0\u{1}enabled\0\u{1}focused\0\u{1}position\0\u{1}size\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{1}id\0\u{3}parent_id\0\u{3}child_ids\0\u{1}role\0\u{1}subrole\0\u{1}title\0\u{1}label\0\u{1}value\0\u{1}identifier\0\u{1}help\0\u{1}enabled\0\u{1}focused\0\u{1}position\0\u{1}size\0\u{1}actions\0\u{3}actions_observed\0")
+
+  fileprivate class _StorageClass {
+    var _id: String = String()
+    var _parentID: String? = nil
+    var _childIds: [String] = []
+    var _role: String? = nil
+    var _subrole: String? = nil
+    var _title: String? = nil
+    var _label: String? = nil
+    var _value: String? = nil
+    var _identifier: String? = nil
+    var _help: String? = nil
+    var _enabled: Bool? = nil
+    var _focused: Bool? = nil
+    var _position: PabloV3Point? = nil
+    var _size: PabloV3Size? = nil
+    var _actions: [String] = []
+    var _actionsObserved: Bool = false
+
+      // This property is used as the initial default value for new instances of the type.
+      // The type itself is protecting the reference to its storage via CoW semantics.
+      // This will force a copy to be made of this reference when the first mutation occurs;
+      // hence, it is safe to mark this as `nonisolated(unsafe)`.
+      static nonisolated(unsafe) let defaultInstance = _StorageClass()
+
+    private init() {}
+
+    init(copying source: _StorageClass) {
+      _id = source._id
+      _parentID = source._parentID
+      _childIds = source._childIds
+      _role = source._role
+      _subrole = source._subrole
+      _title = source._title
+      _label = source._label
+      _value = source._value
+      _identifier = source._identifier
+      _help = source._help
+      _enabled = source._enabled
+      _focused = source._focused
+      _position = source._position
+      _size = source._size
+      _actions = source._actions
+      _actionsObserved = source._actionsObserved
+    }
+  }
+
+  fileprivate mutating func _uniqueStorage() -> _StorageClass {
+    if !isKnownUniquelyReferenced(&_storage) {
+      _storage = _StorageClass(copying: _storage)
+    }
+    return _storage
+  }
 
   mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
-    while let fieldNumber = try decoder.nextFieldNumber() {
-      // The use of inline closures is to circumvent an issue where the compiler
-      // allocates stack space for every case branch when no optimizations are
-      // enabled. https://github.com/apple/swift-protobuf/issues/1034
-      switch fieldNumber {
-      case 1: try { try decoder.decodeSingularStringField(value: &self.id) }()
-      case 2: try { try decoder.decodeSingularStringField(value: &self._parentID) }()
-      case 3: try { try decoder.decodeRepeatedStringField(value: &self.childIds) }()
-      case 4: try { try decoder.decodeSingularStringField(value: &self._role) }()
-      case 5: try { try decoder.decodeSingularStringField(value: &self._subrole) }()
-      case 6: try { try decoder.decodeSingularStringField(value: &self._title) }()
-      case 7: try { try decoder.decodeSingularStringField(value: &self._label) }()
-      case 8: try { try decoder.decodeSingularStringField(value: &self._value) }()
-      case 9: try { try decoder.decodeSingularStringField(value: &self._identifier) }()
-      case 10: try { try decoder.decodeSingularStringField(value: &self._help) }()
-      case 11: try { try decoder.decodeSingularBoolField(value: &self._enabled) }()
-      case 12: try { try decoder.decodeSingularBoolField(value: &self._focused) }()
-      case 13: try { try decoder.decodeSingularMessageField(value: &self._position) }()
-      case 14: try { try decoder.decodeSingularMessageField(value: &self._size) }()
-      default: break
+    _ = _uniqueStorage()
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      while let fieldNumber = try decoder.nextFieldNumber() {
+        // The use of inline closures is to circumvent an issue where the compiler
+        // allocates stack space for every case branch when no optimizations are
+        // enabled. https://github.com/apple/swift-protobuf/issues/1034
+        switch fieldNumber {
+        case 1: try { try decoder.decodeSingularStringField(value: &_storage._id) }()
+        case 2: try { try decoder.decodeSingularStringField(value: &_storage._parentID) }()
+        case 3: try { try decoder.decodeRepeatedStringField(value: &_storage._childIds) }()
+        case 4: try { try decoder.decodeSingularStringField(value: &_storage._role) }()
+        case 5: try { try decoder.decodeSingularStringField(value: &_storage._subrole) }()
+        case 6: try { try decoder.decodeSingularStringField(value: &_storage._title) }()
+        case 7: try { try decoder.decodeSingularStringField(value: &_storage._label) }()
+        case 8: try { try decoder.decodeSingularStringField(value: &_storage._value) }()
+        case 9: try { try decoder.decodeSingularStringField(value: &_storage._identifier) }()
+        case 10: try { try decoder.decodeSingularStringField(value: &_storage._help) }()
+        case 11: try { try decoder.decodeSingularBoolField(value: &_storage._enabled) }()
+        case 12: try { try decoder.decodeSingularBoolField(value: &_storage._focused) }()
+        case 13: try { try decoder.decodeSingularMessageField(value: &_storage._position) }()
+        case 14: try { try decoder.decodeSingularMessageField(value: &_storage._size) }()
+        case 15: try { try decoder.decodeRepeatedStringField(value: &_storage._actions) }()
+        case 16: try { try decoder.decodeSingularBoolField(value: &_storage._actionsObserved) }()
+        default: break
+        }
       }
     }
   }
 
   func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
-    // The use of inline closures is to circumvent an issue where the compiler
-    // allocates stack space for every if/case branch local when no optimizations
-    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
-    // https://github.com/apple/swift-protobuf/issues/1182
-    if !self.id.isEmpty {
-      try visitor.visitSingularStringField(value: self.id, fieldNumber: 1)
+    try withExtendedLifetime(_storage) { (_storage: _StorageClass) in
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every if/case branch local when no optimizations
+      // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+      // https://github.com/apple/swift-protobuf/issues/1182
+      if !_storage._id.isEmpty {
+        try visitor.visitSingularStringField(value: _storage._id, fieldNumber: 1)
+      }
+      try { if let v = _storage._parentID {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 2)
+      } }()
+      if !_storage._childIds.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._childIds, fieldNumber: 3)
+      }
+      try { if let v = _storage._role {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+      } }()
+      try { if let v = _storage._subrole {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 5)
+      } }()
+      try { if let v = _storage._title {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 6)
+      } }()
+      try { if let v = _storage._label {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 7)
+      } }()
+      try { if let v = _storage._value {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 8)
+      } }()
+      try { if let v = _storage._identifier {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 9)
+      } }()
+      try { if let v = _storage._help {
+        try visitor.visitSingularStringField(value: v, fieldNumber: 10)
+      } }()
+      try { if let v = _storage._enabled {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 11)
+      } }()
+      try { if let v = _storage._focused {
+        try visitor.visitSingularBoolField(value: v, fieldNumber: 12)
+      } }()
+      try { if let v = _storage._position {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 13)
+      } }()
+      try { if let v = _storage._size {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 14)
+      } }()
+      if !_storage._actions.isEmpty {
+        try visitor.visitRepeatedStringField(value: _storage._actions, fieldNumber: 15)
+      }
+      if _storage._actionsObserved != false {
+        try visitor.visitSingularBoolField(value: _storage._actionsObserved, fieldNumber: 16)
+      }
     }
-    try { if let v = self._parentID {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 2)
-    } }()
-    if !self.childIds.isEmpty {
-      try visitor.visitRepeatedStringField(value: self.childIds, fieldNumber: 3)
-    }
-    try { if let v = self._role {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
-    } }()
-    try { if let v = self._subrole {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 5)
-    } }()
-    try { if let v = self._title {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 6)
-    } }()
-    try { if let v = self._label {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 7)
-    } }()
-    try { if let v = self._value {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 8)
-    } }()
-    try { if let v = self._identifier {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 9)
-    } }()
-    try { if let v = self._help {
-      try visitor.visitSingularStringField(value: v, fieldNumber: 10)
-    } }()
-    try { if let v = self._enabled {
-      try visitor.visitSingularBoolField(value: v, fieldNumber: 11)
-    } }()
-    try { if let v = self._focused {
-      try visitor.visitSingularBoolField(value: v, fieldNumber: 12)
-    } }()
-    try { if let v = self._position {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 13)
-    } }()
-    try { if let v = self._size {
-      try visitor.visitSingularMessageField(value: v, fieldNumber: 14)
-    } }()
     try unknownFields.traverse(visitor: &visitor)
   }
 
   static func ==(lhs: PabloV3AccessibilityNode, rhs: PabloV3AccessibilityNode) -> Bool {
-    if lhs.id != rhs.id {return false}
-    if lhs._parentID != rhs._parentID {return false}
-    if lhs.childIds != rhs.childIds {return false}
-    if lhs._role != rhs._role {return false}
-    if lhs._subrole != rhs._subrole {return false}
-    if lhs._title != rhs._title {return false}
-    if lhs._label != rhs._label {return false}
-    if lhs._value != rhs._value {return false}
-    if lhs._identifier != rhs._identifier {return false}
-    if lhs._help != rhs._help {return false}
-    if lhs._enabled != rhs._enabled {return false}
-    if lhs._focused != rhs._focused {return false}
-    if lhs._position != rhs._position {return false}
-    if lhs._size != rhs._size {return false}
+    if lhs._storage !== rhs._storage {
+      let storagesAreEqual: Bool = withExtendedLifetime((lhs._storage, rhs._storage)) { (_args: (_StorageClass, _StorageClass)) in
+        let _storage = _args.0
+        let rhs_storage = _args.1
+        if _storage._id != rhs_storage._id {return false}
+        if _storage._parentID != rhs_storage._parentID {return false}
+        if _storage._childIds != rhs_storage._childIds {return false}
+        if _storage._role != rhs_storage._role {return false}
+        if _storage._subrole != rhs_storage._subrole {return false}
+        if _storage._title != rhs_storage._title {return false}
+        if _storage._label != rhs_storage._label {return false}
+        if _storage._value != rhs_storage._value {return false}
+        if _storage._identifier != rhs_storage._identifier {return false}
+        if _storage._help != rhs_storage._help {return false}
+        if _storage._enabled != rhs_storage._enabled {return false}
+        if _storage._focused != rhs_storage._focused {return false}
+        if _storage._position != rhs_storage._position {return false}
+        if _storage._size != rhs_storage._size {return false}
+        if _storage._actions != rhs_storage._actions {return false}
+        if _storage._actionsObserved != rhs_storage._actionsObserved {return false}
+        return true
+      }
+      if !storagesAreEqual {return false}
+    }
     if lhs.unknownFields != rhs.unknownFields {return false}
     return true
   }

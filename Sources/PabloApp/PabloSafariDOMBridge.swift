@@ -4,7 +4,23 @@ import PabloCore
 import SafariServices
 
 @MainActor
-final class PabloSafariDOMBridge {
+protocol PabloSafariBridging {
+    func listTabs() async throws -> [PabloSafariTab]
+    func perform(_ request: PabloSafariDOMRequest) async throws -> PabloControlOutput
+    func prepareSpool(recordingID: UUID) throws
+    func removeSpool(recordingID: UUID) throws
+    func eventBatches(recordingID: UUID, expectedNextSequence: Int64?, expectedEventCount: Int?) throws -> [Data]
+    func recordingError(recordingID: UUID) throws -> String?
+}
+
+extension PabloSafariBridging {
+    func eventBatches(recordingID: UUID) throws -> [Data] {
+        try eventBatches(recordingID: recordingID, expectedNextSequence: nil, expectedEventCount: nil)
+    }
+}
+
+@MainActor
+final class PabloSafariDOMBridge: PabloSafariBridging {
     static let extensionBundleIdentifier = "com.ramon.pablo.safari.extension"
     private static let appGroupIdentifier = "D9G32AG3E5.com.ramon.pablo.safari"
     private static let messageName = "dom-command"
@@ -39,8 +55,16 @@ final class PabloSafariDOMBridge {
         try spoolStore().remove(recordingID: recordingID)
     }
 
-    func eventBatches(recordingID: UUID) throws -> [Data] {
-        try spoolStore().eventBatches(recordingID: recordingID)
+    func eventBatches(
+        recordingID: UUID,
+        expectedNextSequence: Int64? = nil,
+        expectedEventCount: Int? = nil
+    ) throws -> [Data] {
+        try spoolStore().eventBatches(
+            recordingID: recordingID,
+            expectedNextSequence: expectedNextSequence,
+            expectedEventCount: expectedEventCount
+        )
     }
 
     func recordingError(recordingID: UUID) throws -> String? {
@@ -74,35 +98,29 @@ final class PabloSafariDOMBridge {
         defer { try? FileManager.default.removeItem(at: responseURL) }
 
         let command = try PabloSafariDOMProtocol.encode(request, id: requestID)
-        try await SFSafariApplication.dispatchMessage(
-            withName: Self.messageName,
-            toExtensionWithIdentifier: Self.extensionBundleIdentifier,
-            userInfo: [
-                "name": Self.messageName,
-                "command": command.base64EncodedString(),
-            ]
-        )
-
-        let deadline = ContinuousClock.now + .seconds(10)
-        while ContinuousClock.now < deadline {
-            if let data = try? Data(contentsOf: responseURL) {
-                let response = try PabloSafariDOMProtocol.decodeResponse(data)
-                guard response.id == requestID else {
-                    throw RecordingError.capture("The Safari extension returned a mismatched response.")
+        do {
+            try await SFSafariApplication.dispatchMessage(
+                withName: Self.messageName,
+                toExtensionWithIdentifier: Self.extensionBundleIdentifier,
+                userInfo: ["name": Self.messageName, "command": command.base64EncodedString()]
+            )
+            let deadline = ContinuousClock.now + .seconds(10)
+            while ContinuousClock.now < deadline {
+                if let data = try? Data(contentsOf: responseURL) {
+                    let response = try PabloSafariDOMProtocol.decodeResponse(data)
+                    guard let payload = try PabloSafariDOMProtocol.validateResponse(response, for: request, id: requestID) else {
+                        return .null
+                    }
+                    return try JSONDecoder().decode(PabloControlOutput.self, from: payload)
                 }
-                guard response.success else {
-                    throw RecordingError.capture(
-                        response.error ?? "The Safari extension rejected the DOM command."
-                    )
-                }
-                guard let payload = response.jsonPayload else { return .null }
-                return try JSONDecoder().decode(PabloControlOutput.self, from: payload)
+                try await Task.sleep(for: .milliseconds(50))
             }
-            try await Task.sleep(for: .milliseconds(50))
+            throw PabloSafariCommandError.outcomeUnknown("The extension did not acknowledge request \(requestID.uuidString).")
+        } catch let error as PabloSafariCommandError {
+            throw error
+        } catch {
+            throw PabloSafariCommandError.outcomeUnknown(error.localizedDescription)
         }
-        throw RecordingError.capture(
-            "The Safari extension did not respond. Click Pablo's Safari toolbar button on the active tab, then retry."
-        )
     }
 
     private var safariIsRunning: Bool {
@@ -111,13 +129,23 @@ final class PabloSafariDOMBridge {
         }
     }
 
+    static func extensionReadinessError(_ error: Error) -> Error {
+        let native = error as NSError
+        if native.domain == SFErrorDomain, native.code == SFErrorCode.noExtensionFound.rawValue {
+            return RecordingError.permission(
+                "Safari cannot find this build of Pablo Safari. Open the matching Pablo app once, then enable Pablo Safari in Safari > Settings > Extensions and unlock the intended tab with its toolbar button."
+            )
+        }
+        return error
+    }
+
     private func extensionIsEnabled() async throws -> Bool {
         try await withCheckedThrowingContinuation { continuation in
             SFSafariExtensionManager.getStateOfSafariExtension(
                 withIdentifier: Self.extensionBundleIdentifier
             ) { state, error in
                 if let error {
-                    continuation.resume(throwing: error)
+                    continuation.resume(throwing: Self.extensionReadinessError(error))
                 } else {
                     continuation.resume(returning: state?.isEnabled == true)
                 }

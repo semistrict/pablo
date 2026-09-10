@@ -36,6 +36,22 @@ enum ReplayVideoComposition {
             )
             let length = CMTimeMinimum(sourceDuration, CMTimeSubtract(end, start))
             guard length.isNumeric, length > .zero else { continue }
+            if layers.isEmpty {
+                // Empty composition ranges render black but AVPlayer can clamp seeking
+                // to the last media sample. An invisible sample keeps the session clock
+                // seekable through gaps and the evidence-only tail of a recording.
+                guard let clock = composition.addMutableTrack(
+                    withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
+                ) else {
+                    throw RecordingError.capture("Could not prepare the recording timeline.")
+                }
+                let sample = CMTimeRange(start: .zero, duration: CMTimeMinimum(sourceDuration, videoComposition.frameDuration))
+                try clock.insertTimeRange(sample, of: source, at: .zero)
+                clock.scaleTimeRange(sample, toDuration: duration)
+                let clockLayer = AVMutableVideoCompositionLayerInstruction(assetTrack: clock)
+                clockLayer.setOpacity(0, at: .zero)
+                layers.append(clockLayer)
+            }
             guard let destination = composition.addMutableTrack(
                 withMediaType: .video, preferredTrackID: kCMPersistentTrackID_Invalid
             ) else {

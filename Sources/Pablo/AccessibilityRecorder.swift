@@ -23,17 +23,21 @@ struct AXTreeSnapshot {
 }
 
 final class AccessibilityTreeReader {
+    private let pid: pid_t
     private let appElement: AXUIElement
     private let applicationID: String
     private let maxDepth: Int
     private let maxNodes: Int
+    private let captureActions: Bool
     private var elementsByID: [String: AXUIElement] = [:]
 
-    init(pid: pid_t, applicationID: String, maxDepth: Int = 30, maxNodes: Int = 10_000) {
+    init(pid: pid_t, applicationID: String, maxDepth: Int = 30, maxNodes: Int = 10_000, captureActions: Bool = false) {
+        self.pid = pid
         appElement = AXUIElementCreateApplication(pid)
         self.applicationID = applicationID
         self.maxDepth = maxDepth
         self.maxNodes = maxNodes
+        self.captureActions = captureActions
     }
 
     func read() -> AXTreeSnapshot {
@@ -91,7 +95,8 @@ final class AccessibilityTreeReader {
                 enabled: boolAttribute(element, kAXEnabledAttribute),
                 focused: boolAttribute(element, kAXFocusedAttribute),
                 position: pointAttribute(element, kAXPositionAttribute),
-                size: size
+                size: size,
+                actions: captureActions ? actionNames(element) : nil
             )
             return id
         }
@@ -101,19 +106,89 @@ final class AccessibilityTreeReader {
         return AXTreeSnapshot(rootID: rootID, nodes: nodes, truncated: truncated)
     }
 
+    private func actionNames(_ element: AXUIElement) -> [String]? {
+        var value: CFArray?
+        guard AXUIElementCopyActionNames(element, &value) == .success, let names = value as? [String],
+              names.count <= 64, names.allSatisfy({ $0.utf8.count <= 128 }) else { return nil }
+        return names
+    }
+
     func element(id: String) -> AXUIElement? {
         elementsByID[id]
     }
 
+    func validatedElement(id: String, windowID: String? = nil) -> AXUIElement? {
+        guard let element = elementsByID[id], stringAttribute(element, kAXRoleAttribute) != nil else { return nil }
+        var currentPID: pid_t = 0
+        guard AXUIElementGetPid(element, &currentPID) == .success, currentPID == pid else { return nil }
+        if let windowID {
+            guard let selected = currentWindow(id: windowID), let owner = window(of: element), CFEqual(selected, owner) else { return nil }
+        }
+        return element
+    }
+
     func largestWindowFrame() -> CGRect? {
         let windows = attribute(appElement, kAXWindowsAttribute) as? [AXUIElement] ?? []
-        return windows.compactMap { window -> CGRect? in
-            guard let position = pointAttribute(window, kAXPositionAttribute),
-                  let size = sizeAttribute(window, kAXSizeAttribute),
-                  size.width > 0,
-                  size.height > 0 else { return nil }
-            return CGRect(x: position.x, y: position.y, width: size.width, height: size.height)
-        }.max(by: { $0.width * $0.height < $1.width * $1.height })
+        return windows.filter { boolAttribute($0, kAXMinimizedAttribute) != true }
+            .compactMap(frame).max(by: { $0.width * $0.height < $1.width * $1.height })
+    }
+
+    func windowFrame(id: String) -> CGRect? {
+        currentWindow(id: id).flatMap(frame)
+    }
+
+    func focusWindow(id: String) throws {
+        guard let window = currentWindow(id: id) else {
+            throw RecordingError.usage("The selected live window is no longer available. Inspect the application again.")
+        }
+        guard AXUIElementPerformAction(window, kAXRaiseAction as CFString) == .success,
+              isFocusedWindow(id: id) else {
+            throw RecordingError.capture("The selected live window could not take focus; no input was posted.")
+        }
+    }
+
+    func isFocusedWindow(id: String) -> Bool {
+        guard let window = currentWindow(id: id),
+              let focused = attribute(appElement, kAXFocusedWindowAttribute),
+              CFGetTypeID(focused) == AXUIElementGetTypeID() else { return false }
+        return CFEqual(window, focused)
+    }
+
+    func isFocused(id: String) -> Bool {
+        guard let element = validatedElement(id: id) else { return false }
+        return boolAttribute(element, kAXFocusedAttribute) == true
+    }
+
+    private func currentWindow(id: String) -> AXUIElement? {
+        guard let window = elementsByID[id], stringAttribute(window, kAXRoleAttribute) == kAXWindowRole as String,
+              boolAttribute(window, kAXMinimizedAttribute) != true else { return nil }
+        let windows = attribute(appElement, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        return windows.contains(where: { CFEqual($0, window) }) ? window : nil
+    }
+
+    private func window(of element: AXUIElement) -> AXUIElement? {
+        if stringAttribute(element, kAXRoleAttribute) == kAXWindowRole as String { return element }
+        guard let value = attribute(element, kAXWindowAttribute), CFGetTypeID(value) == AXUIElementGetTypeID() else { return nil }
+        return value as! AXUIElement
+    }
+
+    func currentFrame(id: String, windowID: String? = nil) -> CGRect? {
+        guard let element = validatedElement(id: id, windowID: windowID), let bounds = frame(element),
+              let window = window(of: element) else { return nil }
+        let windows = attribute(appElement, kAXWindowsAttribute) as? [AXUIElement] ?? []
+        guard windows.contains(where: { CFEqual($0, window) }),
+              boolAttribute(window, kAXMinimizedAttribute) != true,
+              let windowBounds = frame(window),
+              windowBounds.contains(CGPoint(x: bounds.midX, y: bounds.midY)) else { return nil }
+        return bounds
+    }
+
+    private func frame(_ element: AXUIElement) -> CGRect? {
+        guard let position = pointAttribute(element, kAXPositionAttribute),
+              let size = sizeAttribute(element, kAXSizeAttribute),
+              position.x.isFinite, position.y.isFinite, size.width.isFinite, size.height.isFinite,
+              size.width > 0, size.height > 0 else { return nil }
+        return CGRect(x: position.x, y: position.y, width: size.width, height: size.height)
     }
 }
 

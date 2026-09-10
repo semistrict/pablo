@@ -28,6 +28,7 @@ public struct ReplayAccessibilityNode: Codable, Identifiable, Equatable, Sendabl
     public let enabled: Bool?
     public let focused: Bool?
     public let frame: ReplayAccessibilityFrame?
+    public let actions: [String]?
     public let depth: Int
 
     init(_ node: AXNode, depth: Int) {
@@ -41,6 +42,7 @@ public struct ReplayAccessibilityNode: Codable, Identifiable, Equatable, Sendabl
         value = node.value
         identifier = node.identifier
         help = node.help
+        actions = node.actions
         enabled = node.enabled
         focused = node.focused
         if let position = node.position, let size = node.size {
@@ -147,6 +149,7 @@ public struct ReplayAccessibilityStep: Codable, Identifiable, Sendable {
         if previous.value != current.value { properties.append("value") }
         if previous.identifier != current.identifier { properties.append("identifier") }
         if previous.help != current.help { properties.append("help") }
+        if previous.actions != current.actions { properties.append("actions") }
         if previous.enabled != current.enabled { properties.append("enabled") }
         if previous.focused != current.focused { properties.append("focused") }
         if previous.frame != current.frame { properties.append("frame") }
@@ -178,10 +181,16 @@ public struct ReplayRecording: Codable, Sendable {
     public let accessibilitySteps: [ReplayAccessibilityStep]
     public let workspaceSteps: [WorkspaceSnapshotRecord]
     public let annotations: [RecordingAnnotation]
+    public var streamIssues: [PabloRecordingStreamIssue] = []
 
     public var videoAspectRatio: Double {
         guard captureWidth > 0, captureHeight > 0 else { return 16 / 10 }
         return Double(captureWidth) / Double(captureHeight)
+    }
+
+    /// Checks the package catalog without materializing evidence streams.
+    public static func hasNativeManifest(at packageURL: URL) -> Bool {
+        (try? RecordingManifest.load(from: packageURL).dataSource) == .native
     }
 
     public static func load(from packageURL: URL) throws -> ReplayRecording {
@@ -196,9 +205,40 @@ public struct ReplayRecording: Codable, Sendable {
         let inputEvents = try RecordingStreamReader.events(at: eventsURL)
         let workspaceSteps = try RecordingStreamReader.workspace(at: workspaceURL)
         let annotations = try RecordingAnnotationStore.load(from: packageURL)
+        let steps = materializeAccessibility(records)
+        let selectedName = manifest.scope.selectedApplicationID.flatMap { selectedID in
+            manifest.applications.first(where: { $0.id == selectedID })?.name
+        }
+        return ReplayRecording(
+            packageURL: packageURL,
+            videoTracks: videoTracks,
+            scopeName: selectedName ?? manifest.scope.selectedDisplayID.map { "Display \($0)" } ?? "Entire Screen",
+            scope: manifest.scope.kind,
+            selectedApplicationID: manifest.scope.selectedApplicationID,
+            selectedDisplayID: manifest.scope.selectedDisplayID,
+            captureFrame: manifest.capture.frame,
+            startedAt: manifest.startedAt,
+            durationNs: manifest.durationNs,
+            firstFrameTimestampNs: manifest.capture.firstFrameTimestampNs,
+            captureWidth: manifest.capture.width,
+            captureHeight: manifest.capture.height,
+            framesPerSecond: manifest.capture.framesPerSecond,
+            inputEvents: inputEvents,
+            accessibilitySteps: steps,
+            workspaceSteps: workspaceSteps,
+            annotations: annotations,
+            streamIssues: manifest.streamIssues ?? []
+        )
+    }
+
+    public func videoTime(for step: ReplayAccessibilityStep) -> TimeInterval {
+        videoTime(forTimestampNs: step.timestampNs)
+    }
+
+    static func materializeAccessibility(_ records: [AXSnapshotRecord]) -> [ReplayAccessibilityStep] {
         var currentNodesByApplication: [String: [String: AXNode]] = [:]
-        let steps = records.enumerated().map { index, record in
-            var currentNodes = currentNodesByApplication[record.application.id] ?? [:]
+        return records.enumerated().map { index, record in
+            var currentNodes = record.kind == "full" ? [:] : (currentNodesByApplication[record.application.id] ?? [:])
             for removedID in record.removed {
                 currentNodes.removeValue(forKey: removedID)
             }
@@ -226,32 +266,6 @@ public struct ReplayRecording: Codable, Sendable {
                 truncated: record.truncated
             )
         }
-        let selectedName = manifest.scope.selectedApplicationID.flatMap { selectedID in
-            manifest.applications.first(where: { $0.id == selectedID })?.name
-        }
-        return ReplayRecording(
-            packageURL: packageURL,
-            videoTracks: videoTracks,
-            scopeName: selectedName ?? manifest.scope.selectedDisplayID.map { "Display \($0)" } ?? "Entire Screen",
-            scope: manifest.scope.kind,
-            selectedApplicationID: manifest.scope.selectedApplicationID,
-            selectedDisplayID: manifest.scope.selectedDisplayID,
-            captureFrame: manifest.capture.frame,
-            startedAt: manifest.startedAt,
-            durationNs: manifest.durationNs,
-            firstFrameTimestampNs: manifest.capture.firstFrameTimestampNs,
-            captureWidth: manifest.capture.width,
-            captureHeight: manifest.capture.height,
-            framesPerSecond: manifest.capture.framesPerSecond,
-            inputEvents: inputEvents,
-            accessibilitySteps: steps,
-            workspaceSteps: workspaceSteps,
-            annotations: annotations
-        )
-    }
-
-    public func videoTime(for step: ReplayAccessibilityStep) -> TimeInterval {
-        videoTime(forTimestampNs: step.timestampNs)
     }
 
     public func videoTime(forTimestampNs timestampNs: UInt64) -> TimeInterval {

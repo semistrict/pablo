@@ -5025,11 +5025,21 @@
       eventCount: 0,
       flushTimer: null,
       pendingFlush: Promise.resolve(),
-      deliveryError: null
+      deliveryError: null,
+      commandQueue: Promise.resolve(),
+      pendingCommands: 0,
+      stoppedReceipts: /* @__PURE__ */ new Map()
     };
     browser.runtime.onMessage.addListener((message) => {
       if (message?.type !== MESSAGE) return void 0;
-      return handleCommand(message);
+      if (state.pendingCommands >= 16) return Promise.reject(new Error("The recorder command queue is full."));
+      state.pendingCommands += 1;
+      const result = state.commandQueue.then(() => handleCommand(message));
+      state.commandQueue = result.catch(() => {
+      }).finally(() => {
+        state.pendingCommands -= 1;
+      });
+      return result;
     });
   }
   var state = globalThis[STATE_KEY];
@@ -5041,7 +5051,10 @@
     }, 500);
   }
   async function flushEvents() {
-    if (!state.events.length || !state.recordingID) return;
+    if (!state.events.length || !state.recordingID) {
+      await state.pendingFlush;
+      return;
+    }
     const events = state.events;
     const sequence = state.sequence++;
     const recordingID = state.recordingID;
@@ -5092,8 +5105,13 @@
     state.status = "recording";
   }
   async function handleCommand(message) {
+    if (!message.accessToken || globalThis.__pabloTabGrant?.document !== document || globalThis.__pabloTabGrant.token !== message.accessToken) {
+      throw new Error('This document is locked. Click "Unlock this tab for Pablo" in Safari.');
+    }
     switch (message.command) {
       case "start":
+        if (state.recordingID === message.recordingID) return statusPayload();
+        if (state.stoppedReceipts.has(message.recordingID)) throw new Error("This recording has already stopped.");
         if (state.status !== "idle") throw new Error("This tab already has an rrweb recording.");
         state.recordingID = message.recordingID;
         state.sequence = 0;
@@ -5116,6 +5134,7 @@
         if (state.status === "paused") beginRecorder();
         return statusPayload();
       case "stop": {
+        if (state.stoppedReceipts.has(message.recordingID)) return state.stoppedReceipts.get(message.recordingID);
         requireRecording(message.recordingID);
         state.stop?.();
         state.stop = null;
@@ -5123,6 +5142,8 @@
         state.flushTimer = null;
         await flushEvents();
         const result = statusPayload("stopped");
+        state.stoppedReceipts.set(message.recordingID, result);
+        if (state.stoppedReceipts.size > 8) state.stoppedReceipts.delete(state.stoppedReceipts.keys().next().value);
         state.recordingID = null;
         state.status = "idle";
         state.eventCount = 0;
@@ -5130,6 +5151,10 @@
         return result;
       }
       case "status":
+        if (message.recordingID) {
+          if (state.stoppedReceipts.has(message.recordingID)) return state.stoppedReceipts.get(message.recordingID);
+          requireRecording(message.recordingID);
+        }
         return statusPayload();
       default:
         throw new Error(`Unsupported rrweb command ${message.command}.`);
