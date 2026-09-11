@@ -2,6 +2,16 @@ Feature: Materialize and inspect accessibility evidence
   Pablo reconstructs each observed accessibility state and presents semantic changes without losing the complete hierarchy.
 
   @automated
+  # AccessibilityTreeOutlineTests.accessibilityOutlineHonorsCollapsedBranches
+  # AccessibilityTreeOutlineTests.accessibilityOutlineRetainsDisconnectedNodes
+  Scenario: Collapsing a tree branch hides its descendants
+    Given an accessibility frame contains a root, nested branches, and disconnected components
+    When a branch is collapsed
+    Then its descendants are absent from the visible rows
+    And hidden descendants do not reappear as top-level rows
+    And genuinely disconnected components remain reachable without duplicate rows
+
+  @automated
   # AXTreeDifferTests.testDiffReportsChangedAddedAndRemovedNodes
   Scenario: Tree diff reports updated, added, and removed nodes
     Given a previous tree contains a root and a child named Old

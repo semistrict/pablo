@@ -29,6 +29,8 @@ public struct ReplayAccessibilityNode: Codable, Identifiable, Equatable, Sendabl
     public let focused: Bool?
     public let frame: ReplayAccessibilityFrame?
     public let actions: [String]?
+    public let settableAttributes: [String]?
+    public let selectedTextRange: PabloLiveTextRange?
     public let depth: Int
 
     init(_ node: AXNode, depth: Int) {
@@ -43,6 +45,8 @@ public struct ReplayAccessibilityNode: Codable, Identifiable, Equatable, Sendabl
         identifier = node.identifier
         help = node.help
         actions = node.actions
+        settableAttributes = node.settableAttributes
+        selectedTextRange = node.selectedTextRange
         enabled = node.enabled
         focused = node.focused
         if let position = node.position, let size = node.size {
@@ -150,6 +154,8 @@ public struct ReplayAccessibilityStep: Codable, Identifiable, Sendable {
         if previous.identifier != current.identifier { properties.append("identifier") }
         if previous.help != current.help { properties.append("help") }
         if previous.actions != current.actions { properties.append("actions") }
+        if previous.settableAttributes != current.settableAttributes { properties.append("settableAttributes") }
+        if previous.selectedTextRange != current.selectedTextRange { properties.append("selectedTextRange") }
         if previous.enabled != current.enabled { properties.append("enabled") }
         if previous.focused != current.focused { properties.append("focused") }
         if previous.frame != current.frame { properties.append("frame") }

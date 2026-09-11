@@ -85,6 +85,9 @@ final class OperationRegistry {
             receipt.response = response
         } else { receipt.resultOmitted = true }
         update(receipt)
+        // The executing connection receives the complete observation. Later receipt reads remain bounded.
+        receipt.response = response
+        receipt.resultOmitted = false
         return receipt
     }
 

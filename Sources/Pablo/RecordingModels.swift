@@ -225,6 +225,28 @@ public struct PabloSafariAutomationTarget: Codable, Sendable {
     }
 }
 
+public struct PabloAutomationTextOptions: Codable, Equatable, Sendable {
+    public let selectionType: PabloLiveTextSelection.SelectionType?
+    public let prefixLength: Int?
+    public let suffixLength: Int?
+    public let pasteFormat: PabloLivePasteFormat?
+    public let plainTextLength: Int?
+
+    init?(_ request: PabloLiveActionRequest) {
+        guard request.kind == .selectText || request.kind == .paste else { return nil }
+        selectionType = request.kind == .selectText ? request.selection?.selectionType ?? .text : nil
+        prefixLength = request.selection?.prefix?.count
+        suffixLength = request.selection?.suffix?.count
+        pasteFormat = request.kind == .paste ? request.pasteFormat ?? .text : nil
+        plainTextLength = request.plainText?.count
+    }
+
+    init(selectionType: PabloLiveTextSelection.SelectionType?, prefixLength: Int?, suffixLength: Int?, pasteFormat: PabloLivePasteFormat?, plainTextLength: Int?) {
+        self.selectionType = selectionType; self.prefixLength = prefixLength; self.suffixLength = suffixLength
+        self.pasteFormat = pasteFormat; self.plainTextLength = plainTextLength
+    }
+}
+
 public struct PabloAutomationActionTrace: Codable, Sendable {
     public let actionID: UUID
     public let phase: PabloAutomationActionPhase
@@ -251,6 +273,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
     public let recordingWasPaused: Bool
     public let resolvedApplicationID: String?
     public let safariTarget: PabloSafariAutomationTarget?
+    public let textOptions: PabloAutomationTextOptions?
 
     public init(
         actionID: UUID,
@@ -287,6 +310,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         self.recordingWasPaused = recordingWasPaused
         self.resolvedApplicationID = resolvedApplicationID
         self.safariTarget = safariTarget
+        textOptions = PabloAutomationTextOptions(request)
     }
 
     init(
@@ -314,7 +338,8 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         transport: String,
         recordingWasPaused: Bool,
         resolvedApplicationID: String?,
-        safariTarget: PabloSafariAutomationTarget? = nil
+        safariTarget: PabloSafariAutomationTarget? = nil,
+        textOptions: PabloAutomationTextOptions? = nil
     ) {
         self.actionID = actionID
         self.phase = phase
@@ -341,6 +366,7 @@ public struct PabloAutomationActionTrace: Codable, Sendable {
         self.recordingWasPaused = recordingWasPaused
         self.resolvedApplicationID = resolvedApplicationID
         self.safariTarget = safariTarget
+        self.textOptions = textOptions
     }
 }
 
@@ -371,7 +397,8 @@ extension PabloAutomationActionTrace {
             transport: transport,
             recordingWasPaused: recordingWasPaused,
             resolvedApplicationID: applicationID,
-            safariTarget: safariTarget
+            safariTarget: safariTarget,
+            textOptions: textOptions
         )
     }
 }
@@ -437,6 +464,8 @@ struct AXNode: Codable, Equatable {
     let position: Point?
     let size: Size?
     var actions: [String]? = nil
+    var settableAttributes: [String]? = nil
+    var selectedTextRange: PabloLiveTextRange? = nil
 
     struct Point: Codable, Equatable {
         let x: Double

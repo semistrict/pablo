@@ -12,6 +12,21 @@ public final class PabloLiveActionController {
 
     public func perform(_ request: PabloLiveActionRequest, actionID: UUID = UUID()) async throws -> PabloLiveActionResult {
         try PabloLiveActionValidator.validate(request)
+        var result = try await dispatch(request, actionID: actionID)
+        if let options = request.observation {
+            do {
+                // Pin the process and session from dispatch. The old frame precondition was consumed by the action.
+                result.observation = try await inspectionManager.observe(target: .init(
+                    pid: result.target.pid, sessionID: result.target.sessionID, windowID: result.target.windowID
+                ), options: options)
+            } catch {
+                result.observationFailure = .init(error)
+            }
+        }
+        return result
+    }
+
+    private func dispatch(_ request: PabloLiveActionRequest, actionID: UUID) async throws -> PabloLiveActionResult {
         guard AXIsProcessTrusted() else {
             throw RecordingError.permission(
                 "Accessibility access is required to control a live application. " +
@@ -37,6 +52,19 @@ public final class PabloLiveActionController {
         }
         try Task.checkCancellation()
 
+        if request.kind == .selectText || request.kind == .setValue {
+            guard let nodeID = request.nodeID, let text = request.text else {
+                throw RecordingError.usage("Precise text editing requires a node and text.")
+            }
+            let editable = NativeLiveTextEditingTarget(reader: reader, nodeID: nodeID,
+                windowID: request.target.windowID, validateContext: context.validate)
+            if request.kind == .selectText {
+                try LiveTextEditor.select(text, options: request.selection ?? .init(), target: editable)
+            } else {
+                try LiveTextEditor.replace(with: text, target: editable)
+            }
+            return result("\(request.kind.rawValue)  \(target.name)  node=\(nodeID)  characters=\(text.count)", method: .accessibility)
+        }
         if request.kind == .perform {
             return result(try performAccessibilityAction(request, target: target, reader: reader), method: .accessibility)
         }
@@ -69,12 +97,34 @@ public final class PabloLiveActionController {
             try context.validate()
             if let windowID = request.target.windowID { try reader.focusWindow(id: windowID) }
             return result(try await typeText(request, target: target, reader: reader, validateContext: context.validate), method: .foregroundInput)
+        case .paste:
+            try await activate(application)
+            try context.validate()
+            if let windowID = request.target.windowID { try reader.focusWindow(id: windowID) }
+            try focusTextNode(request, reader: reader)
+            let restoration = try await LivePasteTransaction.perform(
+                items: LivePasteTransaction.items(text: request.text!, format: request.pasteFormat ?? .text, plainText: request.plainText),
+                pasteboard: NativeLivePasteboard(), validate: {
+                    try context.validate()
+                    try self.requireActiveTarget(target, reader: reader, windowID: request.target.windowID)
+                    if let nodeID = request.nodeID, !reader.isFocused(id: nodeID) {
+                        throw RecordingError.interrupted("The selected live text field lost focus; paste was interrupted.")
+                    }
+                }, paste: {
+                    let key = PabloLiveActionRequest(kind: .key, target: request.target, key: "v", modifiers: [.command], unlockForegroundActions: true)
+                    _ = try await self.pressKey(key, target: target, reader: reader, validateContext: context.validate)
+                    // Event posting is asynchronous. Keep representations available while the app handles the shortcut.
+                    try await Task.sleep(for: .milliseconds(500))
+                })
+            var pasted = result("pasted  \(target.name)  characters=\(request.text!.count)", method: .foregroundInput)
+            pasted.clipboardRestoration = restoration
+            return pasted
         case .key:
             try await activate(application)
             try context.validate()
             if let windowID = request.target.windowID { try reader.focusWindow(id: windowID) }
             return result(try await pressKey(request, target: target, reader: reader, validateContext: context.validate), method: .foregroundInput)
-        case .perform:
+        case .perform, .selectText, .setValue:
             preconditionFailure("Accessibility actions return before foreground activation")
         }
     }
@@ -123,19 +173,7 @@ public final class PabloLiveActionController {
         guard let text = request.text, !text.isEmpty else {
             throw RecordingError.usage("The type request did not include text.")
         }
-        if let nodeID = request.nodeID {
-            guard let element = reader.validatedElement(id: nodeID, windowID: request.target.windowID) else {
-                throw missingNode(nodeID)
-            }
-            let result = AXUIElementSetAttributeValue(
-                element,
-                kAXFocusedAttribute as CFString,
-                kCFBooleanTrue
-            )
-            guard result == .success else {
-                throw RecordingError.capture("The target could not focus node \(nodeID) (error \(result.rawValue)).")
-            }
-        }
+        try focusTextNode(request, reader: reader)
 
         for chunk in LiveTextInput.chunks(text) {
             try validateContext()
@@ -154,6 +192,23 @@ public final class PabloLiveActionController {
             await Task.yield()
         }
         return "typed  \(target.name)  characters=\(text.count)"
+    }
+
+    private func focusTextNode(_ request: PabloLiveActionRequest, reader: AccessibilityTreeReader) throws {
+        if let nodeID = request.nodeID {
+            guard let element = reader.validatedElement(id: nodeID, windowID: request.target.windowID) else {
+                throw missingNode(nodeID)
+            }
+            let result = AXUIElementSetAttributeValue(
+                element,
+                kAXFocusedAttribute as CFString,
+                kCFBooleanTrue
+            )
+            guard result == .success else {
+                throw RecordingError.capture("The target could not focus node \(nodeID) (error \(result.rawValue)).")
+            }
+        }
+
     }
 
     private func pressKey(
@@ -245,7 +300,7 @@ public final class PabloLiveActionController {
 
 enum LiveActionForegroundPolicy {
     static func requiresUnlock(for request: PabloLiveActionRequest) -> Bool {
-        request.kind != .perform
+        ![.perform, .selectText, .setValue].contains(request.kind)
     }
 
     static func requireUnlock(for request: PabloLiveActionRequest) throws {
@@ -262,6 +317,13 @@ enum LiveActionForegroundPolicy {
 enum PabloLiveActionValidator {
     static func validate(_ request: PabloLiveActionRequest) throws {
         try request.target.validate()
+        try request.observation?.validate()
+        try request.selection?.validate()
+        guard request.selection == nil || request.kind == .selectText,
+              (request.pasteFormat == nil && request.plainText == nil) || request.kind == .paste,
+              request.plainText == nil || request.pasteFormat == .html else {
+            throw RecordingError.usage("Selection and paste options apply only to their respective actions.")
+        }
         try validate(point: request.point)
         try validate(point: request.fromPoint)
         try validate(point: request.toPoint)
@@ -291,9 +353,19 @@ enum PabloLiveActionValidator {
                     "scroll requires a direction, an amount from 1 to 100, and at most one location."
                 )
             }
-        case .typeText:
+        case .typeText, .paste:
             guard let text = request.text, !text.isEmpty, text.utf8.count <= 32 * 1_024 else {
                 throw RecordingError.usage("type requires nonempty text of at most 32 KiB.")
+            }
+            if request.kind == .paste, request.pasteFormat == .html {
+                guard let fallback = request.plainText, !fallback.isEmpty, fallback.utf8.count <= 16 * 1_024 else {
+                    throw RecordingError.usage("HTML paste requires a nonempty plainText fallback of at most 16 KiB.")
+                }
+            }
+        case .selectText, .setValue:
+            guard request.nodeID?.isEmpty == false, let text = request.text, text.utf8.count <= 32 * 1_024,
+                  request.kind == .setValue || !text.isEmpty else {
+                throw RecordingError.usage("Precise text editing requires a node and at most 32 KiB of text; only setValue accepts an empty value.")
             }
         case .key:
             guard let key = request.key, PabloLiveKeyMap.keyCode(for: key) != nil else {
@@ -321,7 +393,7 @@ enum LiveActionSnapshotPolicy {
         switch request.kind {
         case .key:
             false
-        case .typeText:
+        case .typeText, .paste:
             request.nodeID != nil
         case .click:
             request.nodeID != nil
@@ -329,7 +401,7 @@ enum LiveActionSnapshotPolicy {
             request.fromNodeID != nil || request.toNodeID != nil
         case .scroll:
             request.nodeID != nil
-        case .perform:
+        case .perform, .selectText, .setValue:
             true
         }
     }

@@ -159,6 +159,11 @@ paths:
   /inspect.live:
     post:
       operationId: inspectLive
+      description: >-
+        Consent-gated live state. kind observe returns a fresh compact accessibility
+        observation, optionally paired with a window screenshot. It never starts input
+        monitoring or writes a recording. Other kinds retain their existing frame and
+        event-history behavior.
       requestBody:
         required: true
         content:
@@ -173,10 +178,14 @@ paths:
       description: >-
         Control a live application. Pablo does not activate the target by default.
         Accessibility `perform` actions and single left clicks on nodes exposing
-        AXPress can run in the background. Actions that require target activation
+        AXPress, selectText, and setValue can run in the background. Actions that require target activation
         fail unless unlockForegroundActions is true. That option is NOT
         RECOMMENDED and agents must not set it without the user's explicit
         acceptance of the focus change.
+        Optional observation options collect fresh state after dispatch in the same call.
+        A failed observation preserves the dispatch result and returns observationFailure;
+        do not automatically repeat the action. Paste temporarily uses the clipboard and
+        reports whether it was restored or a newer clipboard value was preserved.
       requestBody:
         required: true
         content:
@@ -485,7 +494,11 @@ components:
         response: {$ref: "#/components/schemas/CallResponse"}
         resultOmitted:
           type: boolean
-          description: A response larger than 256 KiB is omitted from bounded receipt storage; status remains authoritative and current state must be inspected.
+          description: >-
+            A response larger than 256 KiB is omitted from bounded receipt storage.
+            The original executing connection receives the complete response with
+            resultOmitted false; subsequent status reads or duplicate execute calls
+            return resultOmitted true. Inspect state when a retained result was omitted.
       description: >-
         Up to 64 receipts are retained. Active operations remain observable after their
         nominal expiry until they settle. Completed means the method completed; live action
@@ -972,13 +985,14 @@ components:
         returned sessionID with every subsequent cursor. observationStop stops input and
         forgets the entire inspection session, expiring all its frames and node IDs.
         inspect includes windows and actionCapabilities; frame nodes include observed
-        actions (nil means unavailable, empty means none). A node's AXPress permits a
+        actions and settableAttributes (nil means unavailable, empty means none). A node's AXPress permits a
         background click; other foreground input requires an explicit unlock.
-        target.windowID and target.frameReference are action-only preconditions.
+        observe also accepts target.windowID and target.frameReference; other inspection
+        kinds reject them. Observation options apply only to kind observe.
       properties:
         kind:
           type: string
-          enum: [inspect, frames, frame, events, annotations, observationStart, observationStatus, observationStop]
+          enum: [inspect, observe, frames, frame, events, annotations, observationStart, observationStatus, observationStop]
         target:
           $ref: "#/components/schemas/ApplicationTarget"
         reference:
@@ -998,6 +1012,137 @@ components:
           default: 100
           minimum: 1
           maximum: 10000
+        observation: {$ref: "#/components/schemas/LiveObservationOptions"}
+    LiveObservationOptions:
+      type: object
+      properties:
+        baselineReference:
+          type: string
+          minLength: 1
+          maxLength: 512
+          description: This caller's last live frame reference. Retained baselines are compared directly, regardless of intervening reads by other callers.
+        full: {type: boolean, default: false}
+        screenshot: {type: boolean, default: false}
+        quietMilliseconds: {type: integer, minimum: 0, maximum: 1000, default: 150}
+        timeoutMilliseconds: {type: integer, minimum: 0, maximum: 5000, default: 2000}
+      description: >-
+        Missing baseline or full true returns full state. An unavailable baseline
+        returns full state with resyncRequired true. quietMilliseconds must not exceed
+        timeoutMilliseconds. Zero quiet time takes one sample. Polling stops at the
+        timeout and reports timedOut; native API calls may delay sample completion.
+        Screenshot collection is separate from this polling budget and requires Screen
+        Recording permission. The selected window is target.windowID, or the largest
+        available accessible window. No target activation is required for inspection.
+    LiveAccessibilityNode:
+      type: object
+      required: [id, childIDs, depth]
+      properties:
+        id: {type: string}
+        parentID: {type: string}
+        childIDs: {type: array, items: {type: string}}
+        depth: {type: integer, minimum: 0}
+        role: {type: string}
+        subrole: {type: string}
+        title: {type: string}
+        label: {type: string}
+        value: {type: string}
+        identifier: {type: string}
+        help: {type: string}
+        enabled: {type: boolean}
+        focused: {type: boolean}
+        frame: {$ref: "#/components/schemas/LiveObservationFrame"}
+        actions: {type: array, items: {type: string}}
+        settableAttributes:
+          type: array
+          items: {type: string, enum: [AXValue, AXSelectedTextRange]}
+          description: Observed writable attributes for supported non-secure text controls. Revalidated at action time.
+        selectedTextRange:
+          type: object
+          required: [location, length]
+          properties:
+            location: {type: integer, minimum: 0}
+            length: {type: integer, minimum: 0}
+          description: Observed UTF-16 selection or zero-length cursor range for a non-secure text control. Omitted when unavailable.
+    LiveObservationFrame:
+      type: object
+      required: [x, y, width, height]
+      properties:
+        x: {type: number}
+        y: {type: number}
+        width: {type: number}
+        height: {type: number}
+    LiveTreeObservation:
+      type: object
+      required: [sessionID, reference, mode, resyncRequired, timestampNs, totalNodeCount, truncated, nodes, changes, text, textTruncated]
+      properties:
+        sessionID: {type: string, format: uuid}
+        reference: {type: string}
+        baselineReference: {type: string}
+        mode: {enum: [full, delta]}
+        resyncRequired: {type: boolean}
+        rootID: {type: string}
+        timestampNs: {type: integer, minimum: 0}
+        totalNodeCount: {type: integer, minimum: 0}
+        truncated: {type: boolean}
+        nodes: {type: array, items: {$ref: "#/components/schemas/LiveAccessibilityNode"}}
+        changes:
+          type: array
+          items:
+            type: object
+            required: [kind, nodeID, changedProperties]
+            properties:
+              kind: {enum: [added, updated, removed]}
+              nodeID: {type: string}
+              node: {$ref: "#/components/schemas/LiveAccessibilityNode"}
+              changedProperties: {type: array, items: {type: string}}
+        text: {type: string, maxLength: 65536}
+        textTruncated: {type: boolean}
+      description: >-
+        Full mode supplies nodes and no changes. Delta mode supplies only additions,
+        complete node replacements, and removals against baselineReference. The text
+        view uses +, ~, and -; application strings are quoted and shortened independently
+        of structured values. textTruncated describes only this display view. truncated
+        describes the accessibility walker. A delta with no changes is explicit.
+    LiveObservationOutput:
+      type: object
+      required: [id, target, tree, settleStatus, sampleCount, elapsedMilliseconds]
+      properties:
+        id: {type: string, format: uuid}
+        target:
+          type: object
+          required: [pid, applicationName]
+          properties:
+            pid: {type: integer, format: int32}
+            bundleIdentifier: {type: string}
+            applicationName: {type: string}
+            windowID: {type: string}
+        tree: {$ref: "#/components/schemas/LiveTreeObservation"}
+        settleStatus: {enum: [sampled, settled, timedOut]}
+        sampleCount: {type: integer, minimum: 1}
+        elapsedMilliseconds: {type: integer, minimum: 0}
+        screenshot:
+          type: object
+          required: [observationID, frameReference, windowID, captureWindowID, frame, width, height, mimeType, pngBase64, startedAtUptimeNanoseconds, finishedAtUptimeNanoseconds]
+          properties:
+            observationID: {type: string, format: uuid}
+            frameReference: {type: string}
+            windowID: {type: string}
+            captureWindowID: {type: integer, minimum: 0}
+            frame: {$ref: "#/components/schemas/LiveObservationFrame"}
+            width: {type: integer, minimum: 1, maximum: 2048}
+            height: {type: integer, minimum: 1, maximum: 2048}
+            mimeType: {const: image/png}
+            pngBase64: {type: string, contentEncoding: base64, contentMediaType: image/png}
+            startedAtUptimeNanoseconds: {type: integer, minimum: 0}
+            finishedAtUptimeNanoseconds: {type: integer, minimum: 0}
+      description: >-
+        An observation is evidence of sampled state, not proof of an action's intended
+        effect. A screenshot is bound to this observation ID, frame reference, and window.
+        Its frame uses desktop points with a top-left origin; pixel coordinates scale
+        independently by width/frame.width and height/frame.height. The app verifies
+        process, window geometry, and accessibility state around image capture. AX and
+        image capture are not atomic; animation without AX changes may remain visible.
+        PNG data is capped at 6 MiB and images at 2048 pixels per side.
     LiveActionRequest:
       type: object
       required: [kind, target]
@@ -1022,7 +1167,13 @@ components:
                 - required: [toPoint]
         - properties: {kind: {const: scroll}}
           required: [kind, scrollDirection]
-        - properties: {kind: {const: type}}
+        - properties: {kind: {const: type}, text: {minLength: 1}}
+          required: [kind, text]
+        - properties: {kind: {const: selectText}, text: {minLength: 1}}
+          required: [kind, nodeID, text]
+        - properties: {kind: {const: setValue}}
+          required: [kind, nodeID, text]
+        - properties: {kind: {const: paste}, text: {minLength: 1}}
           required: [kind, text]
         - properties: {kind: {const: key}}
           required: [kind, key]
@@ -1031,7 +1182,7 @@ components:
       properties:
         kind:
           type: string
-          enum: [click, drag, scroll, type, key, perform]
+          enum: [click, drag, scroll, type, key, perform, selectText, setValue, paste]
         target:
           $ref: "#/components/schemas/ApplicationTarget"
         nodeID:
@@ -1068,9 +1219,30 @@ components:
           default: 3
         text:
           type: string
-          minLength: 1
           maxLength: 32768
-          description: Text to type. Action output and evidence never echo its contents.
+          description: >-
+            Text to type, match, replace, or paste, capped at 32 KiB of UTF-8. Only
+            setValue accepts an empty string. Action summaries and automation evidence
+            retain only its character count. An explicitly requested subsequent observation
+            reads visible UI state and may naturally contain the resulting field value.
+        selection:
+          type: object
+          properties:
+            prefix: {type: string, minLength: 1, maxLength: 4096}
+            suffix: {type: string, minLength: 1, maxLength: 4096}
+            selectionType: {enum: [text, cursorBefore, cursorAfter], default: text}
+          description: >-
+            selectText only. Prefix and suffix must be immediately adjacent to the
+            phrase and are capped at 4 KiB each. Matching is exact and must identify
+            one occurrence; selection uses UTF-16 ranges. Unsupported, disabled, secure,
+            changed, or unavailable editable targets are rejected without fallback input.
+        pasteFormat: {enum: [text, html], default: text}
+        plainText:
+          type: string
+          minLength: 1
+          maxLength: 16384
+          description: Required only for HTML paste; the plain-text clipboard representation, capped at 16 KiB of UTF-8.
+        observation: {$ref: "#/components/schemas/LiveObservationOptions"}
         key: {type: string}
         modifiers:
           type: array
@@ -1086,7 +1258,7 @@ components:
           default: false
           description: >-
             NOT RECOMMENDED. Allows Pablo to activate the target for pointer,
-            scroll, drag, typing, key, and fallback click input. Agents must leave
+            scroll, drag, typing, paste, key, and fallback click input. Agents must leave
             this false unless the user explicitly accepts the focus change.
     LiveActionOutput:
       type: object
@@ -1108,10 +1280,23 @@ components:
         effectStatus: {type: string, const: unverified}
         characterCount: {type: integer, minimum: 0}
         summary: {type: string}
+        observation: {$ref: "#/components/schemas/LiveObservationOutput"}
+        observationFailure:
+          type: object
+          required: [code, message]
+          properties:
+            code: {type: string}
+            message: {type: string}
+        clipboardRestoration: {enum: [restored, preservedNewerContent, failed]}
       description: >-
         Successful dispatch with resolved application context. actionID matches any
         recorded automation evidence. A dispatched event or successful AX call does
-        not verify the application's resulting effect. Typed text is never returned.
+        not verify the application's resulting effect. Supplied text is not echoed;
+        optional observation reads actual visible UI state. An observation failure does
+        not undo dispatch. Paste keeps temporary clipboard representations available
+        for 500 ms after posting the shortcut; consumption by the target remains unverified.
+        Cleanup restores the saved clipboard only if its change count still matches.
+        A newer clipboard writer is preserved, and restoration failure is explicit.
     SafariDOMRequest:
       type: object
       required: [kind]
@@ -1347,6 +1532,7 @@ components:
             - {$ref: "#/components/schemas/TargetsOutput"}
             - {$ref: "#/components/schemas/SafariTabsOutput"}
             - {$ref: "#/components/schemas/LiveActionOutput"}
+            - {$ref: "#/components/schemas/LiveObservationOutput"}
             - {$ref: "#/components/schemas/RRWebStatusOutput"}
             - {$ref: "#/components/schemas/RRWebRecordingsOutput"}
             - {$ref: "#/components/schemas/RRWebInspectionOutput"}

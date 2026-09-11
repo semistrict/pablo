@@ -1,5 +1,6 @@
 import AppKit
 import AVFoundation
+import Combine
 import Testing
 @testable import PabloApp
 @testable import PabloCore
@@ -270,4 +271,23 @@ func expectPixel(_ image: CGImage, x: Int, y: Int, red: Bool = false, green: Boo
     if green { #expect(color.greenComponent > 0.7 && color.redComponent < 0.3 && color.blueComponent < 0.3) }
     if blue { #expect(color.blueComponent > 0.7 && color.redComponent < 0.3 && color.greenComponent < 0.3) }
     if black { #expect(max(color.redComponent, color.greenComponent, color.blueComponent) < 0.15) }
+}
+
+@MainActor
+@Test("Paused native playback ticks do not invalidate the replay view when time is unchanged")
+func pausedReplayTicksDoNotPublishUnchangedState() async throws {
+    let package = try await makeMultiDisplayReplayPackage()
+    defer { try? FileManager.default.removeItem(at: package) }
+    let model = ReplayModel()
+    #expect(model.loadLatest(preferredURL: package, directory: package))
+    for _ in 0..<300 where model.videoIsLoading { try await Task.sleep(for: .milliseconds(10)) }
+    #expect(!model.videoIsLoading)
+    #expect(!model.isPlaying)
+    model.updateCurrentVideoTime()
+    var notifications = 0
+    let subscription = model.objectWillChange.sink { notifications += 1 }
+    defer { subscription.cancel() }
+    for _ in 0..<120 { model.updateCurrentVideoTime() }
+    #expect(notifications == 0)
+    #expect(model.renderedSeconds == model.player.currentTime().seconds)
 }

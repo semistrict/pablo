@@ -90,6 +90,9 @@ private extension PabloLiveActionKind {
         case .typeText: .type
         case .key: .key
         case .perform: .perform
+        case .selectText: .selectText
+        case .setValue: .setValue
+        case .paste: .paste
         }
     }
 
@@ -101,6 +104,9 @@ private extension PabloLiveActionKind {
         case .type: self = .typeText
         case .key: self = .key
         case .perform: self = .perform
+        case .selectText: self = .selectText
+        case .setValue: self = .setValue
+        case .paste: self = .paste
         case .unspecified, .UNRECOGNIZED:
             throw RecordingError.capture("A protobuf live action has an unknown kind.")
         }
@@ -220,6 +226,30 @@ private extension PabloSafariAutomationTarget {
     }
 }
 
+private extension PabloAutomationTextOptions {
+    var protobuf: PabloV3AutomationTextOptions {
+        .with {
+            if let selectionType { $0.selectionType = selectionType.rawValue }
+            if let prefixLength { $0.prefixLength = Int64(prefixLength) }
+            if let suffixLength { $0.suffixLength = Int64(suffixLength) }
+            if let pasteFormat { $0.pasteFormat = pasteFormat.rawValue }
+            if let plainTextLength { $0.plainTextLength = Int64(plainTextLength) }
+        }
+    }
+
+    init(_ value: PabloV3AutomationTextOptions) throws {
+        let selection = value.hasSelectionType ? PabloLiveTextSelection.SelectionType(rawValue: value.selectionType) : nil
+        let format = value.hasPasteFormat ? PabloLivePasteFormat(rawValue: value.pasteFormat) : nil
+        guard (!value.hasSelectionType || selection != nil), (!value.hasPasteFormat || format != nil),
+              [value.prefixLength, value.suffixLength, value.plainTextLength].allSatisfy({ $0 >= 0 && $0 <= 32 * 1_024 }) else {
+            throw RecordingError.capture("A protobuf action has invalid text option metadata.")
+        }
+        self.init(selectionType: selection, prefixLength: value.hasPrefixLength ? Int(value.prefixLength) : nil,
+                  suffixLength: value.hasSuffixLength ? Int(value.suffixLength) : nil,
+                  pasteFormat: format, plainTextLength: value.hasPlainTextLength ? Int(value.plainTextLength) : nil)
+    }
+}
+
 private extension PabloAutomationActionTrace {
     var protobuf: PabloV3AutomationActionTrace {
         .with {
@@ -248,6 +278,7 @@ private extension PabloAutomationActionTrace {
             $0.recordingWasPaused = recordingWasPaused
             if let resolvedApplicationID { $0.resolvedApplicationID = resolvedApplicationID }
             if let safariTarget { $0.safariTarget = safariTarget.protobuf }
+            if let textOptions { $0.textOptions = textOptions.protobuf }
         }
     }
 
@@ -277,7 +308,8 @@ private extension PabloAutomationActionTrace {
             transport: value.transport,
             recordingWasPaused: value.recordingWasPaused,
             resolvedApplicationID: value.hasResolvedApplicationID ? value.resolvedApplicationID : nil,
-            safariTarget: value.hasSafariTarget ? try PabloSafariAutomationTarget(value.safariTarget) : nil
+            safariTarget: value.hasSafariTarget ? try PabloSafariAutomationTarget(value.safariTarget) : nil,
+            textOptions: value.hasTextOptions ? try PabloAutomationTextOptions(value.textOptions) : nil
         )
     }
 }

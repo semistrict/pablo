@@ -121,6 +121,7 @@ public struct PabloLiveApplicationTarget: Codable, Equatable, Sendable {
 
 public enum PabloLiveInspectionKind: String, Codable, Sendable {
     case inspect
+    case observe
     case frames
     case frame
     case events
@@ -136,6 +137,7 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
     public let after: UInt64?
     public let includeText: Bool?
     public let limit: Int
+    public let observation: PabloLiveObservationOptions?
 
     public init(
         kind: PabloLiveInspectionKind,
@@ -144,7 +146,8 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
         changedOnly: Bool = false,
         limit: Int = 100,
         after: UInt64? = nil,
-        includeText: Bool? = nil
+        includeText: Bool? = nil,
+        observation: PabloLiveObservationOptions? = nil
     ) {
         self.kind = kind
         self.target = target
@@ -153,17 +156,22 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
         self.limit = limit
         self.after = after
         self.includeText = includeText
+        self.observation = observation
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, target, reference, changedOnly, limit, after, includeText
+        case kind, target, reference, changedOnly, limit, after, includeText, observation
     }
 
     public func validate() throws {
         try target.validate()
-        guard target.windowID == nil, target.frameReference == nil else {
+        guard kind == .observe || (target.windowID == nil && target.frameReference == nil) else {
             throw RecordingError.usage("Window and frame preconditions apply to live actions. Inspect the application to discover its windows.")
         }
+        guard observation == nil || kind == .observe else {
+            throw RecordingError.usage("Observation options apply only to an observe request.")
+        }
+        try observation?.validate()
         guard (1...10_000).contains(limit) else {
             throw RecordingError.usage("limit must be from 1 to 10000.")
         }
@@ -184,7 +192,8 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
             changedOnly: try container.decodeIfPresent(Bool.self, forKey: .changedOnly) ?? false,
             limit: try container.decodeIfPresent(Int.self, forKey: .limit) ?? 100,
             after: try container.decodeIfPresent(UInt64.self, forKey: .after),
-            includeText: try container.decodeIfPresent(Bool.self, forKey: .includeText)
+            includeText: try container.decodeIfPresent(Bool.self, forKey: .includeText),
+            observation: try container.decodeIfPresent(PabloLiveObservationOptions.self, forKey: .observation)
         )
     }
 }
@@ -204,6 +213,7 @@ public enum PabloLiveActionKind: String, Codable, Sendable {
     case drag
     case scroll
     case typeText = "type"
+    case selectText, setValue, paste
     case key
     case perform
 }
@@ -248,6 +258,10 @@ public struct PabloLiveActionRequest: Codable, Sendable {
     public let modifiers: [PabloLiveKeyModifier]
     public let accessibilityAction: String?
     public let unlockForegroundActions: Bool
+    public let observation: PabloLiveObservationOptions?
+    public let selection: PabloLiveTextSelection?
+    public let pasteFormat: PabloLivePasteFormat?
+    public let plainText: String?
 
     public init(
         kind: PabloLiveActionKind,
@@ -267,7 +281,11 @@ public struct PabloLiveActionRequest: Codable, Sendable {
         key: String? = nil,
         modifiers: [PabloLiveKeyModifier] = [],
         accessibilityAction: String? = nil,
-        unlockForegroundActions: Bool = false
+        unlockForegroundActions: Bool = false,
+        observation: PabloLiveObservationOptions? = nil,
+        selection: PabloLiveTextSelection? = nil,
+        pasteFormat: PabloLivePasteFormat? = nil,
+        plainText: String? = nil
     ) {
         self.kind = kind
         self.target = target
@@ -287,12 +305,16 @@ public struct PabloLiveActionRequest: Codable, Sendable {
         self.modifiers = modifiers
         self.accessibilityAction = accessibilityAction
         self.unlockForegroundActions = unlockForegroundActions
+        self.observation = observation
+        self.selection = selection
+        self.pasteFormat = pasteFormat
+        self.plainText = plainText
     }
 
     private enum CodingKeys: String, CodingKey {
         case kind, target, nodeID, point, fromNodeID, fromPoint, toNodeID, toPoint
         case mouseButton, clickCount, duration, scrollDirection, scrollAmount
-        case text, key, modifiers, accessibilityAction, unlockForegroundActions
+        case text, key, modifiers, accessibilityAction, unlockForegroundActions, observation, selection, pasteFormat, plainText
     }
 
     public init(from decoder: Decoder) throws {
@@ -318,7 +340,11 @@ public struct PabloLiveActionRequest: Codable, Sendable {
             unlockForegroundActions: try container.decodeIfPresent(
                 Bool.self,
                 forKey: .unlockForegroundActions
-            ) ?? false
+            ) ?? false,
+            observation: try container.decodeIfPresent(PabloLiveObservationOptions.self, forKey: .observation),
+            selection: try container.decodeIfPresent(PabloLiveTextSelection.self, forKey: .selection),
+            pasteFormat: try container.decodeIfPresent(PabloLivePasteFormat.self, forKey: .pasteFormat),
+            plainText: try container.decodeIfPresent(String.self, forKey: .plainText)
         )
     }
 }

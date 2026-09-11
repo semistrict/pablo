@@ -111,7 +111,7 @@ public final class PabloLiveInspectionManager {
         sessions.removeAll()
     }
 
-    public func perform(_ request: PabloLiveInspectionRequest) throws -> String {
+    public func perform(_ request: PabloLiveInspectionRequest) async throws -> String {
         try request.validate()
         pruneTerminatedSessions()
         let target = try TargetApplication.resolve(
@@ -122,6 +122,8 @@ public final class PabloLiveInspectionManager {
         let session = try session(for: target, expectedSessionID: request.target.sessionID)
 
         switch request.kind {
+        case .observe:
+            return try jsonString(await session.observe(target: request.target, options: request.observation ?? .init()))
         case .inspect:
             try session.capture(reason: "live:inspect")
             return try session.inspectOutput()
@@ -150,6 +152,14 @@ public final class PabloLiveInspectionManager {
         case .annotations:
             return try session.annotationsOutput()
         }
+    }
+
+    public func observe(target request: PabloLiveApplicationTarget, options: PabloLiveObservationOptions) async throws -> PabloLiveObservation {
+        try request.validate()
+        try options.validate()
+        pruneTerminatedSessions()
+        let target = try TargetApplication.resolve(pid: request.pid, bundleIdentifier: request.bundleIdentifier, appName: request.appName)
+        return try await session(for: target, expectedSessionID: request.sessionID).observe(target: request, options: options)
     }
 
     func actionContext(
@@ -285,13 +295,25 @@ final class LiveInspectionSession {
     }
 
     func capture(reason: String) throws {
+        let tree = try readTree()
+        commit(tree, reason: reason)
+    }
+
+    private func readTree() throws -> AXTreeSnapshot {
+        try Task.checkCancellation()
+        guard matchesRunningProcess else {
+            throw RecordingError.staleContext("The live target process changed. Observe the application again.")
+        }
         guard AXIsProcessTrusted() else {
             throw RecordingError.permission(
                 "Accessibility access is required to inspect a live application. " +
                 "Enable Pablo in System Settings > Privacy & Security > Accessibility."
             )
         }
-        let tree = reader.read()
+        return reader.read()
+    }
+
+    private func commit(_ tree: AXTreeSnapshot, reason: String) {
         latestSnapshot = tree
         accessibilityHistory.append(
             tree,
@@ -300,6 +322,58 @@ final class LiveInspectionSession {
             application: application
         )
         lastAccess = Date()
+    }
+
+    @MainActor
+    func observe(target request: PabloLiveApplicationTarget, options: PabloLiveObservationOptions) async throws -> PabloLiveObservation {
+        try options.validate()
+        if request.frameReference != nil || request.windowID != nil { try validateActionTarget(request) }
+        let sampled = try await LiveObservationSampler.sample(options: options, read: readTree)
+        let observationID = UUID()
+        var selectedWindowID = request.windowID
+        var captured: LiveScreenshotCapture.Image?
+        if options.screenshot {
+            let candidates = sampled.tree.nodes.values.filter { $0.role == "AXWindow" }.compactMap { node -> (AXNode, CGRect)? in
+                guard let frame = reader.windowFrame(id: node.id) else { return nil }
+                return (node, frame)
+            }.sorted { lhs, rhs in
+                let leftArea = lhs.1.width * lhs.1.height
+                let rightArea = rhs.1.width * rhs.1.height
+                return leftArea == rightArea ? lhs.0.id < rhs.0.id : leftArea > rightArea
+            }
+            let selection = selectedWindowID.flatMap { id in candidates.first { $0.0.id == id } }
+                ?? (selectedWindowID == nil ? candidates.first : nil)
+            guard let (window, frame) = selection else {
+                throw RecordingError.staleContext("A live screenshot requires an available accessible window.")
+            }
+            selectedWindowID = window.id
+            captured = try await LiveScreenshotCapture.capture(pid: target.pid, frame: frame, title: window.title) {
+                guard self.matchesRunningProcess, self.reader.windowFrame(id: window.id) == frame else {
+                    throw RecordingError.staleContext("The live target or window geometry changed while capturing its image.")
+                }
+            }
+            let after = try readTree()
+            guard sampled.tree.rootID == after.rootID, sampled.tree.nodes == after.nodes,
+                  sampled.tree.truncated == after.truncated else {
+                throw RecordingError.staleContext("Accessibility state changed while capturing the image. Observe the window again.")
+            }
+        }
+        try Task.checkCancellation()
+        guard matchesRunningProcess else { throw RecordingError.staleContext("The live target changed while observing it.") }
+        commit(sampled.tree, reason: "live:observe")
+        let tree = try accessibilityHistory.observation(options: options)
+        let screenshot = captured.flatMap { image -> PabloLiveScreenshot? in
+            guard let windowID = selectedWindowID else { return nil }
+            return .init(observationID: observationID, frameReference: tree.reference, windowID: windowID,
+                         captureWindowID: image.captureWindowID,
+                         frame: .init(x: image.frame.minX, y: image.frame.minY, width: image.frame.width, height: image.frame.height),
+                         width: image.width, height: image.height, mimeType: "image/png", pngBase64: image.pngBase64,
+                         startedAtUptimeNanoseconds: image.startedAt, finishedAtUptimeNanoseconds: image.finishedAt)
+        }
+        return .init(id: observationID, target: .init(pid: target.pid, bundleIdentifier: target.bundleIdentifier,
+                                                    applicationName: target.name, windowID: selectedWindowID),
+                     tree: tree, settleStatus: sampled.status, sampleCount: sampled.sampleCount,
+                     elapsedMilliseconds: sampled.elapsedMilliseconds, screenshot: screenshot)
     }
 
     func validateActionTarget(_ request: PabloLiveApplicationTarget) throws {
@@ -394,6 +468,10 @@ final class LiveInspectionSession {
         var availableNodeActionsField = "actions"
         var framePreconditionSupported = true
         var explicitWindowSupported = true
+        var textEditingAttributesField = "settableAttributes"
+        var observationMethod = "inspect.live"
+        var observationKind = "observe"
+        var actionObservationSupported = true
     }
 
     private struct FrameOutput: Encodable {

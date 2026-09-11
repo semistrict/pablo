@@ -38,11 +38,48 @@ Coordinates use that window's current bounds. A closed, minimized, or changed
 window causes rejection; Pablo never falls back to another window. Foreground
 input checks that the chosen window retains focus. Add `--frame LIVE-…/A11Y-…`
 to require that the inspected frame is still current, including after activation
-or between input segments. These window/frame options apply to actions; inspect
-the application to discover its windows.
+or between input segments. These window/frame options apply to actions and state
+observations; inspect the application to discover its windows.
 
 Live action output includes the resolved application/session, selected window,
 inspection frame, `actionID`, and dispatch method. The action ID matches recorded
 automation evidence when recording is active. `effectStatus: unverified` means
 that dispatch succeeded; inspect again to determine the application's response.
 Typed text is represented only by its character count.
+
+## State observations and text editing
+
+`pablo observe state --app Notes` samples accessibility state without starting
+input observation. Supply `--since-frame LIVE-…/A11Y-…` for changes from your own
+retained frame, `--full` for a complete snapshot, or `--screenshot` for a paired
+window PNG. Missing or expired baselines return full state with `resyncRequired`.
+Structured changes contain complete replacement nodes and explicit removals;
+the compact text view is bounded and reports `textTruncated` when shortened.
+
+Add `--observe` to a live action to return its subsequent state in the same call.
+`--settle-ms` controls the quiet interval and `--timeout-ms` bounds polling.
+`settled` describes sampled tree stability; `timedOut` includes the last sample.
+A synchronous macOS accessibility call can exceed the polling deadline. An
+`observationFailure` preserves the dispatched action instead of inviting a retry.
+
+`select-text --node NODE-ID --text PHRASE` supports `--prefix`, `--suffix`, and
+`--selection-type text|cursorBefore|cursorAfter`. It uses exact matching and
+UTF-16 ranges, and rejects ambiguous matches, changed values, and secure fields.
+`set-value --node NODE-ID --text VALUE` replaces or clears a supported text control.
+Live nodes expose `settableAttributes` and, when available, `selectedTextRange`.
+These live-only attributes do not change recorded accessibility evidence.
+
+`paste --node NODE-ID --text CONTENT --unlock-foreground-actions` supports
+`--format html --plain-text FALLBACK` as well as plain text. Pablo preserves
+materialized clipboard representations and restores them unless another writer
+has changed the clipboard. Inspect `clipboardRestoration` and the resulting
+field; the temporary paste data remains available for 500 ms after dispatch.
+
+Screenshots require an existing Screen Recording grant. They identify the
+observation, frame, selected window, geometry, and capture interval. Pablo checks
+accessibility state and window geometry around capture; macOS does not provide
+an atomic accessibility-and-image snapshot. Images are limited to 2048 pixels
+per side and 6 MiB of PNG data.
+
+The [JavaScript client](../JavaScript/README.md) provides persistent app and Safari
+tab handles, automatic native deltas, action observations, receipts, and cancellation.

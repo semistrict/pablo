@@ -1,4 +1,5 @@
 import Foundation
+import Combine
 import Testing
 @testable import PabloApp
 @testable import PabloCore
@@ -205,4 +206,22 @@ func libraryDiscoveryDefersEvidenceLoading() throws {
     model.selectLibraryItem(unopened.standardizedFileURL.path)
     #expect(model.errorMessage != nil)
     #expect(model.webRecording?.packageURL == selected.packageURL)
+}
+
+@MainActor
+@Test("Repeated paused web playback observations do not invalidate the replay view")
+func pausedWebReplayDoesNotPublishUnchangedState() throws {
+    let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+    defer { try? FileManager.default.removeItem(at: directory) }
+    let recording = try PabloRRWebRecordingStorage.create(
+        recordingID: UUID(), tab: .init(id: 7, title: "Fixture", url: "https://example.test"), directory: directory)
+    let model = ReplayModel()
+    #expect(model.loadLatest(preferredURL: recording.packageURL, directory: directory))
+    model.updateWebRenderer(ready: true)
+    model.updateWebPlayback(time: 0, playing: false)
+    var notifications = 0
+    let subscription = model.objectWillChange.sink { notifications += 1 }
+    defer { subscription.cancel() }
+    for _ in 0..<120 { model.updateWebPlayback(time: 0, playing: false) }
+    #expect(notifications == 0)
 }

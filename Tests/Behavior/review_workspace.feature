@@ -2,6 +2,15 @@ Feature: Review recordings in one synchronized evidence workspace
   Pablo presents video, attributed evidence, accessibility state, and markup on one shared timeline without splitting investigation into separate modes.
 
   @automated
+  # ReplayVideoCompositionTests.pausedReplayTicksDoNotPublishUnchangedState
+  # UnifiedReplayModelTests.pausedWebReplayDoesNotPublishUnchangedState
+  Scenario: Unchanged paused playback does not repeatedly invalidate the UI
+    Given a native or web recording is paused at an observed renderer time
+    When subsequent playback observations report the same time and paused state
+    Then the replay model publishes no redundant changes
+    And genuine playback and seek changes still update the observed renderer time
+
+  @automated
   # Expected: ReviewTimelineModelTests.timelineBuildsOrderedEvidenceLanesAroundOnePlayhead
   Scenario: One playhead synchronizes every evidence lane
     Given a recording contains app and window transitions, human input, agent actions, accessibility changes, and annotations

@@ -21,6 +21,19 @@ public struct PabloLiveActionResult: Codable, Sendable {
     public let effectStatus: String
     public let characterCount: Int?
     public let summary: String
+    public internal(set) var observation: PabloLiveObservation?
+    public internal(set) var observationFailure: ObservationFailure?
+    public internal(set) var clipboardRestoration: PabloLiveClipboardRestoration?
+
+    public struct ObservationFailure: Codable, Sendable {
+        public let code: PabloControlFailure.Code
+        public let message: String
+
+        init(_ error: Error) {
+            code = PabloControlFailure(afterDispatch: error).code
+            message = "The action was dispatched, but its subsequent observation could not be collected. Inspect the target before deciding whether another action is needed."
+        }
+    }
 
     init(actionID: UUID, target: Target, dispatchMethod: DispatchMethod, characterCount: Int?, summary: String) {
         self.actionID = actionID

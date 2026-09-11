@@ -215,13 +215,14 @@ public enum CLI {
             return .stop
         case "observe":
             guard arguments.count >= 2, let kind = ["start": PabloLiveInspectionKind.observationStart,
-                "status": .observationStatus, "read": .events, "stop": .observationStop][arguments[1]] else {
-                throw RecordingError.usage("Usage: pablo observe start|status|read|stop --app NAME [--session UUID] [--after SEQUENCE] [--no-text]")
+                "status": .observationStatus, "read": .events, "stop": .observationStop, "state": .observe][arguments[1]] else {
+                throw RecordingError.usage("Usage: pablo observe state|start|status|read|stop --app NAME [--session UUID]")
             }
-            let parsed = try parseInspectionArguments(Array(arguments.dropFirst(2)), allowsLimit: true, allowsTextOption: true)
+            let parsed = try parseInspectionArguments(Array(arguments.dropFirst(2)), allowsLimit: kind != .observe,
+                allowsTextOption: kind != .observe, allowsObservation: kind == .observe)
             guard case .live(let target) = parsed.source else { throw RecordingError.usage("Observation requires an explicit live target.") }
             let request = PabloLiveInspectionRequest(kind: kind, target: target, limit: parsed.limit ?? 100,
-                after: parsed.after, includeText: parsed.includeText)
+                after: parsed.after, includeText: parsed.includeText, observation: parsed.observation)
             try request.validate()
             return .liveObservation(request)
         case "inspect":
@@ -270,6 +271,12 @@ public enum CLI {
             return .liveAction(try parseLiveAction(.scroll, arguments: Array(arguments.dropFirst())))
         case "type":
             return .liveAction(try parseLiveAction(.typeText, arguments: Array(arguments.dropFirst())))
+        case "select-text":
+            return .liveAction(try parseLiveAction(.selectText, arguments: Array(arguments.dropFirst())))
+        case "set-value":
+            return .liveAction(try parseLiveAction(.setValue, arguments: Array(arguments.dropFirst())))
+        case "paste":
+            return .liveAction(try parseLiveAction(.paste, arguments: Array(arguments.dropFirst())))
         case "key":
             return .liveAction(try parseLiveAction(.key, arguments: Array(arguments.dropFirst())))
         case "perform":
@@ -305,6 +312,7 @@ public enum CLI {
       pablo review cancel SERVICE-ID OPERATION-ID
       pablo review evidence request.json
       pablo observe start|status|read|stop --app NAME [--session UUID] [--after SEQUENCE] [--no-text]
+      pablo observe state --app NAME [--session UUID] [--since-frame REFERENCE] [--full] [--screenshot]
       pablo recordings [--json]
       pablo latest
       pablo inspect [recording.pablo | live target]
@@ -317,6 +325,9 @@ public enum CLI {
       pablo drag live-target (--from X,Y | --from-node ID) (--to X,Y | --to-node ID)
       pablo scroll live-target --direction DIRECTION [--amount N] [--node ID | --point X,Y]
       pablo type live-target --text TEXT [--node ID]
+      pablo select-text live-target --node ID --text TEXT [--prefix TEXT] [--suffix TEXT] [--selection-type TYPE]
+      pablo set-value live-target --node ID --text TEXT
+      pablo paste live-target --text TEXT [--node ID] [--format text|html] [--plain-text TEXT]
       pablo key live-target --key KEY [--modifiers LIST]
       pablo perform live-target --node ID --action ACTION
       pablo annotate [recording.pablo] --text TEXT [markup options]
@@ -355,6 +366,16 @@ public enum CLI {
       --key KEY                A letter, digit, or named key such as return or escape
       --modifiers LIST         Comma-separated command, option, control, shift, function
       --action ACTION          An accessibility action such as press, show-menu, or increment
+      --observe                Return fresh accessibility state after dispatch
+      --since-frame REFERENCE  Compare with this caller's last observed frame
+      --full                   Return full observed state
+      --screenshot             Pair state with a selected-window PNG
+      --settle-ms N            Quiet sampling interval, 0 to 1000 (default: 150)
+      --timeout-ms N           Sampling budget, 0 to 5000 (default: 2000)
+      --selection-type TYPE    text, cursorBefore, or cursorAfter
+      --prefix / --suffix      Adjacent text that disambiguates a selected phrase
+      --format FORMAT          Clipboard format: text or html (default: text)
+      --plain-text TEXT        Required plain-text fallback for HTML paste
 
     Markup options:
       --kind KIND              issue, observation, question, or highlight
@@ -861,6 +882,8 @@ public enum CLI {
 
     private struct ParsedInspectionArguments {
         var sessionID: UUID?
+        var windowID: String?
+        var observation: PabloLiveObservationOptions?
         var after: UInt64?
         var includeText: Bool?
         var url: URL?
@@ -877,7 +900,8 @@ public enum CLI {
                     pid: pid,
                     bundleIdentifier: bundleIdentifier,
                     appName: appName,
-                    sessionID: sessionID
+                    sessionID: sessionID,
+                    windowID: windowID
                 ))
             }
             return .recording(url)
@@ -922,6 +946,12 @@ public enum CLI {
         var modifiers: [PabloLiveKeyModifier] = []
         var accessibilityAction: String?
         var unlockForegroundActions = false
+        var observation: PabloLiveObservationOptions?
+        var selectionPrefix: String?
+        var selectionSuffix: String?
+        var selectionType: PabloLiveTextSelection.SelectionType = .text
+        var pasteFormat: PabloLivePasteFormat?
+        var plainText: String?
 
         var target: PabloLiveApplicationTarget {
             PabloLiveApplicationTarget(
@@ -962,7 +992,7 @@ public enum CLI {
                 parsed.bundleIdentifier = try next(arguments, &index, option: argument)
             case "--app":
                 parsed.appName = try next(arguments, &index, option: argument)
-            case "--node" where [.click, .scroll, .typeText, .perform].contains(kind):
+            case "--node" where [.click, .scroll, .typeText, .perform, .selectText, .setValue, .paste].contains(kind):
                 parsed.nodeID = try next(arguments, &index, option: argument)
             case "--point" where [.click, .scroll].contains(kind):
                 parsed.point = try livePoint(try next(arguments, &index, option: argument), option: argument)
@@ -1005,8 +1035,24 @@ public enum CLI {
                     throw RecordingError.usage("--amount must be between 1 and 100.")
                 }
                 parsed.scrollAmount = amount
-            case "--text" where kind == .typeText:
+            case "--text" where [.typeText, .selectText, .setValue, .paste].contains(kind):
                 parsed.text = try next(arguments, &index, option: argument)
+            case "--prefix" where kind == .selectText:
+                parsed.selectionPrefix = try next(arguments, &index, option: argument)
+            case "--suffix" where kind == .selectText:
+                parsed.selectionSuffix = try next(arguments, &index, option: argument)
+            case "--selection-type" where kind == .selectText:
+                guard let selection = PabloLiveTextSelection.SelectionType(rawValue: try next(arguments, &index, option: argument)) else {
+                    throw RecordingError.usage("--selection-type must be text, cursorBefore, or cursorAfter.")
+                }
+                parsed.selectionType = selection
+            case "--format" where kind == .paste:
+                guard let format = PabloLivePasteFormat(rawValue: try next(arguments, &index, option: argument)) else {
+                    throw RecordingError.usage("--format must be text or html.")
+                }
+                parsed.pasteFormat = format
+            case "--plain-text" where kind == .paste:
+                parsed.plainText = try next(arguments, &index, option: argument)
             case "--key" where kind == .key:
                 parsed.key = try next(arguments, &index, option: argument)
             case "--modifiers" where kind == .key:
@@ -1018,7 +1064,9 @@ public enum CLI {
             case "--unlock-foreground-actions":
                 parsed.unlockForegroundActions = true
             default:
-                throw RecordingError.usage("Unknown or inapplicable option for \(kind.rawValue): \(argument)")
+                guard try parseObservationOption(arguments, index: &index, options: &parsed.observation) else {
+                    throw RecordingError.usage("Unknown or inapplicable option for \(kind.rawValue): \(argument)")
+                }
             }
             index += 1
         }
@@ -1071,9 +1119,11 @@ public enum CLI {
                   let action = parsed.accessibilityAction, !action.isEmpty else {
                 throw RecordingError.usage("perform requires --node and --action.")
             }
+        case .selectText, .setValue, .paste:
+            break // The app's canonical validator below owns the new text contracts.
         }
 
-        return PabloLiveActionRequest(
+        let request = PabloLiveActionRequest(
             kind: kind,
             target: parsed.target,
             nodeID: parsed.nodeID,
@@ -1091,8 +1141,33 @@ public enum CLI {
             key: parsed.key,
             modifiers: parsed.modifiers,
             accessibilityAction: parsed.accessibilityAction,
-            unlockForegroundActions: parsed.unlockForegroundActions
+            unlockForegroundActions: parsed.unlockForegroundActions,
+            observation: parsed.observation,
+            selection: kind == .selectText ? .init(prefix: parsed.selectionPrefix, suffix: parsed.selectionSuffix, selectionType: parsed.selectionType) : nil,
+            pasteFormat: parsed.pasteFormat, plainText: parsed.plainText
         )
+        try PabloLiveActionValidator.validate(request)
+        return request
+    }
+
+    private static func parseObservationOption(_ arguments: [String], index: inout Int, options: inout PabloLiveObservationOptions?) throws -> Bool {
+        var value = options ?? .init()
+        let argument = arguments[index]
+        switch argument {
+        case "--observe": break
+        case "--full": value.full = true
+        case "--screenshot": value.screenshot = true
+        case "--since-frame": value.baselineReference = try next(arguments, &index, option: argument)
+        case "--settle-ms", "--timeout-ms":
+            guard let milliseconds = Int(try next(arguments, &index, option: argument)) else {
+                throw RecordingError.usage("\(argument) requires an integer number of milliseconds.")
+            }
+            if argument == "--settle-ms" { value.quietMilliseconds = milliseconds }
+            else { value.timeoutMilliseconds = milliseconds }
+        default: return false
+        }
+        options = value
+        return true
     }
 
     private static func livePoint(_ value: String, option: String) throws -> PabloLivePoint {
@@ -1118,7 +1193,8 @@ public enum CLI {
         _ arguments: [String],
         allowsChanged: Bool = false,
         allowsLimit: Bool = false,
-        allowsTextOption: Bool = false
+        allowsTextOption: Bool = false,
+        allowsObservation: Bool = false
     ) throws -> ParsedInspectionArguments {
         var result = ParsedInspectionArguments()
         var index = 0
@@ -1139,6 +1215,8 @@ public enum CLI {
                 let value = try next(arguments, &index, option: argument)
                 guard let id = UUID(uuidString: value) else { throw RecordingError.usage("--session requires a live session UUID.") }
                 result.sessionID = id
+            case "--window" where allowsObservation:
+                result.windowID = try next(arguments, &index, option: argument)
             case "--after" where allowsLimit:
                 let value = try next(arguments, &index, option: argument)
                 guard let cursor = UInt64(value) else { throw RecordingError.usage("--after requires a nonnegative event sequence.") }
@@ -1156,6 +1234,10 @@ public enum CLI {
             case "--app":
                 result.appName = try next(arguments, &index, option: argument)
             default:
+                if allowsObservation, try parseObservationOption(arguments, index: &index, options: &result.observation) {
+                    index += 1
+                    continue
+                }
                 if argument.hasPrefix("--") {
                     throw RecordingError.usage("Unknown option: \(argument)")
                 }

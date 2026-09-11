@@ -744,7 +744,7 @@ final class ReplayModel: ObservableObject {
         let seconds = player.currentTime().seconds
         guard seconds.isFinite else { return }
         let value = max(0, seconds)
-        renderedSeconds = value
+        if renderedSeconds != value { renderedSeconds = value }
         if player.currentItem?.status == .failed {
             rendererState = .failed
             rendererError = player.currentItem?.error?.localizedDescription ?? "Video playback failed."
@@ -1133,7 +1133,7 @@ final class ReplayModel: ObservableObject {
 
     func updateWebPlayback(time: TimeInterval, playing: Bool) {
         guard [.ready, .seeking].contains(rendererState), time.isFinite else { return }
-        renderedSeconds = time
+        if renderedSeconds != time { renderedSeconds = time }
         let value = min(max(time, 0), duration)
         if let target = pendingSeekTime {
             guard abs(value - target) <= 0.06 || (playing && value >= target && value - target < 0.3) else { return }
@@ -1141,7 +1141,8 @@ final class ReplayModel: ObservableObject {
             rendererState = .ready
         }
         if abs(value - currentVideoTime) > 0.0005 { currentVideoTime = value }
-        isPlaying = playing && value < max(0, duration - 0.001)
+        let observedPlaying = playing && value < max(0, duration - 0.001)
+        if isPlaying != observedPlaying { isPlaying = observedPlaying }
     }
 
     func videoTime(forTimestampNs timestampNs: UInt64) -> TimeInterval {
@@ -3253,7 +3254,7 @@ private struct AccessibilityChangeRow: View {
     }
 }
 
-private struct AccessibilityTreeEntry: Identifiable {
+struct AccessibilityTreeEntry: Identifiable {
     let node: ReplayAccessibilityNode
     let depth: Int
     let hasChildren: Bool
@@ -3321,29 +3322,47 @@ private struct AccessibilityTreeView: View {
     }
 
     private var visibleEntries: [AccessibilityTreeEntry] {
-        let nodes = Dictionary(uniqueKeysWithValues: step.nodes.map { ($0.id, $0) })
-        let roots = step.nodes.filter { node in
-            node.id == step.rootID || node.parentID == nil || node.parentID.flatMap { nodes[$0] } == nil
-        }
-        var visited = Set<String>()
-        var result: [AccessibilityTreeEntry] = []
-
-        func append(_ node: ReplayAccessibilityNode, depth: Int) {
-            guard visited.insert(node.id).inserted else { return }
-            let children = node.childIDs.compactMap { nodes[$0] }
-            result.append(AccessibilityTreeEntry(node: node, depth: depth, hasChildren: !children.isEmpty))
-            if expandedNodeIDs.contains(node.id) {
-                for child in children { append(child, depth: depth + 1) }
-            }
-        }
-        for root in roots { append(root, depth: 0) }
-        for node in step.nodes where !visited.contains(node.id) { append(node, depth: 0) }
-        return result
+        accessibilityTreeEntries(step: step, expandedNodeIDs: expandedNodeIDs)
     }
 
     private func resetExpansion() {
         expandedNodeIDs = Set(step.nodes.filter { $0.depth < 2 }.map(\.id))
     }
+}
+
+func accessibilityTreeEntries(step: ReplayAccessibilityStep, expandedNodeIDs: Set<String>) -> [AccessibilityTreeEntry] {
+    let nodes = Dictionary(uniqueKeysWithValues: step.nodes.map { ($0.id, $0) })
+    var roots = step.nodes.filter { node in
+        node.id == step.rootID || node.parentID == nil || node.parentID.flatMap { nodes[$0] } == nil
+    }
+    // Find disconnected components independently of expansion. Hidden descendants
+    // still belong to their parent; they must never become extra top-level rows.
+    var reachable = Set<String>()
+    func includeComponent(_ root: ReplayAccessibilityNode) {
+        var pending = [root.id]
+        while let id = pending.popLast() {
+            guard reachable.insert(id).inserted, let node = nodes[id] else { continue }
+            pending.append(contentsOf: node.childIDs)
+        }
+    }
+    for root in roots { includeComponent(root) }
+    for node in step.nodes where !reachable.contains(node.id) {
+        roots.append(node)
+        includeComponent(node)
+    }
+    var visited = Set<String>()
+    var result: [AccessibilityTreeEntry] = []
+
+    func append(_ node: ReplayAccessibilityNode, depth: Int) {
+        guard visited.insert(node.id).inserted else { return }
+        let children = node.childIDs.compactMap { nodes[$0] }
+        result.append(AccessibilityTreeEntry(node: node, depth: depth, hasChildren: !children.isEmpty))
+        if expandedNodeIDs.contains(node.id) {
+            for child in children { append(child, depth: depth + 1) }
+        }
+    }
+    for root in roots { append(root, depth: 0) }
+    return result
 }
 
 private struct AccessibilityNodeDetail: View {

@@ -106,3 +106,10 @@ document generation, opaque DOM node ID and/or selector. These fields are distin
 from a native live session/window target. Set-value traces retain only character count,
 never the supplied value. Requested/outcome records share the UUID returned by the
 control call or recoverable operation receipt.
+
+Native `selectText`, `setValue`, and `paste` automation records retain only input
+character counts. Optional `textOptions` preserves the selection type, prefix
+and suffix counts, paste format, and plain-text fallback count. Phrase, context,
+replacement, HTML, and fallback contents are never stored in automation records.
+Explicit post-action observations may expose visible field values in the live
+response; they do not create or alter captured evidence.

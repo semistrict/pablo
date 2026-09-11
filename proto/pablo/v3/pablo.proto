@@ -77,6 +77,9 @@ enum LiveActionKind {
   LIVE_ACTION_KIND_TYPE = 4;
   LIVE_ACTION_KIND_KEY = 5;
   LIVE_ACTION_KIND_PERFORM = 6;
+  LIVE_ACTION_KIND_SELECT_TEXT = 7;
+  LIVE_ACTION_KIND_SET_VALUE = 8;
+  LIVE_ACTION_KIND_PASTE = 9;
 }
 
 enum MouseButton {
@@ -162,6 +165,15 @@ message SafariAutomationTarget {
   optional string selector = 4;
 }
 
+// Text-bearing selection context and paste fallback are represented only by lengths.
+message AutomationTextOptions {
+  optional string selection_type = 1;
+  optional int64 prefix_length = 2;
+  optional int64 suffix_length = 3;
+  optional string paste_format = 4;
+  optional int64 plain_text_length = 5;
+}
+
 message AutomationActionTrace {
   string action_id = 1;
   AutomationActionPhase phase = 2;
@@ -188,6 +200,7 @@ message AutomationActionTrace {
   optional string resolved_application_id = 23;
   bool foreground_actions_unlocked = 24;
   optional SafariAutomationTarget safari_target = 25;
+  optional AutomationTextOptions text_options = 26;
 }
 
 message InputEventRecord {

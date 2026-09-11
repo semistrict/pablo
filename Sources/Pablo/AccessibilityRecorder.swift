@@ -96,7 +96,9 @@ final class AccessibilityTreeReader {
                 focused: boolAttribute(element, kAXFocusedAttribute),
                 position: pointAttribute(element, kAXPositionAttribute),
                 size: size,
-                actions: captureActions ? actionNames(element) : nil
+                actions: captureActions ? actionNames(element) : nil,
+                settableAttributes: captureActions ? editableAttributes(element, role: role, secure: isSecure) : nil,
+                selectedTextRange: captureActions ? selectedRange(element, role: role, secure: isSecure) : nil
             )
             return id
         }
@@ -111,6 +113,28 @@ final class AccessibilityTreeReader {
         guard AXUIElementCopyActionNames(element, &value) == .success, let names = value as? [String],
               names.count <= 64, names.allSatisfy({ $0.utf8.count <= 128 }) else { return nil }
         return names
+    }
+
+    private func editableAttributes(_ element: AXUIElement, role: String?, secure: Bool) -> [String]? {
+        guard !secure, [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role ?? "") else { return [] }
+        var result: [String] = []
+        for attribute in [kAXValueAttribute, kAXSelectedTextRangeAttribute] {
+            var settable = DarwinBoolean(false)
+            let status = AXUIElementIsAttributeSettable(element, attribute as CFString, &settable)
+            guard status == .success || status == .attributeUnsupported else { return nil }
+            if status == .success, settable.boolValue { result.append(attribute) }
+        }
+        return result
+    }
+
+    private func selectedRange(_ element: AXUIElement, role: String?, secure: Bool) -> PabloLiveTextRange? {
+        guard !secure, [kAXTextFieldRole, kAXTextAreaRole, kAXComboBoxRole].contains(role ?? ""),
+              let raw = attribute(element, kAXSelectedTextRangeAttribute), CFGetTypeID(raw) == AXValueGetTypeID() else { return nil }
+        let value = raw as! AXValue
+        var range = CFRange()
+        guard AXValueGetType(value) == .cfRange, AXValueGetValue(value, .cfRange, &range),
+              range.location >= 0, range.length >= 0 else { return nil }
+        return .init(location: range.location, length: range.length)
     }
 
     func element(id: String) -> AXUIElement? {

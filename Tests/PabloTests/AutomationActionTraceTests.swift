@@ -101,3 +101,30 @@ func safariTracePreservesDocumentTarget() throws {
     #expect(restored.automationAction?.textLength == 13)
     #expect(bytes.range(of: Data("private input".utf8)) == nil)
 }
+
+@Test("Text editing traces preserve operation metadata without phrase, context, or paste contents")
+func textEditingTraceRedactsAllTextInputs() throws {
+    let target = PabloLiveApplicationTarget(appName: "Fixture")
+    let requests = [
+        PabloLiveActionRequest(kind: .selectText, target: target, nodeID: "field", text: "secret phrase",
+            selection: .init(prefix: "private prefix", suffix: "private suffix", selectionType: .cursorAfter)),
+        .init(kind: .setValue, target: target, nodeID: "field", text: "secret replacement"),
+        .init(kind: .paste, target: target, nodeID: "field", text: "<b>private HTML</b>",
+            pasteFormat: .html, plainText: "private fallback")
+    ]
+    let caller = PabloAutomationCaller(displayName: "Fixture", applicationIdentifier: "example.fixture",
+        developerName: nil, developerTeamIdentifier: nil, verified: false)
+    for request in requests {
+        let trace = PabloAutomationActionTrace(actionID: UUID(), phase: .requested, request: request,
+            caller: caller, transport: "http+unix", recordingWasPaused: true)
+        let bytes = try PabloProtobufCodec.encode(InputEventRecord.automationAction(timestampNs: 1, targetPID: 42,
+            applicationID: "APP-001", trace: trace))
+        let restored = try #require(PabloProtobufCodec.decodeEvents(from: bytes).first?.automationAction)
+        #expect(restored.kind == request.kind)
+        #expect(restored.textLength == request.text?.count)
+        #expect(restored.textOptions == trace.textOptions)
+        for secret in [request.text, request.selection?.prefix, request.selection?.suffix, request.plainText].compactMap({ $0 }) {
+            #expect(bytes.range(of: Data(secret.utf8)) == nil)
+        }
+    }
+}

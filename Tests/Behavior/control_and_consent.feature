@@ -116,6 +116,16 @@ Feature: Keep recording control and consent inside the Pablo app
     And it neither relaunches the app nor sends the mutation again
 
   @signed-app @manual
+  Scenario: Approved caller details expand from their label
+    Given the recorder window shows at least one approved caller today
+    And the approved caller details are collapsed
+    When the user clicks the Approved callers today label
+    Then the caller details and revocation controls become visible
+    When the user clicks the same label again
+    Then the details collapse
+    And the disclosure arrow can still expand and collapse the details
+
+  @signed-app @manual
   Scenario: Real peer credentials and body bounds fail closed
     Given a control service is running with verified local-user socket permissions
     When a client sends a request body larger than 64 KiB

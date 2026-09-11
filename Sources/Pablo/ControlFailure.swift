@@ -17,6 +17,10 @@ public struct PabloControlFailure: Codable, Equatable, Sendable {
 
     /// Dispatch may already have produced effects; a typed cause does not imply rollback.
     public init(afterDispatch error: Error) {
+        if let paste = error as? LivePasteFailure {
+            self.init(afterDispatch: paste.underlying)
+            return
+        }
         // This type is emitted only for an extension acknowledgment of no dispatch.
         if case PabloSafariCommandError.permissionRequired = error {
             self.init(code: .permissionRequired, dispatchStatus: .notDispatched,

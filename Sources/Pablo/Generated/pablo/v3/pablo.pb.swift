@@ -34,6 +34,9 @@ nonisolated enum PabloV3LiveActionKind: SwiftProtobuf.Enum, Swift.CaseIterable {
   case type // = 4
   case key // = 5
   case perform // = 6
+  case selectText // = 7
+  case setValue // = 8
+  case paste // = 9
   case UNRECOGNIZED(Int)
 
   init() {
@@ -49,6 +52,9 @@ nonisolated enum PabloV3LiveActionKind: SwiftProtobuf.Enum, Swift.CaseIterable {
     case 4: self = .type
     case 5: self = .key
     case 6: self = .perform
+    case 7: self = .selectText
+    case 8: self = .setValue
+    case 9: self = .paste
     default: self = .UNRECOGNIZED(rawValue)
     }
   }
@@ -62,6 +68,9 @@ nonisolated enum PabloV3LiveActionKind: SwiftProtobuf.Enum, Swift.CaseIterable {
     case .type: return 4
     case .key: return 5
     case .perform: return 6
+    case .selectText: return 7
+    case .setValue: return 8
+    case .paste: return 9
     case .UNRECOGNIZED(let i): return i
     }
   }
@@ -75,6 +84,9 @@ nonisolated enum PabloV3LiveActionKind: SwiftProtobuf.Enum, Swift.CaseIterable {
     .type,
     .key,
     .perform,
+    .selectText,
+    .setValue,
+    .paste,
   ]
 
 }
@@ -938,6 +950,68 @@ nonisolated struct PabloV3SafariAutomationTarget: Sendable {
   fileprivate var _selector: String? = nil
 }
 
+/// Text-bearing selection context and paste fallback are represented only by lengths.
+nonisolated struct PabloV3AutomationTextOptions: Sendable {
+  // SwiftProtobuf.Message conformance is added in an extension below. See the
+  // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
+  // methods supported on all messages.
+
+  var selectionType: String {
+    get {_selectionType ?? String()}
+    set {_selectionType = newValue}
+  }
+  /// Returns true if `selectionType` has been explicitly set.
+  var hasSelectionType: Bool {self._selectionType != nil}
+  /// Clears the value of `selectionType`. Subsequent reads from it will return its default value.
+  mutating func clearSelectionType() {self._selectionType = nil}
+
+  var prefixLength: Int64 {
+    get {_prefixLength ?? 0}
+    set {_prefixLength = newValue}
+  }
+  /// Returns true if `prefixLength` has been explicitly set.
+  var hasPrefixLength: Bool {self._prefixLength != nil}
+  /// Clears the value of `prefixLength`. Subsequent reads from it will return its default value.
+  mutating func clearPrefixLength() {self._prefixLength = nil}
+
+  var suffixLength: Int64 {
+    get {_suffixLength ?? 0}
+    set {_suffixLength = newValue}
+  }
+  /// Returns true if `suffixLength` has been explicitly set.
+  var hasSuffixLength: Bool {self._suffixLength != nil}
+  /// Clears the value of `suffixLength`. Subsequent reads from it will return its default value.
+  mutating func clearSuffixLength() {self._suffixLength = nil}
+
+  var pasteFormat: String {
+    get {_pasteFormat ?? String()}
+    set {_pasteFormat = newValue}
+  }
+  /// Returns true if `pasteFormat` has been explicitly set.
+  var hasPasteFormat: Bool {self._pasteFormat != nil}
+  /// Clears the value of `pasteFormat`. Subsequent reads from it will return its default value.
+  mutating func clearPasteFormat() {self._pasteFormat = nil}
+
+  var plainTextLength: Int64 {
+    get {_plainTextLength ?? 0}
+    set {_plainTextLength = newValue}
+  }
+  /// Returns true if `plainTextLength` has been explicitly set.
+  var hasPlainTextLength: Bool {self._plainTextLength != nil}
+  /// Clears the value of `plainTextLength`. Subsequent reads from it will return its default value.
+  mutating func clearPlainTextLength() {self._plainTextLength = nil}
+
+  var unknownFields = SwiftProtobuf.UnknownStorage()
+
+  init() {}
+
+  fileprivate var _selectionType: String? = nil
+  fileprivate var _prefixLength: Int64? = nil
+  fileprivate var _suffixLength: Int64? = nil
+  fileprivate var _pasteFormat: String? = nil
+  fileprivate var _plainTextLength: Int64? = nil
+}
+
 nonisolated struct PabloV3AutomationActionTrace: @unchecked Sendable {
   // SwiftProtobuf.Message conformance is added in an extension below. See the
   // `Message` and `Message+*Additions` files in the SwiftProtobuf library for
@@ -1123,6 +1197,15 @@ nonisolated struct PabloV3AutomationActionTrace: @unchecked Sendable {
   var hasSafariTarget: Bool {_storage._safariTarget != nil}
   /// Clears the value of `safariTarget`. Subsequent reads from it will return its default value.
   mutating func clearSafariTarget() {_uniqueStorage()._safariTarget = nil}
+
+  var textOptions: PabloV3AutomationTextOptions {
+    get {_storage._textOptions ?? PabloV3AutomationTextOptions()}
+    set {_uniqueStorage()._textOptions = newValue}
+  }
+  /// Returns true if `textOptions` has been explicitly set.
+  var hasTextOptions: Bool {_storage._textOptions != nil}
+  /// Clears the value of `textOptions`. Subsequent reads from it will return its default value.
+  mutating func clearTextOptions() {_uniqueStorage()._textOptions = nil}
 
   var unknownFields = SwiftProtobuf.UnknownStorage()
 
@@ -1653,7 +1736,7 @@ nonisolated struct PabloV3RecordingAnnotation: @unchecked Sendable {
 fileprivate nonisolated let _protobuf_package = "pablo.v3"
 
 nonisolated extension PabloV3LiveActionKind: SwiftProtobuf._ProtoNameProviding {
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0LIVE_ACTION_KIND_UNSPECIFIED\0\u{1}LIVE_ACTION_KIND_CLICK\0\u{1}LIVE_ACTION_KIND_DRAG\0\u{1}LIVE_ACTION_KIND_SCROLL\0\u{1}LIVE_ACTION_KIND_TYPE\0\u{1}LIVE_ACTION_KIND_KEY\0\u{1}LIVE_ACTION_KIND_PERFORM\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{2}\0LIVE_ACTION_KIND_UNSPECIFIED\0\u{1}LIVE_ACTION_KIND_CLICK\0\u{1}LIVE_ACTION_KIND_DRAG\0\u{1}LIVE_ACTION_KIND_SCROLL\0\u{1}LIVE_ACTION_KIND_TYPE\0\u{1}LIVE_ACTION_KIND_KEY\0\u{1}LIVE_ACTION_KIND_PERFORM\0\u{1}LIVE_ACTION_KIND_SELECT_TEXT\0\u{1}LIVE_ACTION_KIND_SET_VALUE\0\u{1}LIVE_ACTION_KIND_PASTE\0")
 }
 
 nonisolated extension PabloV3MouseButton: SwiftProtobuf._ProtoNameProviding {
@@ -2359,9 +2442,63 @@ nonisolated extension PabloV3SafariAutomationTarget: SwiftProtobuf.Message, Swif
   }
 }
 
+nonisolated extension PabloV3AutomationTextOptions: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
+  static let protoMessageName: String = _protobuf_package + ".AutomationTextOptions"
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}selection_type\0\u{3}prefix_length\0\u{3}suffix_length\0\u{3}paste_format\0\u{3}plain_text_length\0")
+
+  mutating func decodeMessage<D: SwiftProtobuf.Decoder>(decoder: inout D) throws {
+    while let fieldNumber = try decoder.nextFieldNumber() {
+      // The use of inline closures is to circumvent an issue where the compiler
+      // allocates stack space for every case branch when no optimizations are
+      // enabled. https://github.com/apple/swift-protobuf/issues/1034
+      switch fieldNumber {
+      case 1: try { try decoder.decodeSingularStringField(value: &self._selectionType) }()
+      case 2: try { try decoder.decodeSingularInt64Field(value: &self._prefixLength) }()
+      case 3: try { try decoder.decodeSingularInt64Field(value: &self._suffixLength) }()
+      case 4: try { try decoder.decodeSingularStringField(value: &self._pasteFormat) }()
+      case 5: try { try decoder.decodeSingularInt64Field(value: &self._plainTextLength) }()
+      default: break
+      }
+    }
+  }
+
+  func traverse<V: SwiftProtobuf.Visitor>(visitor: inout V) throws {
+    // The use of inline closures is to circumvent an issue where the compiler
+    // allocates stack space for every if/case branch local when no optimizations
+    // are enabled. https://github.com/apple/swift-protobuf/issues/1034 and
+    // https://github.com/apple/swift-protobuf/issues/1182
+    try { if let v = self._selectionType {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 1)
+    } }()
+    try { if let v = self._prefixLength {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 2)
+    } }()
+    try { if let v = self._suffixLength {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 3)
+    } }()
+    try { if let v = self._pasteFormat {
+      try visitor.visitSingularStringField(value: v, fieldNumber: 4)
+    } }()
+    try { if let v = self._plainTextLength {
+      try visitor.visitSingularInt64Field(value: v, fieldNumber: 5)
+    } }()
+    try unknownFields.traverse(visitor: &visitor)
+  }
+
+  static func ==(lhs: PabloV3AutomationTextOptions, rhs: PabloV3AutomationTextOptions) -> Bool {
+    if lhs._selectionType != rhs._selectionType {return false}
+    if lhs._prefixLength != rhs._prefixLength {return false}
+    if lhs._suffixLength != rhs._suffixLength {return false}
+    if lhs._pasteFormat != rhs._pasteFormat {return false}
+    if lhs._plainTextLength != rhs._plainTextLength {return false}
+    if lhs.unknownFields != rhs.unknownFields {return false}
+    return true
+  }
+}
+
 nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, SwiftProtobuf._MessageImplementationBase, SwiftProtobuf._ProtoNameProviding {
   static let protoMessageName: String = _protobuf_package + ".AutomationActionTrace"
-  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}action_id\0\u{1}phase\0\u{1}kind\0\u{1}target\0\u{3}node_id\0\u{1}point\0\u{3}from_node_id\0\u{3}from_point\0\u{3}to_node_id\0\u{3}to_point\0\u{3}mouse_button\0\u{3}click_count\0\u{1}duration\0\u{3}scroll_direction\0\u{3}scroll_amount\0\u{3}text_length\0\u{1}key\0\u{1}modifiers\0\u{3}accessibility_action\0\u{1}caller\0\u{1}transport\0\u{3}recording_was_paused\0\u{3}resolved_application_id\0\u{3}foreground_actions_unlocked\0\u{3}safari_target\0")
+  static let _protobuf_nameMap = SwiftProtobuf._NameMap(bytecode: "\0\u{3}action_id\0\u{1}phase\0\u{1}kind\0\u{1}target\0\u{3}node_id\0\u{1}point\0\u{3}from_node_id\0\u{3}from_point\0\u{3}to_node_id\0\u{3}to_point\0\u{3}mouse_button\0\u{3}click_count\0\u{1}duration\0\u{3}scroll_direction\0\u{3}scroll_amount\0\u{3}text_length\0\u{1}key\0\u{1}modifiers\0\u{3}accessibility_action\0\u{1}caller\0\u{1}transport\0\u{3}recording_was_paused\0\u{3}resolved_application_id\0\u{3}foreground_actions_unlocked\0\u{3}safari_target\0\u{3}text_options\0")
 
   fileprivate class _StorageClass {
     var _actionID: String = String()
@@ -2389,6 +2526,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
     var _resolvedApplicationID: String? = nil
     var _foregroundActionsUnlocked: Bool = false
     var _safariTarget: PabloV3SafariAutomationTarget? = nil
+    var _textOptions: PabloV3AutomationTextOptions? = nil
 
       // This property is used as the initial default value for new instances of the type.
       // The type itself is protecting the reference to its storage via CoW semantics.
@@ -2424,6 +2562,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
       _resolvedApplicationID = source._resolvedApplicationID
       _foregroundActionsUnlocked = source._foregroundActionsUnlocked
       _safariTarget = source._safariTarget
+      _textOptions = source._textOptions
     }
   }
 
@@ -2467,6 +2606,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
         case 23: try { try decoder.decodeSingularStringField(value: &_storage._resolvedApplicationID) }()
         case 24: try { try decoder.decodeSingularBoolField(value: &_storage._foregroundActionsUnlocked) }()
         case 25: try { try decoder.decodeSingularMessageField(value: &_storage._safariTarget) }()
+        case 26: try { try decoder.decodeSingularMessageField(value: &_storage._textOptions) }()
         default: break
         }
       }
@@ -2554,6 +2694,9 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
       try { if let v = _storage._safariTarget {
         try visitor.visitSingularMessageField(value: v, fieldNumber: 25)
       } }()
+      try { if let v = _storage._textOptions {
+        try visitor.visitSingularMessageField(value: v, fieldNumber: 26)
+      } }()
     }
     try unknownFields.traverse(visitor: &visitor)
   }
@@ -2588,6 +2731,7 @@ nonisolated extension PabloV3AutomationActionTrace: SwiftProtobuf.Message, Swift
         if _storage._resolvedApplicationID != rhs_storage._resolvedApplicationID {return false}
         if _storage._foregroundActionsUnlocked != rhs_storage._foregroundActionsUnlocked {return false}
         if _storage._safariTarget != rhs_storage._safariTarget {return false}
+        if _storage._textOptions != rhs_storage._textOptions {return false}
         return true
       }
       if !storagesAreEqual {return false}

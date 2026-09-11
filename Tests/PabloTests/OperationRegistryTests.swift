@@ -87,3 +87,23 @@ func operationNestedValidation() {
     #expect(throws: Error.self) { try PabloOperationExecuteRequest(serviceID: UUID(), method: .status).validatedRequest() }
     #expect(throws: Error.self) { try PabloOperationExecuteRequest(serviceID: UUID(), method: .actLive).validatedRequest() }
 }
+
+@Test("Large action observations reach the executing connection while receipt storage stays bounded")
+@MainActor
+func operationLargeResultsAreDeliveredOnce() async throws {
+    let registry = OperationRegistry(serviceID: UUID())
+    let request = PabloOperationExecuteRequest(serviceID: registry.serviceID, method: .stopRecording)
+    let response = PabloControlResponse(id: UUID(), result: .init(state: "idle", scopeName: nil, applicationIDs: [],
+        recordingPath: nil, elapsedNanoseconds: 0, output: .string(String(repeating: "x", count: 300 * 1_024))))
+    let direct = try await registry.perform(request, caller: "fixture") { response }
+    #expect(direct.response?.result?.output == response.result?.output)
+    #expect(!direct.resultOmitted)
+    let retained = try registry.lookup(.init(serviceID: registry.serviceID, operationID: request.operationID), caller: "fixture")
+    #expect(retained.status == .completed)
+    #expect(retained.resultOmitted)
+    #expect(retained.response == nil)
+    var repeats = 0
+    let duplicate = try await registry.perform(request, caller: "fixture") { repeats += 1; return response }
+    #expect(duplicate.resultOmitted)
+    #expect(repeats == 0)
+}
