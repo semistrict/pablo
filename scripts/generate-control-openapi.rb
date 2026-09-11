@@ -9,7 +9,7 @@ source_path = File.join(project_directory, "api", "control-api.openapi.yaml")
 output_directory = File.join(project_directory, "Sources", "Pablo", "Resources")
 output_path = File.join(output_directory, "control-api.openapi.json")
 
-document = YAML.safe_load(File.read(source_path), [], [], false)
+document = YAML.safe_load(File.read(source_path))
 generated = JSON.pretty_generate(document) + "\n"
 FileUtils.mkdir_p(output_directory) unless Dir.exist?(output_directory)
 if ARGV == ["--check"]

@@ -26,6 +26,18 @@ private actor PendingControlHandler {
     func release() { continuation?.resume(); continuation = nil }
 }
 
+// Socket clients and subprocess waits block threads. Keep them off the cooperative
+// executor that must also run the server handlers and release the pending mutation.
+private func blockingControlTask<T: Sendable>(
+    _ body: @escaping @Sendable () throws -> T
+) -> Task<T, Error> {
+    Task {
+        try await withCheckedThrowingContinuation { continuation in
+            DispatchQueue.global().async { continuation.resume(with: Result(catching: body)) }
+        }
+    }
+}
+
 @Test("Discovery and status remain responsive while another operation is pending")
 func controlPendingHandlerDoesNotBlockReads() async throws {
     let root = URL(fileURLWithPath: "/private/tmp/pablo-concurrent-\(UUID().uuidString.prefix(8))")
@@ -39,7 +51,7 @@ func controlPendingHandlerDoesNotBlockReads() async throws {
     }
     defer { server.stop(); try? FileManager.default.removeItem(at: root) }
     try server.start()
-    let mutation = Task.detached {
+    let mutation = blockingControlTask {
         try PabloControlClient.send(.init(method: .pauseRecording), socketPath: socketPath)
     }
     for _ in 0..<100 {
@@ -47,18 +59,18 @@ func controlPendingHandlerDoesNotBlockReads() async throws {
         try await Task.sleep(for: .milliseconds(10))
     }
     #expect(await pending.entered)
-    let discovery = try runCurl(socketPath: socketPath, arguments: [
+    let discovery = try await blockingControlTask { try runCurl(socketPath: socketPath, arguments: [
         "--max-time", "1", "http://localhost/openapi.json"
-    ])
+    ]) }.value
     #expect(discovery.status == 0)
-    let status = try runCurl(socketPath: socketPath, arguments: [
+    let status = try await blockingControlTask { try runCurl(socketPath: socketPath, arguments: [
         "--max-time", "1", "http://localhost/record.status"
-    ])
+    ]) }.value
     #expect(status.status == 0)
-    let cancellation = try runCurl(socketPath: socketPath, arguments: [
+    let cancellation = try await blockingControlTask { try runCurl(socketPath: socketPath, arguments: [
         "--max-time", "1", "--data", "{\"serviceID\":\"\(UUID().uuidString)\",\"operationID\":\"\(UUID().uuidString)\"}",
         "http://localhost/review.cancel"
-    ])
+    ]) }.value
     #expect(cancellation.status == 0)
     await pending.release()
     _ = try await mutation.value
@@ -81,20 +93,22 @@ func controlSlowReaderAndMutationSerialization() async throws {
     }
     defer { server.stop(); try? FileManager.default.removeItem(at: root) }
     try server.start()
-    let first = Task.detached { try PabloControlClient.send(.init(method: .pauseRecording), socketPath: socketPath) }
+    let first = blockingControlTask { try PabloControlClient.send(.init(method: .pauseRecording), socketPath: socketPath) }
     for _ in 0..<100 {
         if await pending.entered { break }
         try await Task.sleep(for: .milliseconds(10))
     }
-    let second = Task.detached { try PabloControlClient.send(.init(method: .resumeRecording), socketPath: socketPath) }
-    let slowReader = Task.detached {
+    let second = blockingControlTask { try PabloControlClient.send(.init(method: .resumeRecording), socketPath: socketPath) }
+    let slowReader = blockingControlTask {
         try runCurl(socketPath: socketPath, arguments: ["--max-time", "2", "--limit-rate", "1", "http://localhost/record.status"])
     }
     for _ in 0..<100 {
         if reads.current > 0 { break }
         try await Task.sleep(for: .milliseconds(10))
     }
-    let discovery = try runCurl(socketPath: socketPath, arguments: ["--max-time", "1", "http://localhost/openapi.json"])
+    let discovery = try await blockingControlTask {
+        try runCurl(socketPath: socketPath, arguments: ["--max-time", "1", "http://localhost/openapi.json"])
+    }.value
     #expect(discovery.status == 0)
     #expect(mutations.current == 1)
     await pending.release()
