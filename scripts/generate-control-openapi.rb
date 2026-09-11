@@ -10,7 +10,9 @@ output_directory = File.join(project_directory, "Sources", "Pablo", "Resources")
 output_path = File.join(output_directory, "control-api.openapi.json")
 
 document = YAML.safe_load(File.read(source_path))
-generated = JSON.pretty_generate(document) + "\n"
+# JSON 2.8 stopped inserting newlines inside empty containers. Normalize older
+# versions to the same output; literal newlines cannot occur inside JSON strings.
+generated = JSON.pretty_generate(document).gsub(/\{\n\s*\}/, "{}").gsub(/\[\n\s*\]/, "[]") + "\n"
 FileUtils.mkdir_p(output_directory) unless Dir.exist?(output_directory)
 if ARGV == ["--check"]
   abort "Run scripts/generate-control-openapi.rb to refresh #{output_path}." unless

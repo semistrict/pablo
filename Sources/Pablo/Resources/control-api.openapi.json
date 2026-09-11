@@ -2954,9 +2954,7 @@
           },
           "modifiers": {
             "type": "array",
-            "default": [
-
-            ],
+            "default": [],
             "items": {
               "type": "string",
               "enum": [
@@ -3439,8 +3437,7 @@
           "events": {
             "type": "array",
             "description": "Bounded rrweb events, present only when includeEvents is true.",
-            "items": {
-            }
+            "items": {}
           },
           "eventsTruncated": {
             "type": "boolean"
