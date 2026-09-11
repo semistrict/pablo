@@ -35,7 +35,8 @@ for directory in $profile_directories; do
             if [[ $profile_application == $expected_application &&
                   $profile_all_devices == true &&
                   ( $profile_app_groups == *"$expected_app_group"* ||
-                    $profile_app_groups == *"$expected_team_identifier.*"* ) ]]; then
+                    ( $expected_app_group == "$expected_team_identifier".* &&
+                      $profile_app_groups == *"$expected_team_identifier.*"* ) ) ]]; then
                 rm -f "$temporary_profile"
                 echo "$profile"
                 exit 0

@@ -1555,7 +1555,7 @@ public enum CLI {
     private static func launchApp() throws {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
-        process.arguments = ["-gj", "-b", "com.ramon.pablo"]
+        process.arguments = ["-gj", "-b", "com.semistrict.pablo"]
         try process.run()
         process.waitUntilExit()
         guard process.terminationStatus == 0 else {

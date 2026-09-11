@@ -36,7 +36,7 @@ Feature: Package and distribute a trustworthy Apple-silicon application
     When `scripts/build-distribution.sh` completes
     Then each bundle embeds its matching provisioning profile
     And each signature contains its exact application identifier
-    And both profiles authorize `D9G32AG3E5.com.ramon.pablo.safari`
+    And both profiles authorize `group.com.semistrict.pablo.safari`
 
   @distribution
   Scenario: Extracted release passes signature, notarization, and Gatekeeper checks
@@ -52,3 +52,21 @@ Feature: Package and distribute a trustworthy Apple-silicon application
     When the tester views the same installed bundle in Finder, relevant privacy settings, Dock, and the running app
     Then the Pablo robot icon is visible consistently
     And no blank or stale placeholder icon appears
+
+  @automated @distribution
+  # scripts/verify-packaged-resources.py
+  Scenario: Installed control discovery does not depend on a development checkout
+    Given a built app is copied outside the SwiftPM build directory
+    And no other Pablo control server is running
+    And the app process cannot read any SwiftPM build directory
+    When its local `/openapi.json` endpoint is requested
+    Then it returns the packaged OpenAPI document
+    And the app remains running
+
+  @automated
+  # PackageResourcesTests.installedPackageResources, missingInstalledPackageResources
+  Scenario: Installed package resources come from the application bundle
+    Given an installed app contains its package bundles in `Contents/Resources`
+    When the control schema or web player requests its resource bundle
+    Then it uses that packaged bundle without consulting the build directory
+    And a missing bundle produces a recoverable error instead of a process crash

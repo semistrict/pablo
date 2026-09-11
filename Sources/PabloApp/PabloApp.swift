@@ -297,7 +297,7 @@ final class PabloApplicationDelegate: NSObject, NSApplicationDelegate, NSWindowD
         panel.prompt = "Review"
         panel.directoryURL = ReplayModel.recordingsDirectory
         panel.allowedContentTypes = [
-            UTType(exportedAs: "com.ramon.pablo.recording", conformingTo: .package),
+            UTType(exportedAs: "com.semistrict.pablo.recording", conformingTo: .package),
         ]
         panel.canChooseFiles = true
         panel.canChooseDirectories = false

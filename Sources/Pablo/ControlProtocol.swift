@@ -913,7 +913,10 @@ enum PabloControlJSONCodec {
 
 enum PabloControlOpenAPI {
     static func document() throws -> Data {
-        guard let url = Bundle.module.url(
+        let resources = try PabloPackageResources.bundle(
+            named: "Pablo_PabloCore", developmentBundle: .module
+        )
+        guard let url = resources.url(
             forResource: "control-api.openapi",
             withExtension: "json"
         ) else {

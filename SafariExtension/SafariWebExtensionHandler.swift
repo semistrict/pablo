@@ -2,7 +2,7 @@ import Foundation
 import SafariServices
 
 final class SafariWebExtensionHandler: NSObject, NSExtensionRequestHandling {
-    private static let appGroupIdentifier = "D9G32AG3E5.com.ramon.pablo.safari"
+    private static let appGroupIdentifier = "group.com.semistrict.pablo.safari"
 
     func beginRequest(with context: NSExtensionContext) {
         let item = context.inputItems.first as? NSExtensionItem

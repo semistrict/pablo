@@ -3,12 +3,12 @@
 <plist version="1.0">
 <dict>
     <key>com.apple.application-identifier</key>
-    <string>D9G32AG3E5.com.ramon.pablo</string>
+    <string>D9G32AG3E5.com.semistrict.pablo</string>
     <key>com.apple.developer.team-identifier</key>
     <string>D9G32AG3E5</string>
     <key>com.apple.security.application-groups</key>
     <array>
-        <string>D9G32AG3E5.com.ramon.pablo.safari</string>
+        <string>group.com.semistrict.pablo.safari</string>
     </array>
 </dict>
 </plist>

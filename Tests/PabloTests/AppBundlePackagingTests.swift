@@ -48,7 +48,7 @@ func appOwnsPabloRecordingPackages() throws {
     )
     let declarations = try #require(plist["UTExportedTypeDeclarations"] as? [[String: Any]])
     let recordingType = try #require(declarations.first(where: {
-        $0["UTTypeIdentifier"] as? String == "com.ramon.pablo.recording"
+        $0["UTTypeIdentifier"] as? String == "com.semistrict.pablo.recording"
     }))
     let conformsTo = try #require(recordingType["UTTypeConformsTo"] as? [String])
     let tags = try #require(recordingType["UTTypeTagSpecification"] as? [String: Any])
@@ -58,7 +58,7 @@ func appOwnsPabloRecordingPackages() throws {
     #expect(conformsTo.contains("com.apple.package"))
     #expect(extensions == ["pablo"])
     #expect(documentTypes.contains(where: {
-        ($0["LSItemContentTypes"] as? [String])?.contains("com.ramon.pablo.recording") == true &&
+        ($0["LSItemContentTypes"] as? [String])?.contains("com.semistrict.pablo.recording") == true &&
             $0["CFBundleTypeRole"] as? String == "Viewer" &&
             $0["LSHandlerRank"] as? String == "Owner"
     }))
@@ -120,7 +120,7 @@ func safariExtensionIsEmbeddedAndLeastPrivilege() throws {
     #expect(buildScript.contains("build-safari-extension.sh"))
     #expect(buildScript.contains("Pablo Safari.appex"))
     #expect(buildScript.range(of: "Pablo Safari.appex")!.lowerBound <
-        buildScript.range(of: "--identifier com.ramon.pablo")!.lowerBound)
+        buildScript.range(of: "--identifier com.semistrict.pablo")!.lowerBound)
     #expect(Set(permissions) == Set(["activeTab", "nativeMessaging", "scripting"]))
     #expect(background["scripts"] as? [String] == ["native-message.js", "background.js"])
     #expect(background["type"] == nil)
@@ -284,8 +284,8 @@ func distributionSigningRequiresAppGroupProfiles() throws {
     #expect(buildScript.contains("Contents/embedded.provisionprofile"))
     #expect(distributionScript.contains("PABLO_APP_PROVISIONING_PROFILE"))
     #expect(distributionScript.contains("PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE"))
-    #expect(appEntitlements.contains("D9G32AG3E5.com.ramon.pablo"))
-    #expect(extensionEntitlements.contains("D9G32AG3E5.com.ramon.pablo.safari.extension"))
+    #expect(appEntitlements.contains("D9G32AG3E5.com.semistrict.pablo"))
+    #expect(extensionEntitlements.contains("D9G32AG3E5.com.semistrict.pablo.safari.extension"))
     #expect(appEntitlements.contains("com.apple.developer.team-identifier"))
     #expect(extensionEntitlements.contains("com.apple.developer.team-identifier"))
 }

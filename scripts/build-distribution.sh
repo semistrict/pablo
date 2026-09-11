@@ -22,9 +22,9 @@ if [[ -z $signing_identity ]]; then
 fi
 
 app_profile=${PABLO_APP_PROVISIONING_PROFILE:-$($script_directory/find-distribution-profile.sh \
-    com.ramon.pablo D9G32AG3E5 D9G32AG3E5.com.ramon.pablo.safari)}
+    com.semistrict.pablo D9G32AG3E5 group.com.semistrict.pablo.safari)}
 safari_profile=${PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE:-$($script_directory/find-distribution-profile.sh \
-    com.ramon.pablo.safari.extension D9G32AG3E5 D9G32AG3E5.com.ramon.pablo.safari)}
+    com.semistrict.pablo.safari.extension D9G32AG3E5 group.com.semistrict.pablo.safari)}
 
 PABLO_SIGNING_IDENTITY="$signing_identity" \
 PABLO_ARCHITECTURES="arm64" \

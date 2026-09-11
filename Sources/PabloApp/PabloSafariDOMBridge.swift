@@ -21,8 +21,8 @@ extension PabloSafariBridging {
 
 @MainActor
 final class PabloSafariDOMBridge: PabloSafariBridging {
-    static let extensionBundleIdentifier = "com.ramon.pablo.safari.extension"
-    private static let appGroupIdentifier = "D9G32AG3E5.com.ramon.pablo.safari"
+    static let extensionBundleIdentifier = "com.semistrict.pablo.safari.extension"
+    private static let appGroupIdentifier = "group.com.semistrict.pablo.safari"
     private static let messageName = "dom-command"
 
     func listTabs() async throws -> [PabloSafariTab] {

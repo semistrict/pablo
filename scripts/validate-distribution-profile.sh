@@ -60,7 +60,8 @@ app_groups=$(
         "$decoded_profile"
 )
 if [[ $app_groups != *"$expected_app_group"* &&
-      $app_groups != *"$expected_team_identifier.*"* ]]; then
+      ! ( $expected_app_group == "$expected_team_identifier".* &&
+          $app_groups == *"$expected_team_identifier.*"* ) ]]; then
     echo "Provisioning profile does not authorize app group '$expected_app_group'." >&2
     exit 1
 fi

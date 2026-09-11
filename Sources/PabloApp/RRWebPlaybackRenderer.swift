@@ -171,11 +171,14 @@ struct RRWebPlayerWebView: NSViewRepresentable {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
             coordinator.temporaryDirectory = directory
 
-            guard let script = Bundle.module.url(
+            let resources = try PabloPackageResources.bundle(
+                named: "Pablo_PabloApp", developmentBundle: .module
+            )
+            guard let script = resources.url(
                 forResource: "player",
                 withExtension: "js",
                 subdirectory: "RRWebPlayer"
-            ), let stylesheet = Bundle.module.url(
+            ), let stylesheet = resources.url(
                 forResource: "player",
                 withExtension: "css",
                 subdirectory: "RRWebPlayer"

@@ -12,7 +12,7 @@ cat > "$fixture_bundle/Contents/Info.plist" <<'PLIST'
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>com.ramon.pablo.fixture.control</string>
+<key>CFBundleIdentifier</key><string>com.semistrict.pablo.fixture.control</string>
 <key>CFBundleName</key><string>Pablo Computer Use Fixture</string>
 <key>CFBundleExecutable</key><string>PabloComputerUseFixture</string>
 <key>CFBundlePackageType</key><string>APPL</string>

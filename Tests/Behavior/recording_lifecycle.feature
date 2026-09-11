@@ -172,7 +172,7 @@ Feature: Record one Mac application on a single monotonic timeline
   @automated
   # AppBundlePackagingTests.appOwnsPabloRecordingPackages
   Scenario: Finder recognizes Pablo recordings as packages owned by Pablo
-    Given Pablo exports `com.ramon.pablo.recording` as a package type
+    Given Pablo exports `com.semistrict.pablo.recording` as a package type
     Then its filename extension is `.pablo`
     And Pablo is registered as the owning viewer
 

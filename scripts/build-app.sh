@@ -86,16 +86,16 @@ if [[ -z $signing_identity ]]; then
 fi
 
 team_identifier=D9G32AG3E5
-app_group_identifier=D9G32AG3E5.com.ramon.pablo.safari
+app_group_identifier=group.com.semistrict.pablo.safari
 if [[ $signing_identity == "Developer ID Application:"* ]]; then
     app_profile=${PABLO_APP_PROVISIONING_PROFILE:-$($script_directory/find-distribution-profile.sh \
-        com.ramon.pablo "$team_identifier" "$app_group_identifier")}
+        com.semistrict.pablo "$team_identifier" "$app_group_identifier")}
     safari_profile=${PABLO_SAFARI_EXTENSION_PROVISIONING_PROFILE:-$($script_directory/find-distribution-profile.sh \
-        com.ramon.pablo.safari.extension "$team_identifier" "$app_group_identifier")}
+        com.semistrict.pablo.safari.extension "$team_identifier" "$app_group_identifier")}
     "$script_directory/validate-distribution-profile.sh" \
-        "$app_profile" com.ramon.pablo "$team_identifier" "$app_group_identifier"
+        "$app_profile" com.semistrict.pablo "$team_identifier" "$app_group_identifier"
     "$script_directory/validate-distribution-profile.sh" \
-        "$safari_profile" com.ramon.pablo.safari.extension \
+        "$safari_profile" com.semistrict.pablo.safari.extension \
         "$team_identifier" "$app_group_identifier"
     install -m 644 "$app_profile" "$contents_path/embedded.provisionprofile"
     install -m 644 "$safari_profile" \
@@ -117,7 +117,7 @@ codesign \
 codesign \
     "${signing_arguments[@]}" \
     --entitlements "$project_directory/Resources/Pablo.entitlements" \
-    --identifier com.ramon.pablo \
+    --identifier com.semistrict.pablo \
     "$bundle_path"
 
 echo "Signed with: $signing_identity"

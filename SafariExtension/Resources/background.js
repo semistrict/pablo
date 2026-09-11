@@ -1,4 +1,4 @@
-const NATIVE_APPLICATION = "com.ramon.pablo";
+const NATIVE_APPLICATION = "com.semistrict.pablo";
 const COMMAND_MESSAGE = "dom-command";
 const RRWEB_MESSAGE = "pablo-rrweb";
 const activeRecordings = new Map();

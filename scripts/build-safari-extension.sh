@@ -47,7 +47,7 @@ xcrun safari-web-extension-packager \
     --no-prompt \
     --force \
     --app-name PabloSafariHost \
-    --bundle-identifier com.ramon.pablo.safari \
+    --bundle-identifier com.semistrict.pablo.safari \
     --project-location "$temporary_directory" \
     "$web_extension_source"
 
@@ -64,7 +64,7 @@ xcodebuild \
     SYMROOT="$build_root" \
     CODE_SIGNING_ALLOWED=NO \
     MACOSX_DEPLOYMENT_TARGET=14.0 \
-    PRODUCT_BUNDLE_IDENTIFIER=com.ramon.pablo.safari.extension \
+    PRODUCT_BUNDLE_IDENTIFIER=com.semistrict.pablo.safari.extension \
     PRODUCT_NAME="Pablo Safari" \
     PRODUCT_MODULE_NAME=PabloSafariHost_Extension \
     INFOPLIST_KEY_CFBundleDisplayName="Pablo Safari" \

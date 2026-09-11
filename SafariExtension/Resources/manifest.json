@@ -1,7 +1,7 @@
 {
   "manifest_version": 3,
   "name": "Pablo Safari",
-  "version": "0.1.17",
+  "version": "0.1.18",
   "description": "Inspect and control only the Safari tab explicitly unlocked from the toolbar.",
   "icons": {
     "48": "icons/icon-48.png",
