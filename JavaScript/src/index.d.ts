@@ -78,6 +78,8 @@ export class PabloApp {
   getAXState(options?: ObservationOptions): Promise<string>;
   getScreenshot(options?: ObservationOptions): Promise<Screenshot | undefined>;
   getAXStateAndScreenshot(options?: ObservationOptions): Promise<LiveObservation>;
+  /** Reads a node's complete text value page by page; snapshots cap values at 2,048 characters. */
+  readText(nodeID: string, options?: RequestOptions & { maxLength?: number }): Promise<string>;
   window(windowID: string): PabloApp;
   click(target: NodeTarget, options?: ActionOptions & { mouseButton?: 'left' | 'right' | 'middle'; clickCount?: number }): Promise<ActionResult>;
   drag(from: NodeTarget, to: NodeTarget, options?: ActionOptions & { duration?: number }): Promise<ActionResult>;

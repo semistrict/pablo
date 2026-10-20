@@ -136,6 +136,11 @@ public final class PabloLiveInspectionManager {
             }
             let step = try session.step(reference: reference)
             return try session.frameOutput(step, changedOnly: request.changedOnly)
+        case .text:
+            guard let options = request.textRead else {
+                throw RecordingError.usage("The live text request did not include textRead options.")
+            }
+            return try session.textOutput(options)
         case .events:
             return try session.readEvents(limit: request.limit, after: request.after, includeText: request.includeText)
         case .observationStart:
@@ -300,6 +305,11 @@ final class LiveInspectionSession {
     }
 
     private func readTree() throws -> AXTreeSnapshot {
+        try requireReadableTarget()
+        return reader.read()
+    }
+
+    private func requireReadableTarget() throws {
         try Task.checkCancellation()
         guard matchesRunningProcess else {
             throw RecordingError.staleContext("The live target process changed. Observe the application again.")
@@ -310,7 +320,14 @@ final class LiveInspectionSession {
                 "Enable Pablo in System Settings > Privacy & Security > Accessibility."
             )
         }
-        return reader.read()
+    }
+
+    /// Reads a node from the latest frame without its snapshot text cap.
+    func textOutput(_ options: PabloLiveTextReadOptions) throws -> String {
+        try requireReadableTarget()
+        let page = try LiveTextPage(sessionID: sessionID, value: reader.textValue(id: options.nodeID), options: options)
+        lastAccess = Date()
+        return try jsonString(page)
     }
 
     private func commit(_ tree: AXTreeSnapshot, reason: String) {

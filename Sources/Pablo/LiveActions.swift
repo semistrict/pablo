@@ -151,17 +151,7 @@ public final class PabloLiveActionController {
     }
 
     private func activate(_ application: NSRunningApplication) async throws {
-        guard !application.isTerminated else { throw RecordingError.targetNotFound("The target application stopped running before activation.") }
-        if application.isActive { return }
-        // Activate the existing process directly. Opening its bundle could restart an app the human just quit.
-        guard application.activate(options: []) else {
-            throw RecordingError.capture("The target application did not accept activation.")
-        }
-        for _ in 0..<20 {
-            if application.isActive { return }
-            try await Task.sleep(for: .milliseconds(50))
-        }
-        throw RecordingError.capture("The target application did not become active.")
+        try await LiveApplicationActivation.activate(NativeLiveActivatableApplication(application: application))
     }
 
     private func typeText(

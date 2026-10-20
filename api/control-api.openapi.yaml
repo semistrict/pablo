@@ -162,7 +162,8 @@ paths:
       description: >-
         Consent-gated live state. kind observe returns a fresh compact accessibility
         observation, optionally paired with a window screenshot. It never starts input
-        monitoring or writes a recording. Other kinds retain their existing frame and
+        monitoring or writes a recording. kind text returns one page of a node's
+        complete text value; see LiveTextPage. Other kinds retain their existing frame and
         event-history behavior.
       requestBody:
         required: true
@@ -988,11 +989,12 @@ components:
         actions and settableAttributes (nil means unavailable, empty means none). A node's AXPress permits a
         background click; other foreground input requires an explicit unlock.
         observe also accepts target.windowID and target.frameReference; other inspection
-        kinds reject them. Observation options apply only to kind observe.
+        kinds reject them. Observation options apply only to kind observe. kind text
+        requires textRead, which applies only to kind text.
       properties:
         kind:
           type: string
-          enum: [inspect, observe, frames, frame, events, annotations, observationStart, observationStatus, observationStop]
+          enum: [inspect, observe, frames, frame, text, events, annotations, observationStart, observationStatus, observationStop]
         target:
           $ref: "#/components/schemas/ApplicationTarget"
         reference:
@@ -1013,6 +1015,39 @@ components:
           minimum: 1
           maximum: 10000
         observation: {$ref: "#/components/schemas/LiveObservationOptions"}
+        textRead: {$ref: "#/components/schemas/LiveTextReadOptions"}
+    LiveTextReadOptions:
+      type: object
+      required: [nodeID]
+      description: >-
+        Reads a node's complete AXValue, which snapshots and observations cap at 2,048
+        characters followed by an ellipsis. nodeID comes from the latest frame or
+        observation of the target. Offsets and lengths are UTF-16 code units, matching
+        selectedTextRange. Secure text fields are rejected.
+      properties:
+        nodeID: {type: string, minLength: 1, maxLength: 512}
+        offset: {type: integer, minimum: 0, default: 0}
+        maxLength: {type: integer, minimum: 1, maximum: 1000000, default: 100000}
+        fingerprint:
+          type: string
+          pattern: "^[0-9a-f]{64}$"
+          description: The fingerprint of the previous page. A changed value fails instead of mixing versions.
+    LiveTextPage:
+      type: object
+      required: [sessionID, nodeID, offset, length, totalLength, fingerprint, text]
+      description: >-
+        One page of a live text value. Continue from nextOffset with the same
+        fingerprint until nextOffset is absent. A page never splits a surrogate pair, so
+        length may be one unit shorter than maxLength, or two units when maxLength is 1.
+      properties:
+        sessionID: {type: string, format: uuid}
+        nodeID: {type: string}
+        offset: {type: integer, minimum: 0}
+        length: {type: integer, minimum: 0}
+        totalLength: {type: integer, minimum: 0}
+        nextOffset: {type: integer, minimum: 1}
+        fingerprint: {type: string, description: SHA-256 of the complete value's UTF-8 bytes, in lowercase hex.}
+        text: {type: string}
     LiveObservationOptions:
       type: object
       properties:
@@ -1045,7 +1080,9 @@ components:
         subrole: {type: string}
         title: {type: string}
         label: {type: string}
-        value: {type: string}
+        value:
+          type: string
+          description: Capped at 2,048 characters followed by an ellipsis. Read the complete value with inspect.live kind text.
         identifier: {type: string}
         help: {type: string}
         enabled: {type: boolean}

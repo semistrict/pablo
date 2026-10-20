@@ -43,7 +43,7 @@ struct PabloCommandLine {
                 print(try CLI.workspace(recording, json: json))
             case .annotations(let source, let json):
                 print(try CLI.annotations(source, json: json))
-            case .liveObservation(let inspection):
+            case .liveInspection(let inspection):
                 print(try CLI.inspectLive(inspection))
             case .liveAction(let action):
                 print(try CLI.performLiveAction(action))

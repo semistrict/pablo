@@ -240,6 +240,32 @@ export class PabloApp extends SerialHandle {
   async getScreenshot(options) { return (await this.getState({ ...options, screenshot: true })).screenshot; }
   getAXStateAndScreenshot(options) { return this.getState({ ...options, screenshot: true }); }
 
+  readText(nodeID, options = {}) {
+    return this.enqueue(async () => {
+      const { signal, requestTimeoutMilliseconds, maxLength } = options;
+      if (!this.#state) await this.#observe({ signal });
+      if (!this.#nodes.has(nodeID)) throw new PabloError('The text node is absent from this handle’s current observation.');
+      // Text reads address the inspection session; window and frame preconditions apply only to observations and actions.
+      const { windowID, ...target } = this.#target;
+      let text = '';
+      let offset = 0;
+      let fingerprint;
+      do {
+        const page = await this.#client.read('inspect.live', { kind: 'text', target,
+          textRead: { nodeID, offset, ...(maxLength ? { maxLength } : {}), ...(fingerprint ? { fingerprint } : {}) } },
+          { signal, requestTimeoutMilliseconds });
+        if (page?.nodeID !== nodeID || page.offset !== offset || typeof page.text !== 'string' || typeof page.fingerprint !== 'string' ||
+            (fingerprint && page.fingerprint !== fingerprint) || (page.nextOffset != null && page.nextOffset <= offset)) {
+          throw new PabloError('Pablo returned an invalid text page.');
+        }
+        text += page.text;
+        fingerprint = page.fingerprint;
+        offset = page.nextOffset;
+      } while (offset != null);
+      return text;
+    });
+  }
+
   window(windowID) {
     if (this.#nodes.get(windowID)?.role !== 'AXWindow') throw new TypeError('Use a window ID from the current observation.');
     return new PabloApp(this.#client, { ...this.#target, windowID });

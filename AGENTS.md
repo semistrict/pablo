@@ -143,11 +143,12 @@ Useful live inspection commands:
 pablo inspect --app Notes
 pablo frames --app Notes --json
 pablo frame A11Y-001 --app Notes --changed --json
+pablo text --app Notes --node ax-editor --max-length 100000
 pablo events --app Notes --limit 25 --json
 pablo annotations --app Notes --json
 ```
 
-Live targets also accept `--bundle-id` or `--pid`. The first live `events` request starts the in-memory observer; later requests return events observed since then.
+Live targets also accept `--bundle-id` or `--pid`. The first live `events` request starts the in-memory observer; later requests return events observed since then. Snapshots cap text values at 2,048 characters; `pablo text` pages through one node's complete value by UTF-16 offset and fails if the value's fingerprint changes between pages.
 
 Useful live action commands:
 
@@ -160,7 +161,7 @@ pablo key --app Notes --key return --modifiers command,shift
 pablo perform --app Notes --node ax-stepper --action increment
 ```
 
-Live pointer coordinates are normalized within the target's largest accessible window. Node actions should use IDs from a fresh live frame. Action output never echoes typed text. Pablo's daily caller approval is the transport trust boundary; agents must still honor action-time confirmation requirements for consequential UI operations.
+Live pointer coordinates are normalized within the target's largest accessible window. Unlocked foreground actions activate the target by setting `AXFrontmost` on its accessibility element, because macOS cooperative activation refuses `NSRunningApplication.activate` from a menu-bar app while another application is frontmost. Node actions should use IDs from a fresh live frame. Action output never echoes typed text. Pablo's daily caller approval is the transport trust boundary; agents must still honor action-time confirmation requirements for consequential UI operations.
 
 ## Testing
 

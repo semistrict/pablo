@@ -104,7 +104,7 @@ public enum Command {
     case workspace(recording: URL?, json: Bool)
     case annotations(InspectionSource, json: Bool)
     case liveAction(PabloLiveActionRequest)
-    case liveObservation(PabloLiveInspectionRequest)
+    case liveInspection(PabloLiveInspectionRequest)
     case annotate(AnnotationOptions)
     case resolveAnnotation(reference: String, recording: URL?)
     case help
@@ -224,7 +224,7 @@ public enum CLI {
             let request = PabloLiveInspectionRequest(kind: kind, target: target, limit: parsed.limit ?? 100,
                 after: parsed.after, includeText: parsed.includeText, observation: parsed.observation)
             try request.validate()
-            return .liveObservation(request)
+            return .liveInspection(request)
         case "inspect":
             let parsed = try parseInspectionArguments(Array(arguments.dropFirst()))
             return .inspect(parsed.source)
@@ -254,6 +254,16 @@ public enum CLI {
                 changedOnly: parsed.changed,
                 json: parsed.json
             )
+        case "text":
+            let parsed = try parseInspectionArguments(Array(arguments.dropFirst()), allowsTextRead: true)
+            guard case .live(let target) = parsed.source, let textRead = parsed.textRead else {
+                throw RecordingError.usage(
+                    "Usage: pablo text live-target --node ID [--session UUID] [--offset N] [--max-length N] [--fingerprint HEX]"
+                )
+            }
+            let request = PabloLiveInspectionRequest(kind: .text, target: target, textRead: textRead)
+            try request.validate()
+            return .liveInspection(request)
         case "events":
             let parsed = try parseInspectionArguments(Array(arguments.dropFirst()), allowsLimit: true)
             return .events(parsed.source, limit: parsed.limit ?? 100, json: parsed.json, after: parsed.after)
@@ -318,6 +328,7 @@ public enum CLI {
       pablo inspect [recording.pablo | live target]
       pablo frames [recording.pablo | live target] [--json]
       pablo frame <A11Y-###> [recording.pablo | live target] [--changed] [--json]
+      pablo text live-target --node ID [--offset N] [--max-length N] [--fingerprint HEX]
       pablo events [recording.pablo | live target] [--limit N] [--json]
       pablo workspace [recording.pablo] [--json]
       pablo annotations [recording.pablo | live target] [--json]
@@ -346,6 +357,12 @@ public enum CLI {
       --app NAME               Inspect a running application by name
       --bundle-id ID           Inspect a running application by bundle identifier
       --pid PID                Inspect a running application by process ID
+
+    Live text options:
+      --node ID                Read the complete value of a node from the latest live frame
+      --offset N               Start at this UTF-16 offset (default: 0)
+      --max-length N           Page length in UTF-16 code units, up to 1000000 (default: 100000)
+      --fingerprint HEX        Fail if the value changed since the page that returned it
 
     Live action options:
       --unlock-foreground-actions
@@ -893,6 +910,14 @@ public enum CLI {
         var json = false
         var changed = false
         var limit: Int?
+        var textNodeID: String?
+        var textOffset = 0
+        var textMaxLength = PabloLiveTextReadOptions.defaultMaxLength
+        var textFingerprint: String?
+
+        var textRead: PabloLiveTextReadOptions? {
+            textNodeID.map { .init(nodeID: $0, offset: textOffset, maxLength: textMaxLength, fingerprint: textFingerprint) }
+        }
 
         var source: InspectionSource {
             if pid != nil || bundleIdentifier != nil || appName != nil {
@@ -1194,7 +1219,8 @@ public enum CLI {
         allowsChanged: Bool = false,
         allowsLimit: Bool = false,
         allowsTextOption: Bool = false,
-        allowsObservation: Bool = false
+        allowsObservation: Bool = false,
+        allowsTextRead: Bool = false
     ) throws -> ParsedInspectionArguments {
         var result = ParsedInspectionArguments()
         var index = 0
@@ -1223,6 +1249,14 @@ public enum CLI {
                 result.after = cursor
             case "--no-text" where allowsTextOption:
                 result.includeText = false
+            case "--node" where allowsTextRead:
+                result.textNodeID = try next(arguments, &index, option: argument)
+            case "--offset" where allowsTextRead, "--max-length" where allowsTextRead:
+                let value = try next(arguments, &index, option: argument)
+                guard let count = Int(value) else { throw RecordingError.usage("\(argument) requires an integer number of UTF-16 code units.") }
+                if argument == "--offset" { result.textOffset = count } else { result.textMaxLength = count }
+            case "--fingerprint" where allowsTextRead:
+                result.textFingerprint = try next(arguments, &index, option: argument)
             case "--pid":
                 let value = try next(arguments, &index, option: argument)
                 guard let pid = pid_t(value), pid > 0 else {

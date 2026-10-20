@@ -92,14 +92,14 @@ final class CLITests: XCTestCase {
 
     func testParsesLiveObservationAndGenerationCursor() throws {
         let session = UUID()
-        guard case .liveObservation(let request) = try CLI.parse([
+        guard case .liveInspection(let request) = try CLI.parse([
             "observe", "read", "--app", "Notes", "--session", session.uuidString, "--after", "25", "--limit", "2"
         ]) else { return XCTFail("Expected an observation request") }
         XCTAssertEqual(request.target.sessionID, session)
         XCTAssertEqual(request.after, 25)
         XCTAssertEqual(request.limit, 2)
         XCTAssertThrowsError(try CLI.parse(["events", "--app", "Notes", "--after", "25"]))
-        guard case .liveObservation(let start) = try CLI.parse(["observe", "start", "--app", "Notes", "--no-text"]) else {
+        guard case .liveInspection(let start) = try CLI.parse(["observe", "start", "--app", "Notes", "--no-text"]) else {
             return XCTFail("Expected an explicit observation start")
         }
         XCTAssertEqual(start.kind, .observationStart)

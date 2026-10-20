@@ -8,6 +8,15 @@ pablo frames --app Notes
 pablo frame LIVE-SESSION-UUID/A11Y-001 --app Notes --session SESSION-UUID
 ```
 
+Frame and observation values are capped at 2,048 characters. Read a node's complete text value in pages:
+
+```sh
+pablo text --app Chrome --node NODE-ID
+pablo text --app Chrome --node NODE-ID --offset NEXT-OFFSET --fingerprint FINGERPRINT
+```
+
+Offsets are UTF-16 code units. Continue from `nextOffset` with the returned `fingerprint` until `nextOffset` is absent; a changed value fails rather than mixing versions. `--max-length` sets the page length, up to 1,000,000 units. The JavaScript client's `readText(nodeID)` follows every page. Secure text fields are rejected.
+
 Use the exact qualified `reference` returned in the frame envelope. Ordinary recorded `A11Y-001` references are deliberately insufficient for a live frame. Live node IDs also contain the inspection session UUID, so a node from an evicted session cannot become a node in its replacement. The app retains at most eight target sessions and 128 frames per session. Old or evicted frame references fail explicitly.
 
 ```sh

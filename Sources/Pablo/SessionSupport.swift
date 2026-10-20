@@ -191,7 +191,7 @@ final class ProtobufStreamWriter<Value> {
 
 }
 
-public enum RecordingError: LocalizedError {
+public enum RecordingError: LocalizedError, Equatable {
     case usage(String)
     case staleContext(String)
     case interrupted(String)

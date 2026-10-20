@@ -61,7 +61,7 @@ The other bodyless lifecycle endpoints are:
 ## Live inspection
 
 Post a `LiveInspectionRequest` directly to `/inspect.live`. Its `kind` is
-`inspect`, `frames`, `frame`, `events`, or `annotations`. A target contains
+`inspect`, `observe`, `frames`, `frame`, `text`, `events`, or `annotations`. A target contains
 exactly one of `pid`, `bundleIdentifier`, or `appName`.
 
 ```json
@@ -71,6 +71,18 @@ exactly one of `pid`, `bundleIdentifier`, or `appName`.
 Frame requests accept `reference` and `changedOnly`. Event requests accept
 `limit`. Live inspection output is always pretty-printed JSON. The defaults are
 `changedOnly: false` and `limit: 100`.
+
+Frames and observations cap each text attribute at 2,048 characters followed by
+an ellipsis. A `text` request reads one node's complete `AXValue` in pages:
+
+```json
+{"kind":"text","target":{"appName":"Chrome"},"textRead":{"nodeID":"LIVE-…:APP-001:ax-…","offset":0,"maxLength":100000}}
+```
+
+Offsets and lengths are UTF-16 code units. Each page returns `text`, `length`,
+`totalLength`, a `fingerprint` of the complete value, and `nextOffset` until the
+value ends. Send the fingerprint with the next page; a changed value fails instead
+of mixing versions. Secure text fields are rejected.
 
 The response places that data directly in `result.output` as a JSON array or
 object, not as an escaped JSON string.
@@ -97,7 +109,10 @@ exposes `AXPress`. If a click needs pointer events, or an action uses drag,
 scroll, typing, or keys, Pablo rejects it without activating the target.
 
 The request may set `"unlockForegroundActions":true` (CLI:
-`--unlock-foreground-actions`) to allow Pablo to activate the target. This is
+`--unlock-foreground-actions`) to allow Pablo to activate the target. Pablo
+activates it by setting `AXFrontmost` on the target's accessibility element:
+macOS cooperative activation refuses `NSRunningApplication.activate` from a
+menu-bar app while another application is frontmost. This is
 **NOT RECOMMENDED**. An agent must leave it false unless the user explicitly
 accepts the focus change; general approval to control Pablo is not enough.
 

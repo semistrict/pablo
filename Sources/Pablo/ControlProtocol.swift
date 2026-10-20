@@ -124,6 +124,7 @@ public enum PabloLiveInspectionKind: String, Codable, Sendable {
     case observe
     case frames
     case frame
+    case text
     case events
     case annotations
     case observationStart, observationStatus, observationStop
@@ -138,6 +139,7 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
     public let includeText: Bool?
     public let limit: Int
     public let observation: PabloLiveObservationOptions?
+    public let textRead: PabloLiveTextReadOptions?
 
     public init(
         kind: PabloLiveInspectionKind,
@@ -147,7 +149,8 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
         limit: Int = 100,
         after: UInt64? = nil,
         includeText: Bool? = nil,
-        observation: PabloLiveObservationOptions? = nil
+        observation: PabloLiveObservationOptions? = nil,
+        textRead: PabloLiveTextReadOptions? = nil
     ) {
         self.kind = kind
         self.target = target
@@ -157,10 +160,11 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
         self.after = after
         self.includeText = includeText
         self.observation = observation
+        self.textRead = textRead
     }
 
     private enum CodingKeys: String, CodingKey {
-        case kind, target, reference, changedOnly, limit, after, includeText, observation
+        case kind, target, reference, changedOnly, limit, after, includeText, observation, textRead
     }
 
     public func validate() throws {
@@ -172,6 +176,10 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
             throw RecordingError.usage("Observation options apply only to an observe request.")
         }
         try observation?.validate()
+        guard (kind == .text) == (textRead != nil) else {
+            throw RecordingError.usage("A live text request requires textRead options, which apply only to kind text.")
+        }
+        try textRead?.validate()
         guard (1...10_000).contains(limit) else {
             throw RecordingError.usage("limit must be from 1 to 10000.")
         }
@@ -193,7 +201,8 @@ public struct PabloLiveInspectionRequest: Codable, Sendable {
             limit: try container.decodeIfPresent(Int.self, forKey: .limit) ?? 100,
             after: try container.decodeIfPresent(UInt64.self, forKey: .after),
             includeText: try container.decodeIfPresent(Bool.self, forKey: .includeText),
-            observation: try container.decodeIfPresent(PabloLiveObservationOptions.self, forKey: .observation)
+            observation: try container.decodeIfPresent(PabloLiveObservationOptions.self, forKey: .observation),
+            textRead: try container.decodeIfPresent(PabloLiveTextReadOptions.self, forKey: .textRead)
         )
     }
 }

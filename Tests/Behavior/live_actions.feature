@@ -110,6 +110,42 @@ Feature: Control a live Mac application through the approved Pablo bridge
     When the request explicitly sets `unlockForegroundActions` to true
     Then the foreground policy permits the action to continue
 
+  @automated
+  # LiveApplicationActivationTests.liveActivationRequestsFrontmostOnce, liveActivationRejectionFailsClosed, liveActivationTimesOut
+  Scenario: Unlocked activation asks Accessibility to bring the target forward
+    Given an unlocked foreground action targets an application that is not active
+    When Pablo activates the target
+    Then it sets AXFrontmost on the target's accessibility element exactly once
+    And waits a bounded time for the target to become active
+    And a rejected request or a target that never becomes active fails before input is posted
+    And an already active target is not asked again
+
+  @signed-app @manual
+  Scenario: Unlocked foreground input reaches a target while another application is frontmost
+    Given a signed Pablo app has Accessibility permission
+    And another regular application, such as a terminal, is frontmost and has not yielded activation
+    When an approved client sends `key --unlock-foreground-actions` to the computer-use fixture
+    Then the fixture becomes frontmost and receives the key
+    And Pablo does not relaunch an application the human quit
+
+  @automated
+  # LiveTextReadTests.liveTextPagesReconstructLongValues, liveTextPagesPreserveSurrogatePairs, liveTextPageDetectsChangedValue
+  # JavaScript/tests/client.test.mjs readText
+  Scenario: Read a text value longer than the snapshot cap
+    Given a live frame caps a node's value at 2,048 characters
+    When a client reads that node with `text` from offset 0 and follows each nextOffset with the returned fingerprint
+    Then the concatenated pages equal the complete value
+    And offsets and lengths are UTF-16 code units that never split a surrogate pair
+    And a value that changes between pages fails instead of mixing versions
+    And secure text fields are rejected
+
+  @signed-app @manual
+  Scenario: Read the complete text of a long native text view
+    Given the computer-use fixture shows its long text view
+    When an approved client reads `fixture-long-text` with `pablo text`
+    Then the pages reconstruct all 12,000 characters ending with "END OF FIXTURE TEXT"
+    And Pablo does not activate the fixture or start input observation
+
   @signed-app @manual
   Scenario: Drag between points or accessibility nodes
     Given both drag endpoints resolve inside the target application

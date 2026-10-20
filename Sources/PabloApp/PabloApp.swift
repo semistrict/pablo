@@ -1768,6 +1768,10 @@ final class RecorderModel: ObservableObject {
                 return "This app wants to inspect input directed to \(target). " +
                     "Typed text will be retained in memory while Pablo remains open."
             }
+            if inspection.kind == .text {
+                return "This app wants to read the complete text of an accessibility element in \(target). " +
+                    "Secure text fields remain redacted."
+            }
             return "This app wants to inspect the current accessibility state of \(target). " +
                 "Live inspection data remains in memory and is not saved as a recording."
         }

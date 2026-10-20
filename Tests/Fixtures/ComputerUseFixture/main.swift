@@ -43,6 +43,19 @@ final class Fixture: NSObject, NSApplicationDelegate, NSTextViewDelegate {
         add(red, NSRect(x: 24, y: 25, width: 180, height: 55))
         add(blue, NSRect(x: 600, y: 25, width: 180, height: 55))
 
+        // Longer than the 2,048-character snapshot cap so complete text reads can be verified.
+        let longTextWindow = makeWindow(title: "Pablo Long Text Window", frame: NSRect(x: 960, y: 560, width: 360, height: 220))
+        let longTextScroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 360, height: 220))
+        longTextScroll.hasVerticalScroller = true
+        let longText = NSTextView(frame: NSRect(x: 0, y: 0, width: 356, height: 216))
+        longText.autoresizingMask = [.width]
+        longText.isEditable = false
+        let longTextEnd = "END OF FIXTURE TEXT"
+        longText.string = String(String(repeating: "Long fixture text line.\n", count: 600).prefix(12_000 - longTextEnd.count)) + longTextEnd
+        longText.setAccessibilityIdentifier("fixture-long-text")
+        longTextScroll.documentView = longText
+        longTextWindow.contentView?.addSubview(longTextScroll)
+
         let second = makeWindow(title: "Pablo Second Window", frame: NSRect(x: 960, y: 310, width: 360, height: 220))
         let secondary = NSTextField(string: "Secondary field")
         secondary.frame = NSRect(x: 20, y: 130, width: 320, height: 30)

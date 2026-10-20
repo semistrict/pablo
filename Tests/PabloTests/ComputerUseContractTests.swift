@@ -6,7 +6,7 @@ import Testing
 func computerUseCLIOptions() throws {
     let session = UUID()
     let reference = "LIVE-\(session)/A11Y-001"
-    guard case .liveObservation(let state) = try CLI.parse(["observe", "state", "--app", "Fixture", "--session", session.uuidString,
+    guard case .liveInspection(let state) = try CLI.parse(["observe", "state", "--app", "Fixture", "--session", session.uuidString,
         "--window", "window", "--since-frame", reference, "--screenshot", "--settle-ms", "200", "--timeout-ms", "500"]) else {
         Issue.record("Expected live observation"); return
     }

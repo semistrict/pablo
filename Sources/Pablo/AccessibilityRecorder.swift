@@ -79,8 +79,7 @@ final class AccessibilityTreeReader {
             }
 
             let subrole = stringAttribute(element, kAXSubroleAttribute)
-            let isSecure = role == kAXTextFieldRole as String &&
-                subrole == kAXSecureTextFieldSubrole as String
+            let isSecure = isSecureText(role: role, subrole: subrole)
             nodes[id] = AXNode(
                 id: id,
                 parentID: parentID,
@@ -135,6 +134,22 @@ final class AccessibilityTreeReader {
         guard AXValueGetType(value) == .cfRange, AXValueGetValue(value, .cfRange, &range),
               range.location >= 0, range.length >= 0 else { return nil }
         return .init(location: range.location, length: range.length)
+    }
+
+    /// The node's complete AXValue string, which snapshots cap at 2,048 characters.
+    func textValue(id: String) throws -> String {
+        guard let element = validatedElement(id: id) else {
+            throw RecordingError.usage(
+                "Live accessibility node \(id) is unavailable. Run `pablo frames` again and use a node from the latest frame."
+            )
+        }
+        guard !isSecureText(role: stringAttribute(element, kAXRoleAttribute), subrole: stringAttribute(element, kAXSubroleAttribute)) else {
+            throw RecordingError.usage("Live accessibility node \(id) is a secure text field; its value is redacted.")
+        }
+        guard let value = attribute(element, kAXValueAttribute) as? String else {
+            throw RecordingError.usage("Live accessibility node \(id) has no text value.")
+        }
+        return value
     }
 
     func element(id: String) -> AXUIElement? {
@@ -409,6 +424,10 @@ private func printableAttribute(_ element: AXUIElement, _ name: String) -> Strin
         return truncate(array.map { String(describing: $0) }.joined(separator: ", "))
     }
     return nil
+}
+
+private func isSecureText(role: String?, subrole: String?) -> Bool {
+    role == kAXTextFieldRole as String && subrole == kAXSecureTextFieldSubrole as String
 }
 
 private func boolAttribute(_ element: AXUIElement, _ name: String) -> Bool? {

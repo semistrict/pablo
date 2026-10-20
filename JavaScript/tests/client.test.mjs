@@ -105,6 +105,37 @@ test('full resynchronization replaces cached nodes and sampling budgets reach th
   assert.equal(calls.filter(call => call.method === 'operation.execute').length, 0);
 });
 
+test('readText concatenates every page of one fingerprinted value from the observed session', async t => {
+  const value = 'line\n'.repeat(1_000);
+  const fingerprint = 'a'.repeat(64);
+  const { client, calls } = await fixture(t, (method, payload) => {
+    assert.equal(method, 'inspect.live');
+    if (payload.kind === 'observe') return response(observation(1, { windowID: 'window' }));
+    assert.equal(payload.kind, 'text');
+    assert.deepEqual(payload.target, { pid: 42, sessionID });
+    const { nodeID, offset, maxLength } = payload.textRead;
+    assert.equal(payload.textRead.fingerprint, offset === 0 ? undefined : fingerprint);
+    const end = Math.min(value.length, offset + maxLength);
+    return response({ sessionID, nodeID, offset, length: end - offset, totalLength: value.length,
+      nextOffset: end === value.length ? null : end, fingerprint, text: value.slice(offset, end) });
+  });
+  const app = await client.app('Fixture');
+  assert.equal(await app.readText('field', { maxLength: 2_048 }), value);
+  assert.deepEqual(calls.filter(call => call.payload.kind === 'text').map(call => call.payload.textRead.offset), [0, 2_048, 4_096]);
+  await assert.rejects(app.readText('missing'), /absent/);
+});
+
+test('readText rejects a page from a changed value instead of mixing versions', async t => {
+  const { client } = await fixture(t, (method, payload) => {
+    if (payload.kind === 'observe') return response(observation(1));
+    const { offset } = payload.textRead;
+    return response({ sessionID, nodeID: 'field', offset, length: 3, totalLength: 6,
+      nextOffset: offset === 0 ? 3 : null, fingerprint: (offset === 0 ? 'a' : 'b').repeat(64), text: 'abc' });
+  });
+  const app = await client.app('Fixture');
+  await assert.rejects(app.readText('field'), /invalid text page/);
+});
+
 test('a mismatched post-action baseline preserves dispatch and invalidates cached state', async t => {
   const { client } = await fixture(t, (method, payload) => {
     if (method === 'inspect.live') return response(observation(1));
